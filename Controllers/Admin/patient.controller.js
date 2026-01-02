@@ -1,5 +1,21 @@
 import { User, PatientProfile } from "../../Schema/user.schema.js";
 import mongoose from "mongoose";
+import Counter from "../../Schema/counter.schema.js";
+
+// Utility: Get next patient sequence for PatientID generation
+const getNextSequence = async (name) => {
+  const counter = await Counter.findOneAndUpdate(
+    { name },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+  return counter.seq;
+};
+
+// Format patient ID as P + 4-digit padded number (e.g., P0001, P0056)
+const generatePatientId = (seq) => {
+  return `P${seq.toString().padStart(4, "0")}`;
+};
 
 class PatientAdminController {
   // Add new patient (user + patient profile)
@@ -11,73 +27,179 @@ class PatientAdminController {
         gender,
         childDOB,
         fatherFullName,
-        plannedSessionsPerMonth,
-        package: packageName,
+        plannedSessionsPerMonth, // optional
+        package: packageName,    // optional
         motherFullName,
         parentEmail,
         mobile1,
-        mobile2,
+        mobile2,                 // optional
         address,
         areaName,
         diagnosisInfo,
         childReference,
         parentOccupation,
-        remarks,
+        remarks,                 // optional
       } = req.body;
 
-      // "otherDocument" is a file path, so obtain it from req.file or req.body depending on how your uploading middleware works
-      // For now, accept it as req.body.otherDocument (string filepath) OR, if using multer, req.file.path
       let otherDocumentPath = "";
-      // If uploaded as multipart, get from req.file; else from req.body (string path)
       if (req.file && req.file.path) {
         otherDocumentPath = req.file.path;
       } else if (req.body.otherDocument && typeof req.body.otherDocument === "string") {
         otherDocumentPath = req.body.otherDocument;
       }
 
-      // Email is used for User document
-      if (!email || !childFullName || !mobile1) {
-        return res.status(400).json({ message: "email, childFullName, and mobile1 are required." });
+      // Required fields array (all except: mobile2, plannedSessionsPerMonth, package, remarks)
+      const requiredFields = [
+        { key: "email", value: email },
+        { key: "childFullName", value: childFullName },
+        { key: "gender", value: gender },
+        { key: "childDOB", value: childDOB },
+        { key: "fatherFullName", value: fatherFullName },
+        { key: "motherFullName", value: motherFullName },
+        { key: "parentEmail", value: parentEmail },
+        { key: "mobile1", value: mobile1 },
+        { key: "address", value: address },
+        { key: "areaName", value: areaName },
+        { key: "diagnosisInfo", value: diagnosisInfo },
+        { key: "childReference", value: childReference },
+        { key: "parentOccupation", value: parentOccupation },
+      ];
+
+      // Gather missing required fields
+      const missingRequired = requiredFields.filter(f => !f.value || (typeof f.value === "string" && f.value.trim() === "")).map(f => f.key);
+
+      if (missingRequired.length > 0) {
+        console.log("Required fields missing:", missingRequired);
+        return res.status(400).json({
+          message: `Missing required fields: ${missingRequired.join(", ")}.`
+        });
       }
 
-      // Enforce unique email
-      let existingUser = await User.findOne({ email: email.trim(), role: "patient" });
-      if (existingUser) {
-        return res.status(409).json({ message: "A patient with this email already exists." });
+      // Prepare trimmed input for comparisons
+      const emailTrimmed = email.trim();
+      const mobile1Trimmed = mobile1.trim();
+
+      // Check for existing associations
+      const existingUserByEmail = await User.findOne({ email: emailTrimmed, role: "patient" });
+      const existingUserByMobile = await PatientProfile.findOne({ mobile1: mobile1Trimmed });
+
+      console.log("Check existingUserByEmail:", existingUserByEmail ? existingUserByEmail.email : null);
+      console.log("Check existingUserByMobile:", existingUserByMobile ? existingUserByMobile.mobile1 : null);
+
+      let emailAssociatedMobile = null;
+      let emailAssociatedMobileFull = null;
+      let mobileAssociatedEmail = null;
+      let mobileAssociatedEmailFull = null;
+
+      if (existingUserByEmail) {
+        const patientProfileForEmail = await PatientProfile.findOne({ userId: existingUserByEmail._id });
+        if (patientProfileForEmail) {
+          emailAssociatedMobile = (patientProfileForEmail.mobile1 || "").trim();
+          emailAssociatedMobileFull = patientProfileForEmail.mobile1 || "";
+        }
       }
 
-      // Create User (role: patient, authProvider: otp, etc)
+      console.log("emailAssociatedMobile for existingUserByEmail:", emailAssociatedMobile);
+
+      if (existingUserByMobile) {
+        const userForMobile = await User.findById(existingUserByMobile.userId);
+        if (userForMobile) {
+          mobileAssociatedEmail = (userForMobile.email || "").trim();
+          mobileAssociatedEmailFull = userForMobile.email || "";
+        }
+      }
+
+      console.log("mobileAssociatedEmail for existingUserByMobile:", mobileAssociatedEmail);
+
+      // Helper to get last 4 digits of phone number (or full if less than 4)
+      function getLast4Digits(phone) {
+        if (!phone) return "";
+        const str = phone.toString();
+        return str.length > 4 ? str.substring(str.length - 4) : str;
+      }
+
+      // Violation 1: Trying to register same email with a different mobile1
+      if (
+        existingUserByEmail &&
+        emailAssociatedMobile &&
+        emailAssociatedMobile !== mobile1Trimmed
+      ) {
+        console.log(
+          "Violation 1 - Email already registered with different phone:",
+          { email: emailTrimmed, existingPhone: emailAssociatedMobile, inputPhone: mobile1Trimmed }
+        );
+        return res.status(409).json({
+          success: false,
+          message: `This email is already registered with a different phone number (ending ${(emailAssociatedMobile)}).`,
+          phoneEnding: getLast4Digits(emailAssociatedMobile),
+          phoneFull: emailAssociatedMobileFull,
+          email: emailTrimmed,
+        });
+      }
+
+      // Violation 2: Trying to register same mobile1 with a different email
+      if (
+        existingUserByMobile &&
+        mobileAssociatedEmail &&
+        mobileAssociatedEmail !== emailTrimmed
+      ) {
+        console.log(
+          "Violation 2 - Phone already registered with different email:",
+          { phone: mobile1Trimmed, existingEmail: mobileAssociatedEmail, inputEmail: emailTrimmed }
+        );
+        return res.status(409).json({
+          success: false,
+          message: `This phone number (${(mobile1Trimmed)}) is already registered with a different email.`,
+          phoneEnding: getLast4Digits(mobile1Trimmed),
+          phoneFull: mobile1Trimmed,
+          email: mobileAssociatedEmailFull,
+        });
+      }
+
+      // If both email and mobile1 are paired together in a previous patient, allow additional creation.
+      // If neither exists or both match, allow registration
+
+      // Get next patient sequence and generate patientId
+      const nextSeq = await getNextSequence("patient");
+      const patientId = generatePatientId(nextSeq);
+
+      // CREATE User (role: patient, authProvider: otp, etc)
       const user = new User({
         role: "patient",
         name: childFullName,
-        email: email.trim(),
+        email: emailTrimmed,
         authProvider: "otp",
         phoneVerified: false,
         emailVerified: false,
         status: "active",
+        phone: mobile1Trimmed // <--- Save mobile1 to User.phone
       });
       await user.save();
 
       const patientProfile = new PatientProfile({
         userId: user._id,
+        patientId, // <-- Add generated patientId
+        name: childFullName, // <-- Store child's name here
         gender,
         childDOB,
         fatherFullName,
-        plannedSessionsPerMonth,
-        package: packageName,
+        plannedSessionsPerMonth, // optional
+        package: packageName,    // optional
         motherFullName,
         parentEmail,
-        mobile1,
-        mobile2,
+        mobile1: mobile1Trimmed,
+        mobile2,                 // optional
         address,
         areaName,
         diagnosisInfo,
         childReference,
         parentOccupation,
-        remarks,
+        remarks,                 // optional
         otherDocument: otherDocumentPath,
       });
       await patientProfile.save();
+
+      console.log("Patient successfully created for:", { email: emailTrimmed, mobile1: mobile1Trimmed, patientId });
 
       return res.status(201).json({
         success: true,
@@ -138,9 +260,79 @@ class PatientAdminController {
         return res.status(404).json({ message: "Patient not found." });
       }
 
+      // Fetch current association for comparison
+      const oldMobile = patientProfile.mobile1 ? patientProfile.mobile1.trim() : "";
+      const user = await User.findById(patientProfile.userId);
+      const oldEmail = user && user.email ? user.email.trim() : "";
+
+      // Prepare input values
+      const newEmail = (update.parentEmail || oldEmail).trim();
+      const newMobile = (update.mobile1 || oldMobile).trim();
+
+      // Only proceed if parentEmail or mobile1 are being updated
+      let associationCheckNeeded = false;
+      if (update.parentEmail && update.parentEmail.trim() !== oldEmail) {
+        associationCheckNeeded = true;
+      }
+      if (update.mobile1 && update.mobile1.trim() !== oldMobile) {
+        associationCheckNeeded = true;
+      }
+
+      if (associationCheckNeeded) {
+        // Check for an existing patient with newEmail as parentEmail and newMobile as mobile1
+        const patientWithBoth = await PatientProfile.findOne({
+          parentEmail: newEmail,
+          mobile1: newMobile,
+          _id: { $ne: patientProfile._id }
+        });
+
+        // Check for any patient with newEmail and another phone
+        const patientWithEmail = await PatientProfile.findOne({
+          parentEmail: newEmail,
+          _id: { $ne: patientProfile._id }
+        });
+
+        // Check for any patient with newMobile and another email
+        const patientWithMobile = await PatientProfile.findOne({
+          mobile1: newMobile,
+          _id: { $ne: patientProfile._id }
+        });
+
+        // If new association exists as a pair, allow; otherwise, error if either is already associated differently
+        if (!patientWithBoth) {
+          // If email exists but with another mobile number, error
+          if (patientWithEmail && patientWithEmail.mobile1 !== newMobile) {
+            return res.status(400).json({
+              success: false,
+              message: "This email is already associated with another phone number.",
+              fullEmail: newEmail,
+              fullPhoneNo: patientWithEmail.mobile1,
+            });
+          }
+          // If phone exists but with another email, error
+          if (patientWithMobile && patientWithMobile.parentEmail !== newEmail) {
+            return res.status(400).json({
+              success: false,
+              message: "This phone number is already associated with another email.",
+              fullEmail: patientWithMobile.parentEmail,
+              fullPhoneNo: newMobile,
+            });
+          }
+        }
+        // If both are already associated together on another record, that's fine; allow update to those values
+      }
+
       // If updating childFullName, also update User.name
       if (update.childFullName && patientProfile.userId) {
         await User.findByIdAndUpdate(patientProfile.userId, { name: update.childFullName });
+      }
+      // If updating parentEmail, also update User.email
+      if (update.parentEmail && user) {
+        await User.findByIdAndUpdate(patientProfile.userId, { email: update.parentEmail.trim() });
+      }
+      // If updating mobile1, also update User.phone
+      if (update.mobile1 && patientProfile.userId) {
+        await User.findByIdAndUpdate(patientProfile.userId, { phone: update.mobile1.trim() });
       }
 
       // Only update allowed fields on PatientProfile
@@ -166,6 +358,11 @@ class PatientAdminController {
         if (update[key] !== undefined) {
           patientProfile[key] = update[key];
         }
+      }
+
+      // Also update 'name' field in PatientProfile if childFullName is present (so 'name' always matches childFullName)
+      if (update.childFullName !== undefined) {
+        patientProfile.name = update.childFullName;
       }
 
       await patientProfile.save();

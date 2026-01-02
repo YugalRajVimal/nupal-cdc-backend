@@ -1,0 +1,28 @@
+// models/counter.model.js
+import mongoose from "mongoose";
+
+/**
+ * Valid names:
+ * - 'patient'         => For Patient Code: P0001, P0002, ... (3 zeros before 1)
+ * - 'appointment'     => For Appointment Code: APT000001, APT000002, ... (5 zeros before 1)
+ * - 'lead'            => For Lead Code: L00001, L00002, ... (4 zeros before 1)
+ * - 'therapist'       => For Therapist/Employee Code: NPL001, NPL002, ... (2 zeros before 1)
+ */
+const ALLOWED_NAMES = ["patient", "appointment", "lead", "therapist"];
+
+const counterSchema = new mongoose.Schema({
+  name: { 
+    type: String, 
+    required: true, 
+    unique: true,
+    validate: {
+      validator: function(value) {
+        return ALLOWED_NAMES.includes(value);
+      },
+      message: props => `${props.value} is not a valid counter name. Allowed names are: ${ALLOWED_NAMES.join(", ")}`
+    }
+  },
+  seq: { type: Number, default: 0 }
+});
+
+export default mongoose.model("Counter", counterSchema);

@@ -1,7 +1,8 @@
 import express from "express";
 import adminRouter from "./Routers/admin.routes.js";
 import authRouter from "./Routers/auth.routes.js";
-import subAdminRouter from "./Routers/sub-admin.routes.js";
+import parentRouter from "./Routers/parent.routes.js";
+import therapistRouter from "./Routers/therapist.routes.js";
 
 
 const router = express.Router();
@@ -12,6 +13,8 @@ router.get("/", (req, res) => {
 
 router.use("/auth", authRouter);
 router.use("/admin", adminRouter);
-router.use("/sub-admin", subAdminRouter);
+router.use("/parent", parentRouter);
+router.use("/therapist", therapistRouter);
+
 
 export default router;

@@ -8,6 +8,8 @@ import patientAdminRouter from "./Admin/patient-admin.routes.js";
 import leadsAdminRouter from "./Admin/leads-admin.routes.js";
 import packagesAdminRouter from "./Admin/packages-admin.routes.js";
 import bookingsAdminRouter from "./Admin/bookings-admin.routes.js";
+import availabilitySlotsRouter from "./Admin/availability-slots.routes.js";
+
 
 
 const adminRouter = express.Router();
@@ -40,6 +42,15 @@ adminRouter.use("/packages", packagesAdminRouter);
 
 
 adminRouter.use("/bookings", bookingsAdminRouter);
+
+
+
+adminRouter.use("/availability-slots", availabilitySlotsRouter);
+
+
+
+
+
 
 
 

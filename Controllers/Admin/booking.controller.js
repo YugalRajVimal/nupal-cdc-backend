@@ -3,15 +3,28 @@ import { User, PatientProfile } from "../../Schema/user.schema.js";
 import Package from "../../Schema/packages.schema.js";
 import { TherapyType } from "../../Schema/therapy-type.schema.js";
 import Booking from "../../Schema/booking.schema.js";
+import Counter from "../../Schema/counter.schema.js";
+import DailyAvailability from "../../Schema/AvailabilitySlots/daily-availability.schema.js";
+
+// Utility to get next sequence for an allowed counter
+const getNextSequence = async (name) => {
+  const counter = await Counter.findOneAndUpdate(
+    { name },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+  return counter.seq;
+};
+
+// Given appointment sequence number, format appointmentId as APT000001 etc.
+function generateAppointmentId(seq) {
+  return 'APT' + seq.toString().padStart(6, '0');
+}
 
 class BookingAdminController {
-  // Provides data needed for booking home page:
-  // - all patient details (id, name, phoneNo)
-  // - all therapy types
-  // - all packages
+  // Provides booking page dropdown/reference details
   async getBookingHomePageDetails(req, res) {
     try {
-      // Get all patients (id, name, phone) -- join User and PatientProfile
       const patientProfiles = await PatientProfile.find({}, "userId mobile1").populate({
         path: "userId",
         select: "name",
@@ -23,16 +36,8 @@ class BookingAdminController {
         phoneNo: profile.mobile1 || "",
       }));
 
-      // Get all therapy types
-      // e.g. fetch fields like id, name, etc., as defined in your schema
       const therapyTypes = await TherapyType.find();
-
-      // Get all packages
       const packages = await Package.find();
-
-      console.log( patients,
-        therapyTypes,
-        packages);
 
       return res.json({
         success: true,
@@ -50,54 +55,55 @@ class BookingAdminController {
     }
   }
 
-
-  // Create a new booking
+  // Create a new booking with updated booking schema (1-47)
   async createBooking(req, res) {
+    const mongoose = (await import("mongoose")).default;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
     try {
-      // Receive these fields in req.body - @booking.schema.js (12-15)
-      // couponCode, discount, discountEnabled, validityDays
-      const { couponCode, discount, discountEnabled, validityDays, package: packageId, patient: patientId, sessions, therapy: therapyId } = req.body;
+      const {
+        couponCode,
+        discount,
+        discountEnabled,
+        validityDays,
+        package: packageId,
+        patient: patientId,
+        sessions,
+        therapy: therapyId,
+        payment, // { amount, status, method, ... }
+        status,
+        notes,
+        channel,
+        attendedBy,
+        referral,
+        extra,           // object to allow custom fields
+        attendedByType,
+        paymentDueDate,
+        invoiceNumber,
+        followupRequired, // boolean
+        followupDate     // date if followupRequired
+      } = req.body;
 
-      console.log("[createBooking] req.body:", req.body);
-
-      // Validation checks
-      if (!packageId) {
-        console.log("[createBooking] Missing field: packageId");
-      }
-      if (!patientId) {
-        console.log("[createBooking] Missing field: patientId");
-      }
-      if (!therapyId) {
-        console.log("[createBooking] Missing field: therapyId");
-      }
-      if (!sessions) {
-        console.log("[createBooking] Missing field: sessions");
-      }
-      if (sessions && !sessions.length) {
-        console.log("[createBooking] Sessions provided but empty array.");
-      }
-      if (discountEnabled === undefined) {
-        console.log("[createBooking] Missing field: discountEnabled");
-      }
-
-      // If discountEnabled is true, discount information is required and validated
+      // Strict validation for new schema
       if (
         !packageId ||
         !patientId ||
         !therapyId ||
-        !sessions ||
+        !Array.isArray(sessions) ||
         !sessions.length ||
         discountEnabled === undefined ||
         (discountEnabled === true && discount === undefined)
       ) {
-        console.log("[createBooking] Validation failed. Not creating booking.");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({
           success: false,
           message: "Missing required fields"
         });
       }
 
-      // Prepare discountInfo according to whether discount is enabled
+      // Build discount info
       let discountInfo;
       if (discountEnabled) {
         discountInfo = {
@@ -105,34 +111,112 @@ class BookingAdminController {
           discount,
           discountEnabled,
           validityDays,
-          dateFrom: new Date(),
+          dateFrom: new Date()
         };
       } else {
-        discountInfo = {
-          discountEnabled: false
-        };
+        discountInfo = { discountEnabled: false };
       }
 
-      const booking = new Booking({
+      // Generate new appointmentId inside transaction
+      const counter = await Counter.findOneAndUpdate(
+        { name: "appointment" },
+        { $inc: { seq: 1 } },
+        { new: true, upsert: true, session }
+      );
+      const appointmentId = generateAppointmentId(counter.seq);
+
+      // Compose booking payload per updated schema (1-47)
+      const bookingPayload = {
+        appointmentId,
+        status,
+        notes,
         discountInfo,
         package: packageId,
         patient: patientId,
         sessions,
         therapy: therapyId,
-      });
+        payment,
+        channel,
+        attendedBy,
+        referral,
+        extra,
+        attendedByType,
+        paymentDueDate,
+        invoiceNumber,
+        followupRequired,
+        followupDate
+      };
 
-      console.log("[createBooking] Creating new booking:", booking);
+      Object.keys(bookingPayload).forEach(
+        k => bookingPayload[k] === undefined && delete bookingPayload[k]
+      );
 
-      await booking.save();
+      const booking = new Booking(bookingPayload);
 
-      console.log("[createBooking] Booking created successfully with ID:", booking._id);
+      await booking.save({ session });
+
+      // Availability slot bookkeeping
+      for (const sess of sessions) {
+        const { date, slotId } = sess;
+        let doc = await DailyAvailability.findOne({ date }).session(session);
+        if (!doc) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({
+            success: false,
+            message: `No Slots available found for date ${date}. Booking not created. Try another date.`,
+          });
+        }
+
+        const slot = doc.sessions.find(s => s.id === slotId);
+        if (slot) {
+          if (typeof slot.booked !== "number") slot.booked = 0;
+          if (typeof slot.count === "number" && slot.count === 0) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({
+              success: false,
+              message: `Slot for date ${date} and time ${slotId} is not available for booking.`,
+            });
+          }
+          if (
+            typeof slot.count === "number" && slot.count > 0 && slot.booked >= slot.count
+          ) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(400).json({
+              success: false,
+              message: `Slot for date ${date} and time ${slotId} is fully booked.`,
+            });
+          }
+          slot.booked += 1;
+        }
+        await doc.save({ session });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // Populate all booking fields for return
+      const populatedBooking = await Booking.findById(booking._id)
+        .populate("package")
+        .populate({
+          path: "patient",
+          model: "PatientProfile",
+          populate: {
+            path: "userId",
+            model: "User"
+          }
+        })
+        .populate({ path: "therapy", model: "TherapyType" });
 
       res.status(201).json({
         success: true,
-        booking,
+        booking: populatedBooking,
       });
     } catch (error) {
-      console.error("[createBooking] Error:", error);
+      await session.abortTransaction();
+      session.endSession();
       res.status(500).json({
         success: false,
         message: "Failed to create booking.",
@@ -141,7 +225,7 @@ class BookingAdminController {
     }
   }
 
-  // Get all bookings
+  // Get all bookings (populated)
   async getAllBookings(req, res) {
     try {
       const bookings = await Booking.find()
@@ -173,14 +257,24 @@ class BookingAdminController {
     }
   }
 
-  // Get single booking by id
+  // Get single booking by id (populated)
   async getBookingById(req, res) {
     try {
       const { id } = req.params;
       const booking = await Booking.findById(id)
         .populate("package")
-        .populate("patient")
-        .populate("therapy");
+        .populate({
+          path: "patient",
+          model: "PatientProfile",
+          populate: {
+            path: "userId",
+            model: "User"
+          }
+        })
+        .populate({
+          path: "therapy",
+          model: "TherapyType"
+        });
 
       if (!booking) {
         return res.status(404).json({
@@ -203,34 +297,37 @@ class BookingAdminController {
     }
   }
 
-  // Delete booking by id
-  async deleteBooking(req, res) {
-    try {
-      const { id } = req.params;
-      const deleted = await Booking.findByIdAndDelete(id);
+  // Utility: adjust booked slot count for a list of sessions
+  async adjustAvailabilityCounts(sessions, delta) {
+    if (!Array.isArray(sessions) || sessions.length === 0) return;
 
-      if (!deleted) {
-        return res.status(404).json({
-          success: false,
-          message: "Booking not found.",
-        });
+    const filteredSessions = sessions.filter(
+      s => s && typeof s.slotId === "string" && s.slotId.trim().length > 0 && typeof s.date === "string"
+    );
+    if (filteredSessions.length === 0) {
+      if (delta < 0) {
+        console.warn("[adjustAvailabilityCounts] No valid sessions with slotId provided for decrement!", sessions);
       }
-
-      res.json({
-        success: true,
-        message: "Booking deleted successfully.",
-      });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to delete booking.",
-        error: error.message,
-      });
+      return;
     }
+
+    const ops = filteredSessions.map(({ date, slotId }) => ({
+      updateOne: {
+        filter: {
+          date,
+          "sessions.id": slotId
+        },
+        update: {
+          $inc: { "sessions.$[slot].booked": delta }
+        },
+        arrayFilters: [{ "slot.id": slotId }]
+      }
+    }));
+
+    await DailyAvailability.bulkWrite(ops);
   }
 
-  // Edit/Update booking by id
+  // Update booking with updated booking schema (1-47)
   async updateBooking(req, res) {
     try {
       const { id } = req.params;
@@ -242,48 +339,67 @@ class BookingAdminController {
         package: packageId,
         patient: patientId,
         sessions,
-        therapy: therapyId
+        therapy: therapyId,
+        payment,
+        status,
+        notes,
+        channel,
+        attendedBy,
+        referral,
+        extra,
+        attendedByType,
+        paymentDueDate,
+        invoiceNumber,
+        followupRequired,
+        followupDate
       } = req.body;
-
-      console.log("[updateBooking] req.body:", req.body);
-
-      // Validation checks (match createBooking logic)
-      if (!packageId) {
-        console.log("[updateBooking] Missing field: packageId");
-      }
-      if (!patientId) {
-        console.log("[updateBooking] Missing field: patientId");
-      }
-      if (!therapyId) {
-        console.log("[updateBooking] Missing field: therapyId");
-      }
-      if (!sessions) {
-        console.log("[updateBooking] Missing field: sessions");
-      }
-      if (sessions && !sessions.length) {
-        console.log("[updateBooking] Sessions provided but empty array.");
-      }
-      if (discountEnabled === undefined) {
-        console.log("[updateBooking] Missing field: discountEnabled");
-      }
 
       if (
         !packageId ||
         !patientId ||
         !therapyId ||
-        !sessions ||
+        !Array.isArray(sessions) ||
         !sessions.length ||
         discountEnabled === undefined ||
         (discountEnabled === true && discount === undefined)
       ) {
-        console.log("[updateBooking] Validation failed. Not updating booking.");
         return res.status(400).json({
           success: false,
           message: "Missing required fields"
         });
       }
 
-      // Prepare discountInfo as in createBooking
+      // Availability logic
+      const prevBooking = await Booking.findById(id);
+      if (!prevBooking) {
+        return res.status(404).json({
+          success: false,
+          message: "Booking not found.",
+        });
+      }
+
+      // Find which sessions changed (old sessions to decrement, new sessions to increment)
+      const makeKey = (s) => s && s.date && s.slotId ? `${s.date}|${s.slotId}` : null;
+      const oldSessions = Array.isArray(prevBooking.sessions) ? prevBooking.sessions : [];
+      const newSessions = Array.isArray(sessions) ? sessions : [];
+
+      const oldSet = new Set(oldSessions.map(makeKey).filter(Boolean));
+      const newSet = new Set(newSessions.map(makeKey).filter(Boolean));
+
+      const removeSessions = oldSessions.filter(
+        s => !newSet.has(makeKey(s)) && s && typeof s.slotId === "string" && s.slotId.trim().length > 0 && typeof s.date === "string"
+      );
+      const addSessions = newSessions.filter(
+        s => !oldSet.has(makeKey(s)) && s && typeof s.slotId === "string" && s.slotId.trim().length > 0 && typeof s.date === "string"
+      );
+
+      if (removeSessions.length > 0) {
+        await this.adjustAvailabilityCounts(removeSessions, -1);
+      }
+      if (addSessions.length > 0) {
+        await this.adjustAvailabilityCounts(addSessions, 1);
+      }
+
       let discountInfo;
       if (discountEnabled) {
         discountInfo = {
@@ -291,24 +407,35 @@ class BookingAdminController {
           discount,
           discountEnabled,
           validityDays,
-          dateFrom: new Date(),
+          dateFrom: new Date()
         };
       } else {
-        discountInfo = {
-          discountEnabled: false
-        };
+        discountInfo = { discountEnabled: false };
       }
 
-      // Build update payload
+      // Updated booking fields as per schema (1-47)
       const updatePayload = {
         discountInfo,
         package: packageId,
         patient: patientId,
         sessions,
         therapy: therapyId,
+        payment,
+        status,
+        notes,
+        channel,
+        attendedBy,
+        referral,
+        extra,
+        attendedByType,
+        paymentDueDate,
+        invoiceNumber,
+        followupRequired,
+        followupDate
       };
-
-      console.log("[updateBooking] Update payload:", updatePayload);
+      Object.keys(updatePayload).forEach(
+        k => updatePayload[k] === undefined && delete updatePayload[k]
+      );
 
       const booking = await Booking.findByIdAndUpdate(
         id,
@@ -327,7 +454,7 @@ class BookingAdminController {
         .populate({
           path: "therapy",
           model: "TherapyType"
-        })
+        });
 
       if (!booking) {
         return res.status(404).json({
@@ -335,8 +462,6 @@ class BookingAdminController {
           message: "Booking not found.",
         });
       }
-
-      console.log("[updateBooking] Booking updated successfully with ID:", booking._id);
 
       res.json({
         success: true,
@@ -347,6 +472,45 @@ class BookingAdminController {
       res.status(500).json({
         success: false,
         message: "Failed to update booking.",
+        error: error.message,
+      });
+    }
+  }
+
+  // Delete booking and return result
+  async deleteBooking(req, res) {
+    try {
+      const { id } = req.params;
+      const booking = await Booking.findById(id);
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          message: "Booking not found.",
+        });
+      }
+
+      if (Array.isArray(booking.sessions)) {
+        const validSessions = booking.sessions.filter(
+          s => s && typeof s.slotId === "string" && s.slotId.trim().length > 0 && typeof s.date === "string"
+        );
+        if (validSessions.length > 0) {
+          await this.adjustAvailabilityCounts(validSessions, -1);
+        } else {
+          console.warn("[deleteBooking] No valid sessions with slotId found for decrement!", booking.sessions);
+        }
+      }
+
+      await Booking.findByIdAndDelete(id);
+
+      res.json({
+        success: true,
+        message: "Booking deleted successfully.",
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to delete booking.",
         error: error.message,
       });
     }

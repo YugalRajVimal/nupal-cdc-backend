@@ -1,6 +1,22 @@
 
 import Lead from "../../Schema/leads.schema.js";
 import mongoose from "mongoose";
+import Counter from "../../Schema/counter.schema.js";
+
+// Utility: Get next lead sequence for LeadID generation
+const getNextSequence = async (name) => {
+  const counter = await Counter.findOneAndUpdate(
+    { name },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+  return counter.seq;
+};
+
+// Format lead ID as L + 5-digit padded number (e.g., L00001, L01234)
+const generateLeadId = (seq) => {
+  return `L${seq.toString().padStart(5, "0")}`;
+};
 
 class LeadsAdminController {
   // Add a new lead
@@ -25,6 +41,7 @@ class LeadsAdminController {
         appointmentDate,
         appointmentTime,
         status,
+        remarks, // add remarks from body
       } = req.body;
 
       // Required validations
@@ -32,7 +49,12 @@ class LeadsAdminController {
         return res.status(400).json({ message: "parentName, parentMobile, and childName are required." });
       }
 
+      // ===== Lead ID auto-generation using counter =====
+      const leadSeq = await getNextSequence("lead");
+      const leadId = generateLeadId(leadSeq);
+
       const lead = new Lead({
+        leadId, // Added leadId field
         callDate,
         staff,
         staffOther,
@@ -50,6 +72,7 @@ class LeadsAdminController {
         visitFinalized,
         appointmentDate,
         appointmentTime,
+        remarks, // save remarks
         status: status || "pending",
       });
 
@@ -131,6 +154,7 @@ class LeadsAdminController {
         "visitFinalized",
         "appointmentDate",
         "appointmentTime",
+        "remarks",   // allow updating remarks
         "status",
       ]) {
         if (update[key] !== undefined) {

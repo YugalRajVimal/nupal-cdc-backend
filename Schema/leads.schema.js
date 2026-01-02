@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 const LeadSchema = new mongoose.Schema(
   {
+    leadId: { type: String, required: true },
     callDate: { type: Date, required: false },
     staff: { type: String, required: false },
     staffOther: { type: String, required: false },
@@ -20,6 +21,7 @@ const LeadSchema = new mongoose.Schema(
     appointmentDate: { type: Date, required: false },
     appointmentTime: { type: String, required: false },
     status: { type: String, default: "pending" }, // e.g., "pending", "converted"
+    remarks: { type: String, required: false }, // Added remarks field
   },
   { timestamps: true }
 );

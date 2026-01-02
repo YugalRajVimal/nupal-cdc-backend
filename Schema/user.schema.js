@@ -16,6 +16,7 @@ const UserSchema = new mongoose.Schema(
     },
     name: { type: String, required: true },
     email: { type: String, sparse: true },
+    phone:{type: String, default: ""},
     authProvider: {
       type: String,
       enum: ["otp", "password"],
@@ -52,6 +53,8 @@ const UserSchema = new mongoose.Schema(
 // Patient Profile (extended with child/patient details)
 const PatientProfileSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  name: { type: String, required: true },
+  patientId:{type: String, required: true, },
   gender: { type: String, default: "" },
   childDOB: { type: String, default: "" },
   fatherFullName: { type: String, default: "" },
@@ -74,6 +77,8 @@ const PatientProfileSchema = new mongoose.Schema({
 // Therapist Profile
 const TherapistProfileSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  therapistId:{type: String,  required: true },
+
 
   // ADDED FIELDS AS REQUESTED
   fathersName:     { type: String, default: "" },

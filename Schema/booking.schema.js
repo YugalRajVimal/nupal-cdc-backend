@@ -4,10 +4,16 @@ const { Schema } = mongoose;
 const SessionSchema = new Schema({
   date: { type: String, required: true },
   time: { type: String, required: false },
+  slotId: { type: String, required: true },
+
   // add more fields as needed
 });
 
 const BookingSchema = new Schema({
+  appointmentId:{
+    type: String, 
+    required: true 
+  },
   discountInfo: {
     couponCode: { type: String },
     discount: { type: Number, default: 0 },
