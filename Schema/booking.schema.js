@@ -15,11 +15,8 @@ const BookingSchema = new Schema({
     required: true 
   },
   discountInfo: {
-    couponCode: { type: String },
-    discount: { type: Number, default: 0 },
-    discountEnabled: { type: Boolean, default: false },
-    validityDays: { type: Number, default: 1 },
-    dateFrom: { type: Date }
+    coupon: { type: Schema.Types.ObjectId, ref: 'Discount' },
+    time: { type: Date }
   },
   package: { 
     type: Schema.Types.ObjectId, 

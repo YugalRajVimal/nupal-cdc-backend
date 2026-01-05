@@ -9,6 +9,7 @@ import leadsAdminRouter from "./Admin/leads-admin.routes.js";
 import packagesAdminRouter from "./Admin/packages-admin.routes.js";
 import bookingsAdminRouter from "./Admin/bookings-admin.routes.js";
 import availabilitySlotsRouter from "./Admin/availability-slots.routes.js";
+import discountCouponRouter from "./Admin/discount-coupons.routes.js";
 
 
 
@@ -46,6 +47,11 @@ adminRouter.use("/bookings", bookingsAdminRouter);
 
 
 adminRouter.use("/availability-slots", availabilitySlotsRouter);
+
+
+
+adminRouter.use("/discount-coupons", discountCouponRouter);
+
 
 
 

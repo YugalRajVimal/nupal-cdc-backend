@@ -5,6 +5,8 @@ import { TherapyType } from "../../Schema/therapy-type.schema.js";
 import Booking from "../../Schema/booking.schema.js";
 import Counter from "../../Schema/counter.schema.js";
 import DailyAvailability from "../../Schema/AvailabilitySlots/daily-availability.schema.js";
+import DiscountAdminController from "./discount.controller.js";
+import DiscountModel from "../../Schema/discount.schema.js";
 
 // Utility to get next sequence for an allowed counter
 const getNextSequence = async (name) => {
@@ -33,7 +35,7 @@ class BookingAdminController {
 
       const patients = patientProfiles.map((profile) => ({
         id: profile._id,
-        patientId:profile.patientId,
+        patientId: profile.patientId,
         name: profile.userId?.name || "",
         phoneNo: profile.mobile1 || "",
       }));
@@ -43,11 +45,6 @@ class BookingAdminController {
       const packages = await Package.find();
 
       // Fetch all active therapists with their holidays
-      // We need to import TherapistProfile above if not yet imported
-      // Only those whose 'user' is active
-      // Fetch all active therapists with their holidays and also fetch bookings count per therapist (grouped by date)
-
-      // 1. Get active therapists with user info
       const activeTherapists = await (await import("../../Schema/user.schema.js")).TherapistProfile.aggregate([
         {
           $lookup: {
@@ -71,7 +68,6 @@ class BookingAdminController {
       ]);
       
       // 2. Get bookings count per therapist grouped by date
-      // (Will return: [{therapist: ObjectId, date: 'YYYY-MM-DD', count: Number }, ...])
       const bookingCounts = await Booking.aggregate([
         {
           $unwind: "$sessions"
@@ -83,7 +79,7 @@ class BookingAdminController {
           }
         }
       ]);
-      // Transform into: { therapistId: { "2024-06-09": count, ... }, ... }
+
       const therapistBookingMap = {};
       bookingCounts.forEach((row) => {
         const therapistId = row._id.therapist.toString();
@@ -92,22 +88,22 @@ class BookingAdminController {
         therapistBookingMap[therapistId][date] = row.count;
       });
 
-      // 3. Add bookingCounts to each therapist
       const therapistsWithCounts = activeTherapists.map((t) => {
         const bookingsByDate = therapistBookingMap[t._id.toString()] || {};
         return { ...t, bookingsByDate };
       });
 
-
-      console.log(therapistsWithCounts);
-
+      // Fetch discount coupons (for booking form, show only enabled)
+      const coupons = await DiscountModel.find({ discountEnabled: true }).sort({ createdAt: -1 }).lean();
 
       return res.json({
         success: true,
         patients,
         therapyTypes,
         packages,
-        therapists: activeTherapists
+        therapists: activeTherapists,
+        therapistsWithCounts,
+        coupons
       });
 
     } catch (error) {
@@ -128,39 +124,33 @@ class BookingAdminController {
 
     try {
       const {
-        couponCode,
-        discount,
-        discountEnabled,
-        validityDays,
+        coupon, // expects coupon to be an id or object with id (frontend should send this)
         package: packageId,
         patient: patientId,
-        therapist: therapistId, // <-- ADD therapist from request body
+        therapist: therapistId,
         sessions,
         therapy: therapyId,
-        payment, // { amount, status, method, ... }
+        payment,
         status,
         notes,
         channel,
         attendedBy,
         referral,
-        extra,           // object to allow custom fields
+        extra,
         attendedByType,
         paymentDueDate,
         invoiceNumber,
-        followupRequired, // boolean
-        followupDate     // date if followupRequired
+        followupRequired,
+        followupDate
       } = req.body;
 
-      // Strict validation for new schema
       if (
         !packageId ||
         !patientId ||
         !therapyId ||
-        !therapistId ||                                        // <-- Require therapistId
+        !therapistId ||
         !Array.isArray(sessions) ||
-        !sessions.length ||
-        discountEnabled === undefined ||
-        (discountEnabled === true && discount === undefined)
+        !sessions.length
       ) {
         await session.abortTransaction();
         session.endSession();
@@ -170,18 +160,18 @@ class BookingAdminController {
         });
       }
 
-      // Build discount info
-      let discountInfo;
-      if (discountEnabled) {
+      // Save only coupon id and the timestamp (if given); ignore the rest
+      let discountInfo = undefined;
+      if (coupon && coupon.id) {
         discountInfo = {
-          couponCode,
-          discount,
-          discountEnabled,
-          validityDays,
-          dateFrom: new Date()
+          coupon: coupon.id,
+          time: new Date()
         };
-      } else {
-        discountInfo = { discountEnabled: false };
+      } else if (typeof coupon === "string" && coupon) {
+        discountInfo = {
+          coupon: coupon,
+          time: new Date()
+        };
       }
 
       // Generate new appointmentId inside transaction
@@ -200,7 +190,7 @@ class BookingAdminController {
         discountInfo,
         package: packageId,
         patient: patientId,
-        therapist: therapistId,                            // <-- Add therapistId to payload
+        therapist: therapistId,
         sessions,
         therapy: therapyId,
         payment,
@@ -223,45 +213,6 @@ class BookingAdminController {
 
       await booking.save({ session });
 
-      // Availability slot bookkeeping
-      // for (const sess of sessions) {
-      //   const { date, slotId } = sess;
-      //   let doc = await DailyAvailability.findOne({ date }).session(session);
-      //   if (!doc) {
-      //     await session.abortTransaction();
-      //     session.endSession();
-      //     return res.status(400).json({
-      //       success: false,
-      //       message: `No Slots available found for date ${date}. Booking not created. Try another date.`,
-      //     });
-      //   }
-
-      //   const slot = doc.sessions.find(s => s.id === slotId);
-      //   if (slot) {
-      //     if (typeof slot.booked !== "number") slot.booked = 0;
-      //     if (typeof slot.count === "number" && slot.count === 0) {
-      //       await session.abortTransaction();
-      //       session.endSession();
-      //       return res.status(400).json({
-      //         success: false,
-      //         message: `Slot for date ${date} and time ${slotId} is not available for booking.`,
-      //       });
-      //     }
-      //     if (
-      //       typeof slot.count === "number" && slot.count > 0 && slot.booked >= slot.count
-      //     ) {
-      //       await session.abortTransaction();
-      //       session.endSession();
-      //       return res.status(400).json({
-      //         success: false,
-      //         message: `Slot for date ${date} and time ${slotId} is fully booked.`,
-      //       });
-      //     }
-      //     slot.booked += 1;
-      //   }
-      //   await doc.save({ session });
-      // }
-
       await session.commitTransaction();
       session.endSession();
 
@@ -277,7 +228,7 @@ class BookingAdminController {
           }
         })
         .populate({ path: "therapy", model: "TherapyType" })
-        .populate({ path: "therapist", model: "TherapistProfile" }); // <-- Populate therapist
+        .populate({ path: "therapist", model: "TherapistProfile" });
 
       res.status(201).json({
         success: true,
@@ -310,8 +261,19 @@ class BookingAdminController {
         .populate({
           path: "therapy",
           model: "TherapyType"
+        })
+        .populate({
+          path: "therapist",
+          model: "TherapistProfile",
+          populate: {
+            path: "userId",
+            model: "User"
+          }
+        })
+        .populate({
+          path: "discountInfo.coupon",
+          model: "Discount"
         });
-
       res.json({
         success: true,
         bookings,
@@ -343,6 +305,10 @@ class BookingAdminController {
         .populate({
           path: "therapy",
           model: "TherapyType"
+        })
+        .populate({
+          path: "therapist",
+          model: "TherapistProfile"
         });
 
       if (!booking) {
@@ -401,10 +367,7 @@ class BookingAdminController {
     try {
       const { id } = req.params;
       const {
-        couponCode,
-        discount,
-        discountEnabled,
-        validityDays,
+        coupon, // expects coupon to be an id or object with id (frontend should send this)
         package: packageId,
         patient: patientId,
         sessions,
@@ -423,14 +386,14 @@ class BookingAdminController {
         followupDate
       } = req.body;
 
+console.log(coupon)
+
       if (
         !packageId ||
         !patientId ||
         !therapyId ||
         !Array.isArray(sessions) ||
-        !sessions.length ||
-        discountEnabled === undefined ||
-        (discountEnabled === true && discount === undefined)
+        !sessions.length
       ) {
         return res.status(400).json({
           success: false,
@@ -469,18 +432,14 @@ class BookingAdminController {
         await this.adjustAvailabilityCounts(addSessions, 1);
       }
 
-      let discountInfo;
-      if (discountEnabled) {
+      // Save only coupon id and the timestamp (if given); ignore the rest
+      let discountInfo = undefined;
+      if (coupon ) {
         discountInfo = {
-          couponCode,
-          discount,
-          discountEnabled,
-          validityDays,
-          dateFrom: new Date()
+          coupon: coupon.id,
+          time: new Date()
         };
-      } else {
-        discountInfo = { discountEnabled: false };
-      }
+        }
 
       // Updated booking fields as per schema (1-47)
       const updatePayload = {
@@ -523,6 +482,10 @@ class BookingAdminController {
         .populate({
           path: "therapy",
           model: "TherapyType"
+        })
+        .populate({
+          path: "therapist",
+          model: "TherapistProfile"
         });
 
       if (!booking) {
