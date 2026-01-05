@@ -31,6 +31,11 @@ const BookingSchema = new Schema({
     ref: 'Patient', 
     required: true 
   },
+  therapist: { 
+    type: Schema.Types.ObjectId, 
+    ref: 'TherapistProfile', 
+    required: true 
+  },
   sessions: [SessionSchema],
   therapy: { 
     type: Schema.Types.ObjectId, 

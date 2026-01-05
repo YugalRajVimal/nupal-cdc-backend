@@ -25,6 +25,7 @@ class BookingAdminController {
   // Provides booking page dropdown/reference details
   async getBookingHomePageDetails(req, res) {
     try {
+      // Fetch patients for dropdown
       const patientProfiles = await PatientProfile.find({}, "userId mobile1").populate({
         path: "userId",
         select: "name",
@@ -32,19 +33,83 @@ class BookingAdminController {
 
       const patients = patientProfiles.map((profile) => ({
         id: profile._id,
+        patientId:profile.patientId,
         name: profile.userId?.name || "",
         phoneNo: profile.mobile1 || "",
       }));
 
+      // Fetch therapy types and packages
       const therapyTypes = await TherapyType.find();
       const packages = await Package.find();
+
+      // Fetch all active therapists with their holidays
+      // We need to import TherapistProfile above if not yet imported
+      // Only those whose 'user' is active
+      // Fetch all active therapists with their holidays and also fetch bookings count per therapist (grouped by date)
+
+      // 1. Get active therapists with user info
+      const activeTherapists = await (await import("../../Schema/user.schema.js")).TherapistProfile.aggregate([
+        {
+          $lookup: {
+            from: "users",
+            localField: "userId",
+            foreignField: "_id",
+            as: "user"
+          }
+        },
+        { $unwind: "$user" },
+        { $match: { "user.status": "active" } },
+        {
+          $project: {
+            _id: 1,
+            therapistId: 1,
+            name: "$user.name",
+            holidays: 1,
+            mobile1: 1
+          }
+        }
+      ]);
+      
+      // 2. Get bookings count per therapist grouped by date
+      // (Will return: [{therapist: ObjectId, date: 'YYYY-MM-DD', count: Number }, ...])
+      const bookingCounts = await Booking.aggregate([
+        {
+          $unwind: "$sessions"
+        },
+        {
+          $group: {
+            _id: { therapist: "$therapist", date: "$sessions.date" },
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+      // Transform into: { therapistId: { "2024-06-09": count, ... }, ... }
+      const therapistBookingMap = {};
+      bookingCounts.forEach((row) => {
+        const therapistId = row._id.therapist.toString();
+        const date = row._id.date;
+        if (!therapistBookingMap[therapistId]) therapistBookingMap[therapistId] = {};
+        therapistBookingMap[therapistId][date] = row.count;
+      });
+
+      // 3. Add bookingCounts to each therapist
+      const therapistsWithCounts = activeTherapists.map((t) => {
+        const bookingsByDate = therapistBookingMap[t._id.toString()] || {};
+        return { ...t, bookingsByDate };
+      });
+
+
+      console.log(therapistsWithCounts);
+
 
       return res.json({
         success: true,
         patients,
         therapyTypes,
         packages,
+        therapists: activeTherapists
       });
+
     } catch (error) {
       console.error(error);
       res.status(500).json({
@@ -69,6 +134,7 @@ class BookingAdminController {
         validityDays,
         package: packageId,
         patient: patientId,
+        therapist: therapistId, // <-- ADD therapist from request body
         sessions,
         therapy: therapyId,
         payment, // { amount, status, method, ... }
@@ -90,6 +156,7 @@ class BookingAdminController {
         !packageId ||
         !patientId ||
         !therapyId ||
+        !therapistId ||                                        // <-- Require therapistId
         !Array.isArray(sessions) ||
         !sessions.length ||
         discountEnabled === undefined ||
@@ -133,6 +200,7 @@ class BookingAdminController {
         discountInfo,
         package: packageId,
         patient: patientId,
+        therapist: therapistId,                            // <-- Add therapistId to payload
         sessions,
         therapy: therapyId,
         payment,
@@ -156,43 +224,43 @@ class BookingAdminController {
       await booking.save({ session });
 
       // Availability slot bookkeeping
-      for (const sess of sessions) {
-        const { date, slotId } = sess;
-        let doc = await DailyAvailability.findOne({ date }).session(session);
-        if (!doc) {
-          await session.abortTransaction();
-          session.endSession();
-          return res.status(400).json({
-            success: false,
-            message: `No Slots available found for date ${date}. Booking not created. Try another date.`,
-          });
-        }
+      // for (const sess of sessions) {
+      //   const { date, slotId } = sess;
+      //   let doc = await DailyAvailability.findOne({ date }).session(session);
+      //   if (!doc) {
+      //     await session.abortTransaction();
+      //     session.endSession();
+      //     return res.status(400).json({
+      //       success: false,
+      //       message: `No Slots available found for date ${date}. Booking not created. Try another date.`,
+      //     });
+      //   }
 
-        const slot = doc.sessions.find(s => s.id === slotId);
-        if (slot) {
-          if (typeof slot.booked !== "number") slot.booked = 0;
-          if (typeof slot.count === "number" && slot.count === 0) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({
-              success: false,
-              message: `Slot for date ${date} and time ${slotId} is not available for booking.`,
-            });
-          }
-          if (
-            typeof slot.count === "number" && slot.count > 0 && slot.booked >= slot.count
-          ) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({
-              success: false,
-              message: `Slot for date ${date} and time ${slotId} is fully booked.`,
-            });
-          }
-          slot.booked += 1;
-        }
-        await doc.save({ session });
-      }
+      //   const slot = doc.sessions.find(s => s.id === slotId);
+      //   if (slot) {
+      //     if (typeof slot.booked !== "number") slot.booked = 0;
+      //     if (typeof slot.count === "number" && slot.count === 0) {
+      //       await session.abortTransaction();
+      //       session.endSession();
+      //       return res.status(400).json({
+      //         success: false,
+      //         message: `Slot for date ${date} and time ${slotId} is not available for booking.`,
+      //       });
+      //     }
+      //     if (
+      //       typeof slot.count === "number" && slot.count > 0 && slot.booked >= slot.count
+      //     ) {
+      //       await session.abortTransaction();
+      //       session.endSession();
+      //       return res.status(400).json({
+      //         success: false,
+      //         message: `Slot for date ${date} and time ${slotId} is fully booked.`,
+      //       });
+      //     }
+      //     slot.booked += 1;
+      //   }
+      //   await doc.save({ session });
+      // }
 
       await session.commitTransaction();
       session.endSession();
@@ -208,7 +276,8 @@ class BookingAdminController {
             model: "User"
           }
         })
-        .populate({ path: "therapy", model: "TherapyType" });
+        .populate({ path: "therapy", model: "TherapyType" })
+        .populate({ path: "therapist", model: "TherapistProfile" }); // <-- Populate therapist
 
       res.status(201).json({
         success: true,

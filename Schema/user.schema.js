@@ -41,6 +41,8 @@ const UserSchema = new mongoose.Schema(
       enum: ["active", "suspended", "deleted"],
       default: "active",
     },
+
+
   },
   { timestamps: true }
 );
@@ -113,6 +115,16 @@ const TherapistProfileSchema = new mongoose.Schema({
   // original fields from previous TherapistProfileSchema:
   specializations: { type: String, default: "" },
   experienceYears: Number,
+  // Indicates if therapist panel is accessible for this therapist
+  isPanelAccessible: { type: Boolean, default: true }, 
+
+  // Therapist holidays: Array of objects { date: Date, reason: String }
+  holidays: [
+    {
+      date:    { type: Date, required: true },
+      reason:  { type: String, default: "" },
+    }
+  ],
   
 });
 
