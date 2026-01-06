@@ -1,7 +1,7 @@
 
 import express from "express";
 
-import PackagesAdminController from "../../Controllers/Admin/packages.controller.js";
+import PackagesAdminController from "../../Controllers/SuperAdmin/packages.controller.js";
 
 const packagesAdminRouter = express.Router();
 const packagesAdminController = new PackagesAdminController();

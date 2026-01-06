@@ -20,6 +20,25 @@ parentRouter.get('/childrens', (req, res) => parentController.getAllChildrens(re
 // Get all appointments for the parent's children
 parentRouter.get('/appointments', (req, res) => parentController.getAllAppointments(req, res));
 
+parentRouter.get('/request-appointment-homepage', (req, res) => parentController.getRequestAppointmentHomePage(req, res));
+
+parentRouter.get('/all-bookings', (req, res) =>
+  parentController.allBookings(req, res)
+);
+
+parentRouter.post('/create-booking-request', (req, res) => parentController.createBookingRequest(req, res));
+parentRouter.put('/booking-request/:id', (req, res) => parentController.updateBookingRequest(req, res));
+
+parentRouter.get('/booking-requests', (req, res) => parentController.getAllBookingRequests(req, res));
+parentRouter.delete('/booking-request/:id', (req, res) => parentController.deleteBookingRequest(req, res));
+
+parentRouter.get('/booking-requests/:id', (req, res) => parentController.getBookingRequestById(req, res));
+
+
+
+
+
+
 
 
 

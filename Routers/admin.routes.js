@@ -2,14 +2,14 @@ import express from "express";
 
 
 import jwtAuth from "../middlewares/Auth/auth.middleware.js";
-import therapyAdminRouter from "./Admin/therapy-admin.routes.js";
+import therapyAdminRouter from "./SuperAdmin/therapy-super-admin.routes.js";
 import therapistAdminRouter from "./Admin/therapist-admin.routes.js";
 import patientAdminRouter from "./Admin/patient-admin.routes.js";
 import leadsAdminRouter from "./Admin/leads-admin.routes.js";
-import packagesAdminRouter from "./Admin/packages-admin.routes.js";
+import packagesAdminRouter from "./SuperAdmin/packages-super-admin.routes.js";
 import bookingsAdminRouter from "./Admin/bookings-admin.routes.js";
 import availabilitySlotsRouter from "./Admin/availability-slots.routes.js";
-import discountCouponRouter from "./Admin/discount-coupons.routes.js";
+import discountCouponRouter from "./SuperAdmin/discount-coupons.super-admin.routes.js";
 
 
 

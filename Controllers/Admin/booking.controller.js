@@ -5,8 +5,9 @@ import { TherapyType } from "../../Schema/therapy-type.schema.js";
 import Booking from "../../Schema/booking.schema.js";
 import Counter from "../../Schema/counter.schema.js";
 import DailyAvailability from "../../Schema/AvailabilitySlots/daily-availability.schema.js";
-import DiscountAdminController from "./discount.controller.js";
+import DiscountAdminController from "../SuperAdmin/discount.controller.js";
 import DiscountModel from "../../Schema/discount.schema.js";
+import Payment from "../../Schema/payment.schema.js";
 
 // Utility to get next sequence for an allowed counter
 const getNextSequence = async (name) => {
@@ -28,7 +29,7 @@ class BookingAdminController {
   async getBookingHomePageDetails(req, res) {
     try {
       // Fetch patients for dropdown
-      const patientProfiles = await PatientProfile.find({}, "userId mobile1").populate({
+      const patientProfiles = await PatientProfile.find({}, "userId name patientId mobile1").populate({
         path: "userId",
         select: "name",
       });
@@ -36,7 +37,7 @@ class BookingAdminController {
       const patients = patientProfiles.map((profile) => ({
         id: profile._id,
         patientId: profile.patientId,
-        name: profile.userId?.name || "",
+        name: profile.name|| "",
         phoneNo: profile.mobile1 || "",
       }));
 
@@ -123,6 +124,8 @@ class BookingAdminController {
     session.startTransaction();
 
     try {
+      // Import Payment model here (avoid circular require at top)
+
       const {
         coupon, // expects coupon to be an id or object with id (frontend should send this)
         package: packageId,
@@ -130,7 +133,7 @@ class BookingAdminController {
         therapist: therapistId,
         sessions,
         therapy: therapyId,
-        payment,
+        // payment, // Don't take payment from input!
         status,
         notes,
         channel,
@@ -144,6 +147,9 @@ class BookingAdminController {
         followupDate
       } = req.body;
 
+      // Add check logs
+      console.log("[CREATE BOOKING CHECK] Incoming body:", req.body);
+
       if (
         !packageId ||
         !patientId ||
@@ -152,6 +158,9 @@ class BookingAdminController {
         !Array.isArray(sessions) ||
         !sessions.length
       ) {
+        console.log("[CREATE BOOKING CHECK] Missing required fields", {
+          packageId, patientId, therapyId, therapistId, sessions
+        });
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
@@ -167,11 +176,15 @@ class BookingAdminController {
           coupon: coupon.id,
           time: new Date()
         };
+        console.log("[CREATE BOOKING CHECK] Coupon is object with id. Set discountInfo:", discountInfo);
       } else if (typeof coupon === "string" && coupon) {
         discountInfo = {
           coupon: coupon,
           time: new Date()
         };
+        console.log("[CREATE BOOKING CHECK] Coupon is string. Set discountInfo:", discountInfo);
+      } else {
+        console.log("[CREATE BOOKING CHECK] No coupon or invalid coupon info.");
       }
 
       // Generate new appointmentId inside transaction
@@ -181,6 +194,43 @@ class BookingAdminController {
         { new: true, upsert: true, session }
       );
       const appointmentId = generateAppointmentId(counter.seq);
+      console.log("[CREATE BOOKING CHECK] Generated appointmentId:", appointmentId);
+
+      // --- Create default payment ---
+      // Fetch package info to get price or set amount
+
+      const pkg = await Package.findById(packageId).lean();
+      if (!pkg) {
+        console.log("[CREATE BOOKING CHECK] Invalid packageId:", packageId);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Invalid package"
+        });
+      }
+
+      // Generate Payment ID: INV-YYYY-00001
+      const year = new Date().getFullYear();
+      // Use a separate "payment" counter
+      const paymentCounter = await Counter.findOneAndUpdate(
+        { name: "payment" },
+        { $inc: { seq: 1 } },
+        { new: true, upsert: true, session }
+      );
+      const paymentId = `INV-${year}-${String(paymentCounter.seq).padStart(5, "0")}`;
+      console.log("[CREATE BOOKING CHECK] Generated paymentId:", paymentId);
+
+      // Default payment details (amount: pkg.price, status: 'pending')
+      const paymentDoc = new Payment({
+        paymentId: paymentId,
+        totalAmount: pkg.totalCost,
+        amount: pkg.totalCost,
+        status: 'pending',
+        paymentMethod: 'cash' // default; update later in payment flow
+      });
+      await paymentDoc.save({ session });
+      console.log("[CREATE BOOKING CHECK] Saved paymentDoc:", paymentDoc);
 
       // Compose booking payload per updated schema (1-47)
       const bookingPayload = {
@@ -193,7 +243,7 @@ class BookingAdminController {
         therapist: therapistId,
         sessions,
         therapy: therapyId,
-        payment,
+        payment: paymentDoc._id, // Store the new payment doc ID
         channel,
         attendedBy,
         referral,
@@ -205,13 +255,19 @@ class BookingAdminController {
         followupDate
       };
 
+      // Add logging for bookingPayload
+      console.log("[CREATE BOOKING CHECK] bookingPayload before cleanup:", bookingPayload);
+
       Object.keys(bookingPayload).forEach(
         k => bookingPayload[k] === undefined && delete bookingPayload[k]
       );
 
+      console.log("[CREATE BOOKING CHECK] bookingPayload after cleanup:", bookingPayload);
+
       const booking = new Booking(bookingPayload);
 
       await booking.save({ session });
+      console.log("[CREATE BOOKING CHECK] Booking saved. _id:", booking._id);
 
       await session.commitTransaction();
       session.endSession();
@@ -228,13 +284,17 @@ class BookingAdminController {
           }
         })
         .populate({ path: "therapy", model: "TherapyType" })
-        .populate({ path: "therapist", model: "TherapistProfile" });
+        .populate({ path: "therapist", model: "TherapistProfile" })
+        .populate({ path: "payment", model: "Payment" });
+
+      console.log("[CREATE BOOKING CHECK] Final populatedBooking:", populatedBooking);
 
       res.status(201).json({
         success: true,
         booking: populatedBooking,
       });
     } catch (error) {
+      console.log("[CREATE BOOKING CHECK] Error encountered:", error);
       await session.abortTransaction();
       session.endSession();
       res.status(500).json({

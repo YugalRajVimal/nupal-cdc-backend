@@ -66,7 +66,9 @@ class PatientAdminController {
       ];
 
       // Gather missing required fields
-      const missingRequired = requiredFields.filter(f => !f.value || (typeof f.value === "string" && f.value.trim() === "")).map(f => f.key);
+      const missingRequired = requiredFields
+        .filter(f => !f.value || (typeof f.value === "string" && f.value.trim() === ""))
+        .map(f => f.key);
 
       if (missingRequired.length > 0) {
         console.log("Required fields missing:", missingRequired);
@@ -156,25 +158,83 @@ class PatientAdminController {
         });
       }
 
-      // If both email and mobile1 are paired together in a previous patient, allow additional creation.
-      // If neither exists or both match, allow registration
+      // CASE: If both email and mobile1 are paired together in a previous patient, only create PatientProfile, do not create User
+      let user;
+      let reusedExistingUser = false;
+      if (
+        existingUserByEmail &&
+        emailAssociatedMobile &&
+        emailAssociatedMobile === mobile1Trimmed
+      ) {
+        // Check for PatientProfile with both matching
+        user = existingUserByEmail;
+        reusedExistingUser = true;
+      } else if (
+        existingUserByMobile &&
+        mobileAssociatedEmail &&
+        mobileAssociatedEmail === emailTrimmed
+      ) {
+        // Defensive, in case only mobile->email found
+        user = await User.findOne({ _id: existingUserByMobile.userId });
+        reusedExistingUser = true;
+      } else {
+        // No match for BOTH, so create new User as before
+        // Get next patient sequence and generate patientId
+        const nextSeq = await getNextSequence("patient");
+        const patientId = generatePatientId(nextSeq);
 
-      // Get next patient sequence and generate patientId
+        user = new User({
+          role: "patient",
+          name: childFullName,
+          email: emailTrimmed,
+          authProvider: "otp",
+          phoneVerified: false,
+          emailVerified: false,
+          status: "active",
+          phone: mobile1Trimmed // <--- Save mobile1 to User.phone
+        });
+        await user.save();
+
+        // Create PatientProfile below using generated patientId
+        const patientProfile = new PatientProfile({
+          userId: user._id,
+          patientId, // <-- Add generated patientId
+          name: childFullName, // <-- Store child's name here
+          gender,
+          childDOB,
+          fatherFullName,
+          plannedSessionsPerMonth, // optional
+          package: packageName,    // optional
+          motherFullName,
+          parentEmail,
+          mobile1: mobile1Trimmed,
+          mobile2,                 // optional
+          address,
+          areaName,
+          diagnosisInfo,
+          childReference,
+          parentOccupation,
+          remarks,                 // optional
+          otherDocument: otherDocumentPath,
+        });
+        await patientProfile.save();
+
+        console.log("Patient successfully created for:", { email: emailTrimmed, mobile1: mobile1Trimmed, patientId });
+
+        return res.status(201).json({
+          success: true,
+          message: "Patient created successfully.",
+          patient: {
+            ...patientProfile.toObject(),
+            userId: user,
+          },
+        });
+      }
+
+      // If here, reuse user and create PatientProfile (do not create User)
+      // Still need to generate a new patientId for this PatientProfile
       const nextSeq = await getNextSequence("patient");
       const patientId = generatePatientId(nextSeq);
-
-      // CREATE User (role: patient, authProvider: otp, etc)
-      const user = new User({
-        role: "patient",
-        name: childFullName,
-        email: emailTrimmed,
-        authProvider: "otp",
-        phoneVerified: false,
-        emailVerified: false,
-        status: "active",
-        phone: mobile1Trimmed // <--- Save mobile1 to User.phone
-      });
-      await user.save();
 
       const patientProfile = new PatientProfile({
         userId: user._id,
@@ -199,7 +259,10 @@ class PatientAdminController {
       });
       await patientProfile.save();
 
-      console.log("Patient successfully created for:", { email: emailTrimmed, mobile1: mobile1Trimmed, patientId });
+      console.log(
+        "PatientProfile created for existing user:",
+        { email: emailTrimmed, mobile1: mobile1Trimmed, patientId, reusedExistingUser }
+      );
 
       return res.status(201).json({
         success: true,
@@ -208,6 +271,7 @@ class PatientAdminController {
           ...patientProfile.toObject(),
           userId: user,
         },
+        usedExistingUser: true,
       });
     } catch (error) {
       console.error(error);

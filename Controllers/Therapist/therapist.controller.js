@@ -1,5 +1,5 @@
 import Booking from '../../Schema/booking.schema.js';
-import { User } from '../../Schema/user.schema.js';
+import { TherapistProfile, User } from '../../Schema/user.schema.js';
 
 // Optionally import Therapist schema if you have one
 // import { TherapistProfile } from '../../Schema/therapist.schema.js';
@@ -103,11 +103,34 @@ class TherapistController {
         return res.status(401).json({ success: false, message: "Unauthorized: Therapist not found from token." });
       }
 
-      // Find all bookings where therapist = therapistId
-      const appointments = await Booking.find({ therapist: therapistId })
+      
+
+      // Find user from request (assuming therapist is authenticated and user id is in req.userId)
+      const userId = req.userId || "69528541c72027c7f0b2a165"; // fallback for demo/testing
+      if (!userId) {
+        return res.status(401).json({ success: false, message: "Unauthorized: User not found from token." });
+      }
+
+      // Find user document
+      const user = await User.findById(userId).lean();
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found." });
+      }
+
+      // Find therapist profile associated with this user
+      const therapistProfile = await TherapistProfile.findOne({ userId: user._id }).lean();
+      if (!therapistProfile) {
+        return res.status(404).json({ success: false, message: "Therapist profile not found." });
+      }
+
+      // Use therapist profile's id to find appointments/bookings
+      const appointments = await Booking.find({ therapist: therapistProfile._id })
         .populate({ path: 'patient', model: 'PatientProfile' })
         .populate({ path: 'package' })
         .lean();
+
+
+        console.log(appointments);
 
       res.json({ success: true, data: appointments });
     } catch (err) {

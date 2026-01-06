@@ -1,5 +1,5 @@
 import express from "express";
-import TherapyAdminController from "../../Controllers/Admin/therapy.controller.js";
+import TherapyAdminController from "../../Controllers/SuperAdmin/therapy.controller.js";
 
 
 const therapyAdminRouter = express.Router();

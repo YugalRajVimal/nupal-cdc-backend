@@ -9,14 +9,10 @@ const SessionSchema = new Schema({
   // add more fields as needed
 });
 
-const BookingSchema = new Schema({
-  appointmentId:{
+const BookingRequestsSchema = new Schema({
+  requestId:{
     type: String, 
     required: true 
-  },
-  discountInfo: {
-    coupon: { type: Schema.Types.ObjectId, ref: 'Discount' },
-    time: { type: Date }
   },
   package: { 
     type: Schema.Types.ObjectId, 
@@ -28,26 +24,27 @@ const BookingSchema = new Schema({
     ref: 'Patient', 
     required: true 
   },
-  therapist: { 
-    type: Schema.Types.ObjectId, 
-    ref: 'TherapistProfile', 
-    required: true 
-  },
   sessions: [SessionSchema],
   therapy: { 
     type: Schema.Types.ObjectId, 
     ref: 'Therapy', 
     required: true 
-  }
-,
-payment: { 
-  type: Schema.Types.ObjectId, 
-  ref: 'Payment'
-}
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending',
+    required: true
+  },
+  appointmentId: { 
+    type: Schema.Types.ObjectId, 
+    ref: 'Booking', 
+    required: false,
+    default: null
+  },
 }, { timestamps: true });
 
+const BookingRequests = mongoose.model("BookingRequests", BookingRequestsSchema);
 
-const Booking = mongoose.model("Booking", BookingSchema);
-
-export default Booking;
+export default BookingRequests;
 

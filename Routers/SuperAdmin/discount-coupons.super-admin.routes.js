@@ -1,5 +1,5 @@
 import express from 'express';
-import DiscountAdminController from '../../Controllers/Admin/discount.controller.js';
+import DiscountAdminController from '../../Controllers/SuperAdmin/discount.controller.js';
 
 const discountCouponRouter = express.Router();
 const discountAdminController = new DiscountAdminController();

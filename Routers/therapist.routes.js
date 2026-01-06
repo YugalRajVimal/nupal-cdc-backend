@@ -21,7 +21,7 @@ therapistRouter.get('/patients', (req, res) => therapistController.getAllPatient
 );
 
 // Get all appointments for the therapist
-therapistRouter.get('/appointments', (req, res) => therapistController.getAllAppointments
+therapistRouter.get('/appointments', (req, res) => therapistController.getAllTherapistAppointments
   ? therapistController.getAllTherapistAppointments(req, res)
   : res.status(501).json({ success: false, message: "Not implemented" })
 );
