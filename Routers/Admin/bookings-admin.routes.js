@@ -30,13 +30,6 @@ bookingsAdminRouter.get("/", (req, res) =>
   bookingAdminController.getAllBookings(req, res)
 );
 
-/**
- * @route GET /api/admin/bookings/:id
- * @desc Get booking by id
- */
-bookingsAdminRouter.get("/:id", (req, res) =>
-  bookingAdminController.getBookingById(req, res)
-);
 
 /**
  * @route DELETE /api/admin/bookings/:id
@@ -53,6 +46,27 @@ bookingsAdminRouter.delete("/:id", (req, res) =>
 bookingsAdminRouter.put("/:id", (req, res) =>
   bookingAdminController.updateBooking(req, res)
 );
+
+
+/**
+ * @route GET /api/admin/booking-requests
+ * @desc Get all booking requests (admin)
+ */
+bookingsAdminRouter.get("/booking-requests", (req, res) =>
+  bookingAdminController.getAllBookingRequests(req, res)
+);
+
+/**
+ * @route POST /api/admin/booking-requests/:id/reject
+ * @desc Reject a booking request by id (admin)
+ */
+bookingsAdminRouter.post("/booking-requests/:id/reject", (req, res) => 
+  bookingAdminController.rejectBookingRequest(req, res)
+);
+
+
+
+
 
 
 

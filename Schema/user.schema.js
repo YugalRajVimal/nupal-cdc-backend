@@ -76,6 +76,8 @@ const PatientProfileSchema = new mongoose.Schema({
   otherDocument: { type: mongoose.Schema.Types.Mixed, default: undefined },
 });
 
+
+
 // Therapist Profile
 const TherapistProfileSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

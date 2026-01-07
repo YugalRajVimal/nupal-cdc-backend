@@ -5,6 +5,11 @@ const SessionSchema = new Schema({
   date: { type: String, required: true },
   time: { type: String, required: false },
   slotId: { type: String, required: true },
+  therapist: { 
+    type: Schema.Types.ObjectId, 
+    ref: 'TherapistProfile', 
+    required: true 
+  },
 
   // add more fields as needed
 });
