@@ -1,5 +1,5 @@
 
-import { User, PatientProfile } from "../../Schema/user.schema.js";
+import { User, PatientProfile, TherapistProfile } from "../../Schema/user.schema.js";
 import Package from "../../Schema/packages.schema.js";
 import { TherapyType } from "../../Schema/therapy-type.schema.js";
 import Booking from "../../Schema/booking.schema.js";
@@ -9,6 +9,7 @@ import DiscountAdminController from "../SuperAdmin/discount.controller.js";
 import DiscountModel from "../../Schema/discount.schema.js";
 import Payment from "../../Schema/payment.schema.js";
 import BookingRequests from "../../Schema/booking-request.schema.js";
+import AavailabilitySlotsAdminController from "./availability-slots.controller.js";
 
 // Utility to get next sequence for an allowed counter
 const getNextSequence = async (name) => {
@@ -25,6 +26,8 @@ function generateAppointmentId(seq) {
   return 'APT' + seq.toString().padStart(6, '0');
 }
 
+const aavailabilitySlotsAdminController = new AavailabilitySlotsAdminController();
+
 class BookingAdminController {
   // Provides booking page dropdown/reference details
   async getBookingHomePageDetails(req, res) {
@@ -38,7 +41,7 @@ class BookingAdminController {
       const patients = patientProfiles.map((profile) => ({
         id: profile._id,
         patientId: profile.patientId,
-        name: profile.name|| "",
+        name: profile.name || "",
         phoneNo: profile.mobile1 || "",
       }));
 
@@ -68,31 +71,49 @@ class BookingAdminController {
           }
         }
       ]);
-      
-      // 2. Get bookings count per therapist grouped by date
+
+      // Get bookings count per therapist grouped by date
       const bookingCounts = await Booking.aggregate([
         {
           $unwind: "$sessions"
         },
         {
           $group: {
-            _id: { therapist: "$therapist", date: "$sessions.date" },
-            count: { $sum: 1 }
+            _id: { therapist: "$sessions.therapist", date: "$sessions.date" },
+            count: { $sum: 1 },
+            slots: { $addToSet: "$sessions.slotId" }
           }
         }
       ]);
 
-      const therapistBookingMap = {};
+      console.log(bookingCounts);
+
+      // Build therapistBookedSlotMap and therapistBookedCountMap
+      const therapistBookedSlotMap = {};
+      const therapistBookedCountMap = {};
       bookingCounts.forEach((row) => {
         const therapistId = row._id.therapist.toString();
         const date = row._id.date;
-        if (!therapistBookingMap[therapistId]) therapistBookingMap[therapistId] = {};
-        therapistBookingMap[therapistId][date] = row.count;
+
+        // For booked slots per therapistId and date
+        if (!therapistBookedSlotMap[therapistId]) therapistBookedSlotMap[therapistId] = {};
+        if (!therapistBookedSlotMap[therapistId][date]) therapistBookedSlotMap[therapistId][date] = [];
+        therapistBookedSlotMap[therapistId][date] = Array.from(new Set([
+          ...therapistBookedSlotMap[therapistId][date],
+          ...(row.slots || [])
+        ]));
+
+        // For booked slot count per therapistId and date
+        if (!therapistBookedCountMap[therapistId]) therapistBookedCountMap[therapistId] = {};
+        therapistBookedCountMap[therapistId][date] = (row.slots || []).length;
       });
 
-      const therapistsWithCounts = activeTherapists.map((t) => {
-        const bookingsByDate = therapistBookingMap[t._id.toString()] || {};
-        return { ...t, bookingsByDate };
+      // For each therapist: include bookedSlots and bookedSlotCount (per date)
+      const therapists = activeTherapists.map((t) => {
+        const therapistIdString = t._id.toString();
+        const bookedSlots = therapistBookedSlotMap[therapistIdString] || {};
+        const bookedSlotCount = therapistBookedCountMap[therapistIdString] || {};
+        return { ...t, bookedSlots, bookedSlotCount };
       });
 
       // Fetch discount coupons (for booking form, show only enabled)
@@ -103,8 +124,7 @@ class BookingAdminController {
         patients,
         therapyTypes,
         packages,
-        therapists: activeTherapists,
-        therapistsWithCounts,
+        therapists, // therapists now have bookedSlots and bookedSlotCount objects per date
         coupons
       });
 
@@ -134,7 +154,6 @@ class BookingAdminController {
         therapist: therapistId,
         sessions,
         therapy: therapyId,
-        // payment, // Don't take payment from input!
         status,
         notes,
         channel,
@@ -172,6 +191,151 @@ class BookingAdminController {
         });
       }
 
+      // ---------- AVAILABILITY CHECK USING aavailabilitySlotsAdminController ----------
+      // Dynamically import controller & function
+
+      // Fetch therapist to get their .therapistId for mapping with BookedSlots in availability data
+      const therapistDoc = await TherapistProfile.findById(therapistId).lean();
+      if (!therapistDoc) {
+        console.log("[BOOKING AVAILABILITY CHECK] Therapist not found:", therapistId);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Invalid therapist"
+        });
+      }
+      // therapistDoc.therapistId (example: "NPL001")
+      const therapistRefId = therapistDoc.therapistId;
+      console.log("[BOOKING AVAILABILITY CHECK] Resolved therapist.therapistId:", therapistRefId);
+
+      // Prepare slot queries
+      const requestedSlots = (sessions || []).map(sess => ({
+        date: sess.date,
+        slotId: sess.slotId || sess.id // Use slotId or fallback to id
+      }));
+
+      // Validate slot data
+      if (requestedSlots.some(s => !s.date || !s.slotId)) {
+        console.log("[CREATE BOOKING CHECK] Invalid session data. Each session needs date and slotId/id.", requestedSlots);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Invalid session data: All sessions must have date and slotId/id."
+        });
+      }
+
+      // Sort session dates
+      let sessionDates = requestedSlots.map(s => s.date).sort();
+      const fromDate = sessionDates[0];
+      const toDate = sessionDates[sessionDates.length - 1];
+
+      console.log(
+        `[BOOKING AVAILABILITY CHECK] Checking slots for therapistId _id=${therapistId} therapistId=${therapistRefId} from ${fromDate} to ${toDate}`,
+        "Requested slots:",
+        JSON.stringify(requestedSlots)
+      );
+
+      // Call getAvailabilitySummary from controller using fake req/res
+      let availabilitySummaryResult = null;
+      try {
+        let fakeReq = {
+          query: {
+            therapistId: String(therapistId),
+            from: fromDate,
+            to: toDate,
+          }
+        };
+        // Fake response object for Promise handoff
+        availabilitySummaryResult = await new Promise((resolve, reject) => {
+          aavailabilitySlotsAdminController.getAvailabilitySummary(
+            fakeReq,
+            {
+              json: (body) => resolve(body),
+              status: (code) => ({
+                json: (body) => {
+                  body.__status = code;
+                  resolve(body);
+                }
+              })
+            }
+          );
+        });
+        console.log("[BOOKING AVAILABILITY CHECK] Availability summary result:", JSON.stringify(availabilitySummaryResult));
+      } catch (err) {
+        console.error("[BOOKING CREATE] Failed availabilitySummary call:", err);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          success: false,
+          message: "Failed to check slot availability.",
+          error: err.message,
+        });
+      }
+
+      // Check and validate availability response
+      if (
+        !availabilitySummaryResult ||
+        !availabilitySummaryResult.success ||
+        !availabilitySummaryResult.data
+      ) {
+        console.log("[BOOKING AVAILABILITY CHECK] Invalid availability summary result:", availabilitySummaryResult);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(409).json({
+          success: false,
+          message: "Could not fetch therapist's slot availability for booking request."
+        });
+      }
+
+      // Process slotAvailabilityData, console.log it clearly
+      const slotAvailabilityData = availabilitySummaryResult.data;
+      console.log("[BOOKING AVAILABILITY CHECK] slotAvailabilityData:");
+      console.dir(slotAvailabilityData, { depth: 10 });
+
+      // Conflict detection based on BookedSlots, using therapist.therapistId (not ObjectId!)
+      let conflicts = [];
+
+      requestedSlots.forEach(sess => {
+        // The slotAvailabilityData keys are e.g. "19-01-2026"
+        for (const availKey in slotAvailabilityData) {
+          // Try to match YYYY-MM-DD to DD-MM-YYYY
+          const [d, m, y] = availKey.split('-');
+          const keyAsIso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+          // Properly check using therapistRefId in BookedSlots
+          if (
+            sess.date === keyAsIso &&
+            slotAvailabilityData[availKey]?.BookedSlots &&
+            slotAvailabilityData[availKey].BookedSlots[therapistRefId] &&
+            Array.isArray(slotAvailabilityData[availKey].BookedSlots[therapistRefId]) &&
+            slotAvailabilityData[availKey].BookedSlots[therapistRefId].includes(sess.slotId)
+          ) {
+            console.log(`[BOOKING AVAILABILITY CHECK] Conflict detected: therapist=${therapistId} (${therapistRefId}) on ${sess.date} slotId=${sess.slotId}. BookedSlots[${therapistRefId}]=`, slotAvailabilityData[availKey].BookedSlots[therapistRefId]);
+            conflicts.push({
+              date: sess.date,
+              slotId: sess.slotId
+            });
+          }
+        }
+      });
+
+      if (conflicts.length > 0) {
+        console.log("[BOOKING CREATE] Slot conflicts detected. Cannot book. Conflicts:", conflicts);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(409).json({
+          success: false,
+          message: "Selected therapist/time slot already booked for one or more session dates.",
+          conflicts,
+          slotAvailabilityData
+        });
+      } else {
+        console.log("[BOOKING AVAILABILITY CHECK] All requested slots are available, proceeding with booking.");
+      }
+
+      // -------------------------------------------------------------------------
+
       // Save only coupon id and the timestamp (if given); ignore the rest
       let discountInfo = undefined;
       if (coupon && coupon.id) {
@@ -201,7 +365,6 @@ class BookingAdminController {
 
       // --- Create default payment ---
       // Fetch package info to get price or set amount
-
       const pkg = await Package.findById(packageId).lean();
       if (!pkg) {
         console.log("[CREATE BOOKING CHECK] Invalid packageId:", packageId);
@@ -235,11 +398,12 @@ class BookingAdminController {
       await paymentDoc.save({ session });
       console.log("[CREATE BOOKING CHECK] Saved paymentDoc:", paymentDoc);
 
-      // ---- REWRITE: Ensure all session objects in sessions[] have the correct therapist set ----
-      // This enforces @booking.schema.js (4-15): save the same therapist in all session slots.
+      // ---- Ensure all session objects in sessions[] have the correct therapist set (both therapist _id and therapistId/therapistRefId field) ----
+      // Add both therapist and therapistId to each session
       const sessionsWithTherapist = (sessions || []).map(sessionObj => ({
         ...sessionObj,
-        therapist: therapistId
+        therapist: therapistId,
+        therapistId: therapistRefId // Add the readable/short id as well
       }));
 
       // Compose booking payload per updated schema (1-47)
@@ -282,12 +446,9 @@ class BookingAdminController {
       // If this booking is for a booking request, update its status to approved
       if (isBookingRequest && bookingRequestId) {
         // Import BookingRequests model here (to avoid circular require)
-
-
         console.log(bookingRequestId);
-        
-        // Dynamically import the BookingRequests model (to avoid circular dependencies)
 
+        // Dynamically import the BookingRequests model (to avoid circular dependencies)
         const bookingRequestDoc = await BookingRequests.findById(bookingRequestId).session(session);
         if (bookingRequestDoc) {
           bookingRequestDoc.status = "approved";
@@ -463,6 +624,9 @@ class BookingAdminController {
 
   // Update booking with updated booking schema (1-47)
   async updateBooking(req, res) {
+    const mongoose = (await import("mongoose")).default;
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const { id } = req.params;
       const {
@@ -482,10 +646,9 @@ class BookingAdminController {
         paymentDueDate,
         invoiceNumber,
         followupRequired,
-        followupDate
+        followupDate,
+        therapist: bodyTherapist,
       } = req.body;
-
-
 
       // Validate required fields
       if (
@@ -495,6 +658,8 @@ class BookingAdminController {
         !Array.isArray(sessions) ||
         !sessions.length
       ) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({
           success: false,
           message: "Missing required fields"
@@ -502,65 +667,247 @@ class BookingAdminController {
       }
 
       // Ensure booking exists
-      const prevBooking = await Booking.findById(id);
+      const prevBooking = await Booking.findById(id).lean();
       if (!prevBooking) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({
           success: false,
           message: "Booking not found.",
         });
       }
 
-      // Fix: Set therapist of each slot (session) as required in SessionSchema
-      // If session.therapist is missing but a session.therapistId exists in payload, or if not, use the overall booking therapist
-      let updatedSessions = Array.isArray(sessions) ? sessions.map(s => {
-        // If the frontend sends both s.therapist and s.therapistId, prefer s.therapist
-        // If neither, fall back to req.body.therapist (the overall therapist for booking)
-        // Allow passing therapist as either an ObjectId, populated object with _id, or string
+      // Determine primary therapist for this booking (fallbacks: request, session, prevBooking)
+      // This is needed for main slot check if sessions missing therapist,
+      // but for per-session check, loop them all.
+      // Pick first valid therapist in this priority:
+      // [session.therapist, session.therapistId, bodyTherapist, prevBooking.therapist]
+      // We'll do this per-session below.
 
-        let therapistValue = (
-          s.therapist ||
-          s.therapistId ||
-          req.body.therapist || // fallback, though not explicitly destructured above
-          prevBooking.therapist // last fallback; should normally always be present on booking
-        );
-
-        // Extract ._id if provided as populated object
-        if (typeof therapistValue === "object" && therapistValue !== null && therapistValue._id) {
+      // Prepare requested slots (include therapist mapping for each slot!)
+      const requestedSlots = (sessions || []).map(sess => {
+        let therapistValue =
+          sess.therapist ||
+          sess.therapistId ||
+          bodyTherapist ||
+          prevBooking.therapist;
+        // Extract _id if populated object
+        if (therapistValue && typeof therapistValue === "object" && therapistValue._id) {
           therapistValue = therapistValue._id;
         }
-
         return {
-          ...s,
+          date: sess.date,
+          slotId: sess.slotId || sess.id,
           therapist: therapistValue
         };
-      }) : [];
+      });
+
+      if (requestedSlots.some(s => !s.date || !s.slotId || !s.therapist)) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Invalid session data: Each session must have date, slotId, and therapist."
+        });
+      }
+
+      // For each involved therapist, check their slots in relevant date range, just like in createBooking.
+      // Gather all unique {therapist, [dates]} needed for the various sessions.
+      // Map: therapistId => [dates]
+      const therapistToDates = {};
+      requestedSlots.forEach(({ date, therapist }) => {
+        const key = String(therapist);
+        if (!therapistToDates[key]) therapistToDates[key] = new Set();
+        therapistToDates[key].add(date);
+      });
+
+      // Collect all needed therapist docs so we can get readable .therapistId
+      const uniqueTherapistIds = Array.from(
+        new Set(requestedSlots.map(r => String(r.therapist)))
+      );
+      const therapistDocs = await TherapistProfile.find({
+        _id: { $in: uniqueTherapistIds }
+      }).lean();
+
+      const therapistIdMap = {};
+      therapistDocs.forEach(tDoc => {
+        therapistIdMap[String(tDoc._id)] = tDoc.therapistId; // may be undefined but that's ok
+      });
+
+      // --- Check slot availability for all sessions ---
+      // Build and run availability checks PER therapist for their own sessions
+
+      // Collect possible conflicts
+      let slotAvailabilityDataCacheByTherapist = {};
+      let conflicts = [];
+
+      for (const therapistObjId of uniqueTherapistIds) {
+        // Compile all dates for this therapist
+        const dates = Array.from(therapistToDates[therapistObjId] || []);
+        if (!dates.length) continue;
+        const sortedDates = dates.slice().sort();
+        const fromDate = sortedDates[0];
+        const toDate = sortedDates[sortedDates.length - 1];
+
+        // Call getAvailabilitySummary of slots controller for this therapist
+        let slotAvailabilityResult;
+        let therapistRefId = therapistIdMap[therapistObjId];
+        try {
+          let fakeReq = {
+            query: {
+              therapistId: String(therapistObjId),
+              from: fromDate,
+              to: toDate
+            }
+          };
+          slotAvailabilityResult = await new Promise((resolve, reject) => {
+            aavailabilitySlotsAdminController.getAvailabilitySummary(
+              fakeReq,
+              {
+                json: body => resolve(body),
+                status: code => ({
+                  json: body => {
+                    body.__status = code;
+                    resolve(body);
+                  }
+                })
+              }
+            );
+          });
+        } catch (err) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(500).json({
+            success: false,
+            message: "Failed to check slot availability.",
+            error: err.message,
+          });
+        }
+        if (!slotAvailabilityResult || !slotAvailabilityResult.success || !slotAvailabilityResult.data) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(409).json({
+            success: false,
+            message: "Could not fetch therapist's slot availability for update request."
+          });
+        }
+        slotAvailabilityDataCacheByTherapist[therapistObjId] = slotAvailabilityResult.data;
+
+        // Now check for each session for this therapist
+        const refId = therapistRefId;
+        const slotAvailabilityData = slotAvailabilityResult.data;
+
+        // Only consider new sessions (not ones present in the previous booking with same therapist, date, slotId)
+        requestedSlots
+          .filter(s => String(s.therapist) === String(therapistObjId))
+          .forEach(sess => {
+            // skip if already present in prevBooking.sessions (ie, this user's own previous booked slot)
+            const alreadyHad =
+              Array.isArray(prevBooking.sessions) &&
+              prevBooking.sessions.some(
+                ps =>
+                  String(ps.date) === String(sess.date) &&
+                  String(ps.slotId || ps.id) === String(sess.slotId) &&
+                  String(ps.therapist || ps.therapistId) === String(sess.therapist)
+              );
+            if (alreadyHad) return;
+            // loop over slotAvailabilityData keys ("19-01-2026"),
+            // must match YYYY-MM-DD in sess.date (convert key to ISO string for check)
+            for (const availKey in slotAvailabilityData) {
+              const [d, m, y] = availKey.split('-');
+              const keyAsIso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+              if (
+                sess.date === keyAsIso &&
+                slotAvailabilityData[availKey]?.BookedSlots &&
+                slotAvailabilityData[availKey].BookedSlots[refId] &&
+                Array.isArray(slotAvailabilityData[availKey].BookedSlots[refId]) &&
+                slotAvailabilityData[availKey].BookedSlots[refId].includes(sess.slotId)
+              ) {
+                conflicts.push({
+                  date: sess.date,
+                  slotId: sess.slotId,
+                  therapist: sess.therapist
+                });
+              }
+            }
+          });
+      }
+
+      if (conflicts.length > 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(409).json({
+          success: false,
+          message: "Selected therapist/time slot already booked for one or more session dates.",
+          conflicts,
+          // Expose availability checked data for debugging if needed
+          // slotAvailabilityDataCacheByTherapist
+        });
+      }
+
+      // If all slots clear, proceed with update.
+      // Again, ensure each session has the proper therapist field (like createBooking)
+      let updatedSessions = Array.isArray(sessions)
+        ? sessions.map(s => {
+            let therapistValue =
+              s.therapist ||
+              s.therapistId ||
+              bodyTherapist ||
+              prevBooking.therapist;
+            if (therapistValue && typeof therapistValue === "object" && therapistValue._id) {
+              therapistValue = therapistValue._id;
+            }
+            // Also populate therapistId (ref code) if available (as in createBooking),
+            // fallback to empty string if not found
+            let therapistIdField =
+              therapistIdMap[String(therapistValue)] || "";
+            return {
+              ...s,
+              therapist: therapistValue,
+              therapistId: therapistIdField
+            };
+          })
+        : [];
 
       // Build sets (date|slotId|therapist) for accurate therapist-based slot management
-      const sessionKey = (s) => `${s.date}|${s.slotId}|${String((typeof s.therapist === "object" && s.therapist?._id) ? s.therapist._id : s.therapist || "")}`;
+      const sessionKey = (s) =>
+        `${s.date}|${s.slotId}|${String(
+          typeof s.therapist === "object" && s.therapist?._id
+            ? s.therapist._id
+            : s.therapist || ""
+        )}`;
       const prevSessions = Array.isArray(prevBooking.sessions)
         ? prevBooking.sessions.filter(
-            s => s && typeof s.slotId === "string" && s.slotId.trim().length > 0 && typeof s.date === "string"
+            s =>
+              s &&
+              typeof s.slotId === "string" &&
+              s.slotId.trim().length > 0 &&
+              typeof s.date === "string"
           )
         : [];
       const nextSessions = updatedSessions.filter(
-        s => s && typeof s.slotId === "string" && s.slotId.trim().length > 0 && typeof s.date === "string"
+        s =>
+          s &&
+          typeof s.slotId === "string" &&
+          s.slotId.trim().length > 0 &&
+          typeof s.date === "string"
       );
 
       const prevKeys = new Set(prevSessions.map(sessionKey));
       const nextKeys = new Set(nextSessions.map(sessionKey));
 
       // To decrement: sessions in prev, but not in next
-      const sessionsToDecrement = prevSessions.filter(s => !nextKeys.has(sessionKey(s)));
+      const sessionsToDecrement = prevSessions.filter(
+        s => !nextKeys.has(sessionKey(s))
+      );
       // To increment: sessions in next, but not in prev
-      const sessionsToIncrement = nextSessions.filter(s => !prevKeys.has(sessionKey(s)));
+      const sessionsToIncrement = nextSessions.filter(
+        s => !prevKeys.has(sessionKey(s))
+      );
 
-      // If you want to adjust slot counts, uncomment below:
-      // if (sessionsToDecrement.length > 0) {
-      //   await this.adjustAvailabilityCounts(sessionsToDecrement, -1);
-      // }
-      // if (sessionsToIncrement.length > 0) {
-      //   await this.adjustAvailabilityCounts(sessionsToIncrement, 1);
-      // }
+      // Optionally update availability
+      // if (sessionsToDecrement.length > 0) await this.adjustAvailabilityCounts(sessionsToDecrement, -1);
+      // if (sessionsToIncrement.length > 0) await this.adjustAvailabilityCounts(sessionsToIncrement, 1);
 
       // Save only coupon id and the timestamp (if given); ignore the rest
       let discountInfo = undefined;
@@ -595,11 +942,7 @@ class BookingAdminController {
         k => updatePayload[k] === undefined && delete updatePayload[k]
       );
 
-      const booking = await Booking.findByIdAndUpdate(
-        id,
-        updatePayload,
-        { new: true }
-      )
+      const booking = await Booking.findByIdAndUpdate(id, updatePayload, { new: true })
         .populate("package")
         .populate({
           path: "patient",
@@ -616,20 +959,31 @@ class BookingAdminController {
         .populate({
           path: "therapist",
           model: "TherapistProfile"
+        })
+        .populate({
+          path: "payment",
+          model: "Payment"
         });
 
       if (!booking) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({
           success: false,
           message: "Booking not found.",
         });
       }
 
+      await session.commitTransaction();
+      session.endSession();
+
       res.json({
         success: true,
         booking,
       });
     } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
       console.error("[updateBooking] Error:", error);
       res.status(500).json({
         success: false,

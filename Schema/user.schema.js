@@ -123,8 +123,16 @@ const TherapistProfileSchema = new mongoose.Schema({
   // Therapist holidays: Array of objects { date: Date, reason: String }
   holidays: [
     {
-      date:    { type: Date, required: true },
-      reason:  { type: String, default: "" },
+      date: { type: Date, required: true },
+      reason: { type: String, default: "" },
+      // Optional: restrict to certain slots or mark full-day
+      slots: [
+        {
+          slotId:  { type: String }, // E.g. "0830-0915"
+          label:   { type: String }, // E.g. "08:30 to 09:15"
+        }
+      ],
+      isFullDay: { type: Boolean, default: true } // true if the whole day is holiday, false if only slots[]
     }
   ],
   
