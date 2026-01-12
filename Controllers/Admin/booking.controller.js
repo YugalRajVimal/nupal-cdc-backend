@@ -446,7 +446,7 @@ class BookingAdminController {
       // If this booking is for a booking request, update its status to approved
       if (isBookingRequest && bookingRequestId) {
         // Import BookingRequests model here (to avoid circular require)
-        console.log(bookingRequestId);
+        console.log("449",bookingRequestId);
 
         // Dynamically import the BookingRequests model (to avoid circular dependencies)
         const bookingRequestDoc = await BookingRequests.findById(bookingRequestId).session(session);
@@ -455,6 +455,8 @@ class BookingAdminController {
           // Optionally: Link the created booking to the bookingRequest (many UIs expect this)
           bookingRequestDoc.appointmentId = booking._id;
           await bookingRequestDoc.save({ session });
+        console.log("458",bookingRequestDoc);
+
           console.log(`[CREATE BOOKING CHECK] BookingRequest ${bookingRequestId} updated to approved and linked to booking ${booking._id}`);
         } else {
           console.warn(`[CREATE BOOKING CHECK] bookingRequestId ${bookingRequestId} not found for approval update.`);
@@ -513,6 +515,10 @@ class BookingAdminController {
         .populate({
           path: "therapy",
           model: "TherapyType"
+        })
+        .populate({
+          path: "payment",
+          model: "Payment"
         })
         .populate({
           path: "therapist",
@@ -1092,6 +1098,83 @@ class BookingAdminController {
       });
     }
   }
+
+/**
+ * Mark payment collection details for a booking.
+ * Expects: { payment } in req.body
+ * Params: booking id in req.params.id
+ */
+async collectPayment(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Booking ID required."
+      });
+    }
+
+
+    console.log(id);
+
+
+
+    // Find and update the booking's payment info and mark as paid
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found."
+      });
+    }
+
+    // Fetch the payment document and mark status as "paid"
+    const paymentId = booking.payment;
+    if (!paymentId) {
+      return res.status(400).json({
+        success: false,
+        message: "This booking has no associated payment record."
+      });
+    }
+
+    // Import Payment if not already imported at the top of this file!
+
+    // Fetch the payment by paymentId field (may be ObjectId or string)
+    const payment = await Payment.findOne({ _id: paymentId });
+
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: "Associated payment not found."
+      });
+    }
+
+    // Mark payment as paid and set paymentTime
+    payment.status = "paid";
+    payment.paymentTime = new Date();
+    await payment.save();
+
+    // Optionally update booking status as well (and link the payment)
+    booking.paymentStatus = "paid";
+    await booking.save();
+
+    res.json({
+      success: true,
+      message: "Payment recorded successfully.",
+      booking,
+      payment
+    });
+
+  } catch (error) {
+    console.error("[collectPayment] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to record payment.",
+      error: error.message
+    });
+  }
+}
 }
 
 export default BookingAdminController;

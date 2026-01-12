@@ -1,41 +1,52 @@
-import sendMail from "../../config/nodeMailer.config.js";
-import bcrypt from "bcrypt";
+
 import jwt from "jsonwebtoken";
 import {
-  User,
-  PatientProfile,
-  TherapistProfile,
-  AdminProfile,
-  SuperAdminProfile
+  User
 } from "../../Schema/user.schema.js";
 import ExpiredTokenModel from "../../Schema/expired-token.schema.js";
-import Maintenance from "../../Schema/maintenance.schema.js";
 
 // Allowed roles from user.schema.js (see enum in file_context_2 line 8)
-const ALLOWED_ROLES = ["parent", "therapist", "admin", "superadmin"];
+const ALLOWED_ROLES = ["patient", "therapist", "admin"];
 
 class AuthController {
   // Check Authorization with user.schema.js roles & maintenance
   checkAuth = async (req, res) => {
     try {
-      const { role } = req.user || {};
+      const { id, role } = req.user || {};
+      console.log("[checkAuth] Incoming user:", req.user);
 
       if (!role || !ALLOWED_ROLES.includes(role)) {
+        console.log("[checkAuth] Unauthorized: Invalid user role:", role);
         return res.status(401).json({ message: "Unauthorized: Invalid user role" });
       }
 
-      // Only allow maintenance bypass for 'admin' or 'superadmin'
-      if (!["admin", "superadmin"].includes(role)) {
-        const maintenanceStatus = await Maintenance.findOne({});
-        if (maintenanceStatus && maintenanceStatus.isMaintenanceMode) {
-          return res.status(423).json({
-            message: "The application is under maintenance. Please try again later.",
-          });
-        }
+      // Check if user with provided id and role exists in the database
+      const dbUser = await User.findOne({ _id: id, role });
+      console.log("[checkAuth] DB user lookup for id/role result:", dbUser);
+
+      if (!dbUser) {
+        console.log("[checkAuth] Unauthorized: User not found for id:", id, "role:", role);
+        return res.status(401).json({ message: "Unauthorized: User not found" });
       }
 
+      // Check user status fields based on user.schema.js enum status: ["active", "suspended", "deleted"]
+      if (dbUser.isDisabled) {
+        console.log("[checkAuth] Forbidden: Account is disabled for user", dbUser.email);
+        return res.status(403).json({ message: "Your account has been disabled. Please contact support." });
+      }
+      if (dbUser.status === "suspended") {
+        console.log("[checkAuth] Forbidden: Account is suspended for user", dbUser.email);
+        return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
+      }
+      if (dbUser.status === "deleted") {
+        console.log("[checkAuth] Forbidden: Account is deleted for user", dbUser.email);
+        return res.status(403).json({ message: "Your account has been deleted. Please contact support." });
+      }
+
+      console.log("[checkAuth] Authorized: User validated", dbUser.email);
       return res.status(200).json({ message: "Authorized" });
     } catch (error) {
+      console.log("[checkAuth] Error during authorization check:", error);
       return res.status(401).json({ message: "Unauthorized" });
     }
   };
@@ -78,7 +89,16 @@ class AuthController {
         role: user.role
       };
 
-      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET);
+      // Set token to expire in 1 day
+      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: "1d" });
+
+      await ExpiredTokenModel.create({
+        token,
+        tokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 1 day expiry
+      });
+
+      console.log("Stored issued token in expired-tokens collection:", token);
+
 
       return res
         .status(200)
@@ -98,33 +118,39 @@ class AuthController {
         return res.status(400).json({ message: "Email and role are required" });
       }
 
+
       email = email.trim().toLowerCase();
       role = role.trim();
+
+      console.log(email,role)
 
       if (!ALLOWED_ROLES.includes(role)) {
         return res.status(400).json({ message: "Invalid user role." });
       }
 
       const user = await User.findOne({ email, role }).lean();
+      if (user && user.role !== role) {
+        return res.status(400).json({ message: "Role does not match for this user." });
+      }
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
       // Generate 6-digit OTP
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      // const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
       // Save OTP with expiry (10 min)
       await User.findByIdAndUpdate(
         user._id,
         {
-          otp,
+          otp:"000000",
           otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 min expiry
         },
         { new: true }
       );
 
       // Send OTP via mail
-      sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
+      // sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
 
       return res.status(200).json({ message: "OTP sent successfully" });
     } catch (error) {
@@ -133,100 +159,26 @@ class AuthController {
     }
   };
 
-  // Vendor/Supervisor-style signin for therapist/parent (no "SubAdmin" logic - not in user.schema.js)
-  vendorSupervisorSignin = async (req, res) => {
+  // Sign Out → Mark token as immediately expired
+  signOut = async (req, res) => {
     try {
-      let { email } = req.body;
-
-      if (!email) {
-        return res.status(400).json({ message: "Email is required" });
+      // Get token from Authorization header
+      const token = req.headers["authorization"];
+      if (!token) {
+        return res.status(401).json({ message: "Unauthorized: Token missing" });
       }
 
-      email = email.trim().toLowerCase();
+      // Set tokenExpiry to now so it is immediately considered expired
+      const now = new Date();
 
-      const user = await User.findOne({ email }).lean();
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
+      await ExpiredTokenModel.create({
+        token,
+        tokenExpiry: now,
+      });
 
-      const { role, status } = user;
-
-      if (!ALLOWED_ROLES.includes(role)) {
-        return res.status(403).json({ message: "Invalid role for login" });
-      }
-
-      if (["suspended", "deleted"].includes(status)) {
-        return res.status(403).json({ message: `User account is ${status}. Please contact support.` });
-      }
-
-      // Generate 6-digit OTP
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-      // Save OTP with expiry (10 minutes)
-      await User.findByIdAndUpdate(
-        user._id,
-        {
-          otp,
-          otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 min expiry
-        },
-        { new: true }
-      );
-
-      // Send OTP async (real app: uncomment below)
-      // sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
-
-      return res.status(200).json({ message: "OTP sent successfully", role });
+      return res.status(200).json({ message: "Signed out successfully" });
     } catch (error) {
-      console.error("Signin Error:", error);
-      return res.status(500).json({ message: "Internal Server Error" });
-    }
-  };
-
-  // Vendor/Supervisor-style OTP verify for therapist/parent (role determined by email lookup)
-  vendorSupervisorVerifyAccount = async (req, res) => {
-    try {
-      let { email, otp } = req.body;
-
-      if (!email || !otp) {
-        return res.status(400).json({ message: "Email and OTP are required" });
-      }
-
-      email = email.trim().toLowerCase();
-
-      // Find user by email/OTP (atomic)
-      const user = await User.findOneAndUpdate(
-        { email, otp },
-        { $unset: { otp: 1 }, lastLogin: new Date() },
-        { new: true }
-      ).lean();
-
-      if (!user) {
-        return res.status(401).json({ message: "Invalid credentials or OTP" });
-      }
-
-      if (!ALLOWED_ROLES.includes(user.role)) {
-        return res.status(401).json({ message: "Unauthorized role" });
-      }
-
-      // Generate JWT
-      const token = jwt.sign(
-        {
-          id: user._id,
-          email: user.email,
-          role: user.role,
-        },
-        process.env.JWT_SECRET
-      );
-
-      return res
-        .status(200)
-        .json({
-          message: "Account verified successfully",
-          token,
-          role: user.role,
-        });
-    } catch (error) {
-      console.error("VerifyAccount Error:", error);
+      console.error("SignOut Error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
   };

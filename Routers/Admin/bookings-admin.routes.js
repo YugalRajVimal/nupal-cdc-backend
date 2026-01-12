@@ -64,6 +64,15 @@ bookingsAdminRouter.post("/booking-requests/:id/reject", (req, res) =>
   bookingAdminController.rejectBookingRequest(req, res)
 );
 
+/**
+ * @route POST /api/admin/bookings/:id/collect-payment
+ * @desc Record payment for a booking by id
+ */
+bookingsAdminRouter.post("/:id/collect-payment", (req, res) =>
+  bookingAdminController.collectPayment(req, res)
+);
+
+
 
 
 

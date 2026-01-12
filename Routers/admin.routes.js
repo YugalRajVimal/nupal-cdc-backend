@@ -10,6 +10,7 @@ import packagesAdminRouter from "./SuperAdmin/packages-super-admin.routes.js";
 import bookingsAdminRouter from "./Admin/bookings-admin.routes.js";
 import availabilitySlotsRouter from "./Admin/availability-slots.routes.js";
 import discountCouponRouter from "./SuperAdmin/discount-coupons.super-admin.routes.js";
+import financeAdminRouter from "./Admin/finance.routes.js";
 
 
 
@@ -51,6 +52,11 @@ adminRouter.use("/availability-slots", availabilitySlotsRouter);
 
 
 adminRouter.use("/discount-coupons", discountCouponRouter);
+
+
+
+adminRouter.use("/finance", financeAdminRouter);
+
 
 
 

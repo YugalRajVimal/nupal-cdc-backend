@@ -6,6 +6,12 @@ const expiredTokenSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    tokenExpiry: {
+      type: Date,
+      required: false,
+      default: null,
+      description: "Optional expiry date/time for the token"
+    },
   },
   { timestamps: true }
 );

@@ -41,6 +41,7 @@ const UserSchema = new mongoose.Schema(
       enum: ["active", "suspended", "deleted"],
       default: "active",
     },
+    isDisabled: { type: Boolean, default: false },
 
 
   },

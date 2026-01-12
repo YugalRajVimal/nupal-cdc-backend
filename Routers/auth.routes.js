@@ -7,16 +7,14 @@ const authRouter = express.Router();
 
 const authController = new AuthController();
 
-authRouter.post("/", jwtAuth, (req, res) => {
-  authController.checkAuth(req, res);
-});
+authRouter.post("/", jwtAuth, authController.checkAuth);
 
-authRouter.post("/signin", (req, res) => {
-  authController.signin(req, res);
-});
+authRouter.post("/signin", authController.signin);
 
-authRouter.post("/verify-account", (req, res) => {
-  authController.verifyAccount(req, res);
-});
+authRouter.post("/verify-account", authController.verifyAccount);
+
+authRouter.post("/signout", jwtAuth, authController.signOut);
+
+
 
 export default authRouter;
