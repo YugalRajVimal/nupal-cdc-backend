@@ -13,40 +13,36 @@ class AuthController {
   checkAuth = async (req, res) => {
     try {
       const { id, role } = req.user || {};
-      console.log("[checkAuth] Incoming user:", req.user);
+      console.log("[checkAuth] User id from req.user:", id);
+      console.log("[checkAuth] User role from req.user:", role);
 
       if (!role || !ALLOWED_ROLES.includes(role)) {
-        console.log("[checkAuth] Unauthorized: Invalid user role:", role);
+        console.log("[checkAuth] Invalid user role or role missing:", role);
         return res.status(401).json({ message: "Unauthorized: Invalid user role" });
       }
 
       // Check if user with provided id and role exists in the database
       const dbUser = await User.findOne({ _id: id, role });
-      console.log("[checkAuth] DB user lookup for id/role result:", dbUser);
+      console.log("[checkAuth] Looked up user from DB:", dbUser ? dbUser._id : "NOT FOUND");
 
       if (!dbUser) {
-        console.log("[checkAuth] Unauthorized: User not found for id:", id, "role:", role);
+        console.log("[checkAuth] No user found in DB for id and role.");
         return res.status(401).json({ message: "Unauthorized: User not found" });
       }
 
-      // Check user status fields based on user.schema.js enum status: ["active", "suspended", "deleted"]
-      if (dbUser.isDisabled) {
-        console.log("[checkAuth] Forbidden: Account is disabled for user", dbUser.email);
-        return res.status(403).json({ message: "Your account has been disabled. Please contact support." });
-      }
       if (dbUser.status === "suspended") {
-        console.log("[checkAuth] Forbidden: Account is suspended for user", dbUser.email);
+        console.log("[checkAuth] User status is suspended.");
         return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
       }
       if (dbUser.status === "deleted") {
-        console.log("[checkAuth] Forbidden: Account is deleted for user", dbUser.email);
+        console.log("[checkAuth] User status is deleted.");
         return res.status(403).json({ message: "Your account has been deleted. Please contact support." });
       }
 
-      console.log("[checkAuth] Authorized: User validated", dbUser.email);
+      console.log("[checkAuth] User is authorized.");
       return res.status(200).json({ message: "Authorized" });
     } catch (error) {
-      console.log("[checkAuth] Error during authorization check:", error);
+      console.error("[checkAuth] Error encountered:", error);
       return res.status(401).json({ message: "Unauthorized" });
     }
   };

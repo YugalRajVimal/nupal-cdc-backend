@@ -72,8 +72,42 @@ bookingsAdminRouter.post("/:id/collect-payment", (req, res) =>
   bookingAdminController.collectPayment(req, res)
 );
 
+/**
+ * @route POST /api/admin/bookings/check-in
+ * @desc Check-in a patient for a booking
+ */
+bookingsAdminRouter.post("/check-in", (req, res) =>
+  bookingAdminController.checkIn(req, res)
+);
+
+/**
+ * @route GET /api/admin/bookings/reception-desk
+ * @desc Get today's bookings and pending payment bookings (Reception Desk details)
+ */
+bookingsAdminRouter.get("/reception-desk", (req, res) =>
+  bookingAdminController.getReceptionDeskDetails(req, res)
+);
+
+/**
+ * @route GET /api/admin/bookings/overview
+ * @desc Get admin bookings overview (dashboard summary)
+ */
+bookingsAdminRouter.get("/overview", (req, res) =>
+  bookingAdminController.getOverview(req, res)
+);
 
 
+
+
+
+
+/**
+ * @route GET /api/admin/session-edit-requests
+ * @desc Get all session edit requests (admin)
+ */
+bookingsAdminRouter.get("/session-edit-requests", (req, res) =>
+  bookingAdminController.getAllSessionEditRequests(req, res)
+);
 
 
 

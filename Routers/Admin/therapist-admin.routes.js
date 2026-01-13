@@ -5,6 +5,16 @@ import { upload } from "../../middlewares/fileUpload.middleware.js";
 const therapistAdminRouter = express.Router();
 const therapistAdminController = new TherapistAdminController();
 
+// Set panel accessibility (set TherapistProfile.isPanelAccessible)
+therapistAdminRouter.patch(
+  "/:id/panel-access",
+  // jwtAuth, 
+  // authorize("admin.write"),
+  (req, res) => {
+    therapistAdminController.setPanelAccessible(req, res);
+  }
+);
+
 // Add a new therapist
 therapistAdminRouter.post(
   "/",
@@ -22,6 +32,7 @@ therapistAdminRouter.post(
   }
 );
 
+
 // Fetch all therapists
 therapistAdminRouter.get(
   "/",
@@ -32,6 +43,7 @@ therapistAdminRouter.get(
     therapistAdminController.fetchTherapists(req, res);
   }
 );
+
 
 // Fetch therapist by ID
 therapistAdminRouter.get(
@@ -62,5 +74,31 @@ therapistAdminRouter.delete(
     therapistAdminController.deleteTherapist(req, res);
   }
 );
+
+
+
+
+// Disable therapist (set User.isDisabled = true)
+therapistAdminRouter.patch(
+  "/:id/disable",
+  // jwtAuth, 
+  // authorize("admin.write"),
+  (req, res) => {
+    therapistAdminController.disableTherapist(req, res);
+  }
+);
+
+// Enable therapist (set User.isDisabled = false)
+therapistAdminRouter.patch(
+  "/:id/enable",
+  // jwtAuth, 
+  // authorize("admin.write"),
+  (req, res) => {
+    therapistAdminController.enableTherapist(req, res);
+  }
+);
+
+
+
 
 export default therapistAdminRouter;

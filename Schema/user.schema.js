@@ -42,6 +42,7 @@ const UserSchema = new mongoose.Schema(
       default: "active",
     },
     isDisabled: { type: Boolean, default: false },
+    
 
 
   },

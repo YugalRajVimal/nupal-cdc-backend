@@ -3,8 +3,9 @@ import Booking from '../../Schema/booking.schema.js';
 import counterSchema from '../../Schema/counter.schema.js';
 import DiscountModel from '../../Schema/discount.schema.js';
 import Package from '../../Schema/packages.schema.js';
+import SessionEditRequest from '../../Schema/session-edit-request.schema.js';
 import { TherapyType } from '../../Schema/therapy-type.schema.js';
-import { PatientProfile, User } from '../../Schema/user.schema.js';
+import { PatientProfile, TherapistProfile, User } from '../../Schema/user.schema.js';
 
 
 
@@ -12,59 +13,133 @@ import { PatientProfile, User } from '../../Schema/user.schema.js';
 class ParentController {
 
   async getDashboardDetails(req, res) {
-
     try {
-      // Placeholder parentId for local/dev, replace with extraction from req.user or token in prod
-      const parentId = "695c204620ee4e5e88e2ef3b";
+      // 1. Extract parentId from token/user
+      const parentId = req.user.id;
       if (!parentId) {
         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
       }
 
-      // Fetch user from User schema using id
+      // 2. Fetch user
       const user = await User.findById(parentId).lean();
       if (!user) {
         return res.status(404).json({ success: false, message: "Parent user not found." });
       }
 
-      // Fetch all PatientProfiles with userId of that user
+      // 3. Fetch children (PatientProfiles)
       const children = await PatientProfile.find({ userId: user._id }).lean();
-      console.log(children)
-
-      // Prepare childIds (these are _id of PatientProfile)
       const childIds = children.map(child => child._id);
 
-      // Find all bookings (appointments) where patient is one of these children
-      const appointments = await Booking.find({ patient: { $in: childIds } }).lean();
+      // 4. Find all bookings where patient is one of these children
+      const appointments = await Booking.find({ patient: { $in: childIds } })
+        .populate({
+          path: "patient",
+          model: "PatientProfile",
+          select: "patientId",
+          populate: {
+            path: "userId",
+            model: "User",
+            select: "name",
+          }
+        })
+        .populate({
+          path: "sessions.therapist",
+          model: "TherapistProfile",
+          select: "therapistId",
+          populate: {
+            path: "userId",
+            model: "User",
+            select: "name"
+          }
+        })
+        .lean();
 
-      // Total appointments
+      // 5. Count total appointments
       const totalAppointments = appointments.length;
 
-      // Flatten all sessions from all bookings to count upcoming ones
-      let upcomingAppointments = 0;
-      const now = new Date();
-
+      // 6. Count all sessions which are not checked-in and store details
+      const uncheckedSessions = [];
       appointments.forEach(booking => {
         if (Array.isArray(booking.sessions)) {
           for (const session of booking.sessions) {
-            if (session.date) {
-              const sessionDate = new Date(session.date);
-              if (sessionDate > now) {
-                upcomingAppointments++;
-              }
+            // A session is "not checked in" if session.checkedIn is falsy (undefined, null, false)
+            if (!session.isCheckedIn) {
+              uncheckedSessions.push({
+                patientId: booking.patient.patientId,
+                name: booking.patient.userId.name, // adjust based on actual patient name field
+                notCheckedInSession: session
+              });
             }
           }
         }
       });
 
-      // Compose dashboard data (with place-holder payments for now)
+      // Now the uncheckedSessions array holds objects: { patientId, name, notCheckedInSession }
+
+      // 7. Fetch payments for these bookings (populate payment field)
+      // Use lean(false) so that payment is populated as Mongoose docs
+      const populatedBookings = await Booking.find({ patient: { $in: childIds } })
+        .populate({
+          path: "patient",
+          model: "PatientProfile",
+          populate: {
+            path: "userId",
+            model: "User",
+          },
+        })
+        .populate({
+          path: "payment",
+          model: "Payment"
+        })
+        .lean({ virtuals: true });
+
+      // 8. Process and collect pending payment details
+      const pendingPayments = [];
+      // Each booking may have .payment as a single object or array (support both)
+      for (const booking of populatedBookings) {
+        let payments = [];
+        if (Array.isArray(booking.payment)) {
+          payments = booking.payment;
+        } else if (booking.payment) {
+          payments = [booking.payment];
+        }
+        for (const pay of payments) {
+          if (!pay) continue;
+          const status = pay.status || "Unknown";
+          if (status.toLowerCase() === "pending") {
+            // Fetch patientName and patientId as in getInvoiceAndPayment
+            let patientName = "";
+            if (
+              booking.patient &&
+              booking.patient.userId &&
+              booking.patient.userId.name
+            ) {
+              patientName = booking.patient.name;
+            } else if (booking.patient && booking.patient.name) {
+              patientName = booking.patient.name;
+            }
+            const patientId = booking.patient?.patientId;
+            if (!patientName && user && user.name) patientName = user.name;
+            pendingPayments.push({
+              InvoiceId: pay.paymentId ? pay.paymentId.toString() : "",
+              date: pay.createdAt || pay.date || booking.createdAt,
+              patientName: patientName,
+              patientId,
+              amount: pay.amount || booking.totalAmount || 0,
+              status: status
+            });
+          }
+        }
+      }
+
+      
+
+      // 9. Compose dashboard data (add pendingPayments as requested)
       const dashboardData = {
         childrenCount: children.length,
-        children: children, // Might want to pick only minimal fields for dashboard
         totalAppointments,
-        upcomingAppointments,
-        totalPaid: 3,
-        totalUnpaid: 2,
-        totalPayments: 5,
+        pendingPayments, // <-- list of pending payments
+        uncheckedSessions
       };
 
       res.json({ success: true, data: dashboardData });
@@ -80,7 +155,7 @@ class ParentController {
   // Returns a list of all children assigned to the parent
   async getAllChildrens(req, res) {
     try {
-      const parentId = "695c204620ee4e5e88e2ef3b";
+      const parentId = req.user.id;
       if (!parentId) {
         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
       }
@@ -106,7 +181,7 @@ class ParentController {
   async getAllAppointments(req, res) {
     try {
       // Use a hardcoded parent ID for demonstration. Replace with req.user?._id in production.
-      const parentId = "695c204620ee4e5e88e2ef3b";
+      const parentId = req.user.id;
       if (!parentId) {
         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
       }
@@ -124,36 +199,134 @@ class ParentController {
       }
       const childIds = children.map(child => child._id);
 
-      // 3. Fetch all bookings where userId is any of the children
-      // NOTE: In your Booking schema, 'userId' refers to patient/child's _id.
-      // Optionally, populate child information and therapist/therapyType if needed
-      // Corrected: should query 'userId' (the patient _id), not 'id'
+      // 3. Fetch all bookings where patient is any of the children
+      // Populate package, patient, therapist, and therapy everywhere (including in sessions)
       const appointments = await Booking.find({ patient: { $in: childIds } })
-        .populate({ path: 'package'})
+        .populate({ path: 'package' })
         .populate({ path: 'patient', model: 'PatientProfile' })
+        .populate({ 
+          path: 'therapist', 
+          model: 'TherapistProfile',
+          select:"therapistId",
+          populate: { 
+            path: 'userId', 
+            model: 'User', 
+            select: 'name' // Only fetch the name field in the User document 
+          }
+        })
+        .populate({ path: 'therapy', model: 'TherapyType' })
+        .populate({ path: 'payment' })
         .lean();
 
-        console.log(appointments);
+
+
+
+      // Gather all therapist ids and therapy ids used in all sessions
+      const therapistIds = [];
+      const therapyIds = [];
+      appointments.forEach((appointment, i) => {
+        if (Array.isArray(appointment.sessions)) {
+          appointment.sessions.forEach((session, j) => {
+            if (session.therapist) therapistIds.push(session.therapist);
+            if (session.therapy) therapyIds.push(session.therapy);
+            // Check session structure
+
+          });
+        }
+      });
+
+
+      // Unique ids
+      const uniqueTherapistIds = [...new Set(therapistIds.map(id => id?.toString()).filter(Boolean))];
+      const uniqueTherapyIds = [...new Set(therapyIds.map(id => id?.toString()).filter(Boolean))];
+
+
+
+      // Fetch all therapist User docs and TherapyType docs
+      const therapists = await TherapistProfile.find({ _id: { $in: uniqueTherapistIds } })
+        .populate({ 
+          path: 'userId', 
+          model: 'User', 
+          select: 'name' // Only fetch the name field in the User document 
+        })
+        .select('userId name therapistId') // Only fetch userId and name in TherapistProfile
+        .lean();
+
+
+      // Build lookup maps
+      const therapistMap = {};
+      therapists.forEach(t => { therapistMap[String(t._id)] = t; });
+
+
+
+
+
+      // Attach the populated therapist & therapy for each session
+      for (const [i, appointment] of appointments.entries()) {
+        if (Array.isArray(appointment.sessions)) {
+          appointment.sessions = appointment.sessions.map((session, j) => {
+            const sessionCopy = { ...session };
+            if (session.therapist && therapistMap[session.therapist?.toString()]) {
+              sessionCopy.therapist = therapistMap[session.therapist?.toString()];
+            }
+          
+            return sessionCopy;
+          });
+        }
+      }
+
+      // INSERT_YOUR_CODE
+
+      // Fetch all session edit requests for these appointments and map them by appointmentId and sessionId
+
+      const appointmentIds = appointments.map(a => a._id);
+      // Only fetch edit requests for these appointments
+      const sessionEditRequests = await SessionEditRequest.find({ appointmentId: { $in: appointmentIds } }).lean();
+
+      // Map edit requests by appointmentId (array), for direct access
+      const editRequestsByAppointment = {};
+      sessionEditRequests.forEach(er => {
+        const apptId = er.appointmentId?.toString?.() || er.appointmentId;
+        if (!editRequestsByAppointment[apptId]) editRequestsByAppointment[apptId] = [];
+        editRequestsByAppointment[apptId].push(er);
+      });
+
+      // Attach all session edit requests for this appointment to appointment object (flat array)
+      for (const appointment of appointments) {
+        const apptId = appointment._id?.toString?.() || appointment._id;
+        appointment.editRequests = editRequestsByAppointment[apptId] || [];
+      }
+
+      console.log(appointments);
+
+
+
 
       res.json({ success: true, data: appointments });
     } catch (err) {
+      console.error("[getAllAppointments] error:", err);
       res.status(500).json({ success: false, error: err.message || String(err) });
     }
   }
 
-  // Returns profile details for the parent user
+  // Returns profile details for the parent user, and also returns all children assigned to the parent
   async getProfileDetails(req, res) {
     try {
-      const parentId = "695c204620ee4e5e88e2ef3b";
+      const parentId = req.user.id;
       if (!parentId) {
         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
       }
-      // Replace with your actual Parent/User schema/model
+
+      // Get the parent user profile
       const parent = await User.findById(parentId).lean();
       if (!parent) {
         return res.status(404).json({ success: false, message: "Parent profile not found." });
       }
-      res.json({ success: true, data: parent });
+
+      // Get all children/patient profiles for this parent
+      const childrens = await PatientProfile.find({ userId: parentId }).lean();
+
+      res.json({ success: true, data: { parent, childrens } });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message || String(err) });
     }
@@ -161,7 +334,7 @@ class ParentController {
 
   async getRequestAppointmentHomePage(req, res) {
     try {
-      const parentId = "695c204620ee4e5e88e2ef3b";
+      const parentId = req.user.id;
 
       // Fetch patients for dropdown
       // Only fetch patient profiles belonging to this parent
@@ -368,14 +541,19 @@ class ParentController {
   // Fetch all booking requests for the logged-in parent (optionally can filter as needed)
   async getAllBookingRequests(req, res) {
     try {
-      const parentUserId = req.user?._id || req.user?.id;
+      const parentUserId =  req.user?.id;
 
       // Support filter: only my requests
       const filter = {};
       if (parentUserId) {
         // Find all PatientProfiles for this parent
-        const PatientProfile = (await import('../../Schema/patient-profile.schema.js')).default;
-        const myPatients = await PatientProfile.find({ parent: parentUserId }, '_id').lean();
+
+        // Fetch the user first, then fetch all Patient Profiles for that user
+        const user = await User.findById(parentUserId).lean();
+        if (!user) {
+          return res.status(404).json({ success: false, message: "User not found" });
+        }
+        const myPatients = await PatientProfile.find({ userId: user._id }, '_id').lean();
         const myPatientIds = myPatients.map(p => p._id);
 
         if (myPatientIds.length > 0) {
@@ -549,6 +727,155 @@ class ParentController {
   }
 
 
+  // --- Session Edit Request CRUD ---
+
+  // Import Counter at top (assuming it is available/registered elsewhere in your module)
+
+  // Helper function to generate session-edit-requestId
+  async generateSessionEditRequestId() {
+    // The counter for "session-edit-request" will just use a sequential format like "SER00001"
+    const counterDoc = await counterSchema.findOneAndUpdate(
+      { name: "session-edit-request" },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true }
+    );
+    const seqNum = counterDoc.seq;
+    // Format for example: "SER00001"
+    return `SER${seqNum.toString().padStart(5, "0")}`;
+  }
+
+  // Create a new session edit request (supports bulk sessions for one appointmentId)
+  async createSessionEditRequest(req, res) {
+    try {
+      const { appointmentId, patientId, sessions } = req.body;
+
+      if (
+        !appointmentId ||
+        !patientId ||
+        !Array.isArray(sessions) ||
+        sessions.length === 0 ||
+        !sessions.every(
+          s =>
+            s.sessionId &&
+            s.newDate &&
+            s.newSlotId
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Missing required fields. appointmentId, patientId, and sessions (with sessionId, newDate, newSlotId) are required.",
+        });
+      }
+
+      // INSERT_YOUR_CODE
+
+      // Check if a pending request for this appointment already exists
+      const existingPendingRequest = await SessionEditRequest.findOne({
+        appointmentId: appointmentId,
+        status: "pending"
+      });
+
+      if (existingPendingRequest) {
+        return res.status(400).json({
+          success: false,
+          message: "A pending session edit request for this appointment already exists.",
+          request: existingPendingRequest
+        });
+      }
+
+
+      // Generate custom session-edit-request Id
+      const requestId = await this.generateSessionEditRequestId();
+
+      const request = await SessionEditRequest.create({
+        // Do not set _id manually, let Mongo generate
+        appointmentId,
+        patientId,
+        sessions,
+        status: "pending",
+        requestId, // Optional: can store for external reference
+      });
+
+      res.status(201).json({ success: true, request });
+    } catch (error) {
+      console.error("[CREATE SESSION EDIT REQUEST]", error);
+      res.status(500).json({ success: false, message: "Failed to create session edit request", error: error.message });
+    }
+  }
+
+  // Fetch all session edit requests (queryable by appointmentId, status)
+  async getSessionEditRequests(req, res) {
+    try {
+      const { appointmentId, status } = req.query;
+      const query = {};
+      if (appointmentId) query.appointmentId = appointmentId;
+      if (status) query.status = status;
+
+      const requests = await SessionEditRequest.find(query)
+        .populate("appointmentId");
+
+      res.json({ success: true, requests });
+    } catch (error) {
+      console.error("[FETCH SESSION EDIT REQUESTS]", error);
+      res.status(500).json({ success: false, message: "Failed to fetch session edit requests", error: error.message });
+    }
+  }
+
+  // Edit/update a session edit request (only updatable: sessions array, status)
+  async updateSessionEditRequest(req, res) {
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ success: false, message: "Request ID required" });
+      }
+
+      // Only allow updating sessions and/or status
+      const updates = {};
+      if (req.body.sessions && Array.isArray(req.body.sessions)) {
+        updates.sessions = req.body.sessions;
+      }
+      if (req.body.status !== undefined) {
+        updates.status = req.body.status;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ success: false, message: "No valid fields provided for update" });
+      }
+
+      const updated = await SessionEditRequest.findByIdAndUpdate(id, updates, { new: true });
+      if (!updated) {
+        return res.status(404).json({ success: false, message: "Session edit request not found" });
+      }
+
+      res.json({ success: true, request: updated });
+    } catch (error) {
+      console.error("[UPDATE SESSION EDIT REQUEST]", error);
+      res.status(500).json({ success: false, message: "Failed to update session edit request", error: error.message });
+    }
+  }
+
+  // Delete a session edit request
+  async deleteSessionEditRequest(req, res) {
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ success: false, message: "Request ID required" });
+      }
+
+      const deleted = await SessionEditRequest.findByIdAndDelete(id);
+      if (!deleted) {
+        return res.status(404).json({ success: false, message: "Session edit request not found" });
+      }
+
+      res.json({ success: true, message: "Session edit request deleted successfully" });
+    } catch (error) {
+      console.error("[DELETE SESSION EDIT REQUEST]", error);
+      res.status(500).json({ success: false, message: "Failed to delete session edit request", error: error.message });
+    }
+  }
+
+
   async allBookings(req, res) {
     try {
       const bookings = await Booking.find()
@@ -591,6 +918,124 @@ class ParentController {
     }
   }
 
+  /**
+   * Get invoice and payment details for a given booking or appointment
+   * Expects bookingId or appointmentId in req.params or req.query
+   */
+  /**
+   * Fetch User, then Patient Profiles, then all their Bookings, and populate payments for each Booking.
+   */
+  async getInvoiceAndPayment(req, res) {
+    try {
+      const userId = req.user.id;
+
+      // 1. Fetch User (assuming you have a User model)
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found.",
+        });
+      }
+
+      // 2. Fetch all Patient Profiles linked to this user
+      const patientProfiles = await PatientProfile.find({ userId: userId });
+      if (!patientProfiles || patientProfiles.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "No patient profiles found for this user.",
+        });
+      }
+      const patientProfileIds = patientProfiles.map((p) => p._id);
+
+      // 3. Fetch all Bookings for these Patient Profiles and populate related fields + payments
+      const bookings = await Booking.find({ patient: { $in: patientProfileIds } })
+        .populate("package")
+        .populate({
+          path: "patient",
+          model: "PatientProfile",
+          populate: {
+            path: "userId",
+            model: "User",
+          },
+        })
+        .populate({
+          path: "therapy",
+          model: "TherapyType"
+        })
+        .populate({
+          path: "therapist",
+          model: "TherapistProfile",
+          populate: {
+            path: "userId",
+            model: "User"
+          }
+        })
+        .populate({
+          path: "discountInfo.coupon",
+          model: "Discount"
+        })
+        .populate({
+          path: "payment",
+          model: "Payment"
+        });
+
+      // Structure all populated payments: [{ InvoiceId, date, patientName, amount, status }]
+      const paymentDetails = [];
+      for (const booking of bookings) {
+        // May be a single payment, or potentially an array (if ref type is array), handle both
+        let payments = [];
+        if (Array.isArray(booking.payment)) {
+          payments = booking.payment;
+        } else if (booking.payment) {
+          payments = [booking.payment];
+        }
+        for (const pay of payments) {
+          if (!pay) continue;
+          let invoiceId = pay.paymentId ? pay.paymentId.toString() : "";
+          let date = pay.createdAt || pay.date || booking.createdAt;
+          // Try to resolve patient name from populated path
+          let patientName = "";
+          if (
+            booking.patient &&
+            booking.patient.userId &&
+            booking.patient.userId.name
+          ) {
+            patientName = booking.patient.name;
+          } else if (booking.patient && booking.patient.name) {
+            patientName = booking.patient.name;
+          }
+          let patientId = booking.patient.patientId;
+          // Fallback: user field
+          if (!patientName && user && user.name) patientName = user.name;
+
+          paymentDetails.push({
+            InvoiceId: invoiceId,
+            date: date,
+            patientName: patientName,
+            patientId,
+            amount:
+              pay.amount ||
+              // fallback to amount in booking if not in payment
+              booking.totalAmount || 0,
+            status: pay.status || "Unknown",
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        payments: paymentDetails,
+      });
+    } catch (error) {
+      console.error("[GET INVOICE AND PAYMENT]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch invoice and payment details.",
+        error: error.message,
+      });
+    }
+  }
   
 
 

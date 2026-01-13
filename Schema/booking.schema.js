@@ -10,6 +10,10 @@ const SessionSchema = new Schema({
     ref: 'TherapistProfile', 
     required: true 
   },
+isCheckedIn: { 
+  type: Boolean, 
+  default: false 
+}
 
   // add more fields as needed
 });
@@ -44,6 +48,7 @@ const BookingSchema = new Schema({
     ref: 'Therapy', 
     required: true 
   }
+
 ,
 payment: { 
   type: Schema.Types.ObjectId, 

@@ -206,7 +206,9 @@ class TherapistAdminController {
         blog, // optional
         remarks, // optional
         specializations,
-        experienceYears
+        experienceYears,
+        isPanelAccessible: false, 
+
         // email is NOT stored in TherapistProfile
       });
       console.log("TherapistProfile document created:", therapistProfile);
@@ -220,7 +222,7 @@ class TherapistAdminController {
 
   // Fetch all therapists
   fetchTherapists = async (req, res) => {
-    console.log("--");
+
 
     try {
       // Populate userId so email appears in .userId.email
@@ -228,8 +230,7 @@ class TherapistAdminController {
         path: "userId"
       });
 
-      console.log(therapists);
-      console.log("--");
+
 
       res.json({ therapists });
     } catch (e) {
@@ -334,6 +335,93 @@ class TherapistAdminController {
       res.status(400).json({ error: "Failed to delete therapist", details: e.message });
     }
   };
+
+  /**
+   * Disable a therapist (set their User 'isDisabled' = true)
+   * PATCH /api/admin/therapists/:id/disable
+   */
+  disableTherapist = async (req, res) => {
+    try {
+      const { id } = req.params; // TherapistProfile _id
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: "Invalid therapist profile ID" });
+      }
+      const therapist = await TherapistProfile.findById(id);
+      if (!therapist || !therapist.userId) {
+        return res.status(404).json({ error: "Therapist not found" });
+      }
+
+      await User.findByIdAndUpdate(therapist.userId, { isDisabled: true });
+      res.json({ success: true, message: "Therapist disabled successfully" });
+    } catch (e) {
+      res.status(400).json({ error: "Failed to disable therapist", details: e.message });
+    }
+  };
+
+  /**
+   * Enable a therapist (set their User 'isDisabled' = false)
+   * PATCH /api/admin/therapists/:id/enable
+   */
+  enableTherapist = async (req, res) => {
+    try {
+      const { id } = req.params; // TherapistProfile _id
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: "Invalid therapist profile ID" });
+      }
+      const therapist = await TherapistProfile.findById(id);
+      if (!therapist || !therapist.userId) {
+        return res.status(404).json({ error: "Therapist not found" });
+      }
+
+      await User.findByIdAndUpdate(therapist.userId, { isDisabled: false });
+      res.json({ success: true, message: "Therapist enabled successfully" });
+    } catch (e) {
+      res.status(400).json({ error: "Failed to enable therapist", details: e.message });
+    }
+  };
+
+  /**
+   * Set therapist panel accessibility (set TherapistProfile.isPanelAccessible)
+   * PATCH /api/admin/therapists/:id/panel-access
+   * body: { isPanelAccessible: true/false }
+   */
+  setPanelAccessible = async (req, res) => {
+    try {
+      const { id } = req.params; // TherapistProfile _id
+      const { isPanelAccessible } = req.body;
+
+      console.log("[setPanelAccessible] Params.id:", id);
+      console.log("[setPanelAccessible] Body.isPanelAccessible:", isPanelAccessible);
+
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        console.log("[setPanelAccessible] Invalid therapist profile ID");
+        return res.status(400).json({ error: "Invalid therapist profile ID" });
+      }
+      if (typeof isPanelAccessible !== "boolean") {
+        console.log("[setPanelAccessible] isPanelAccessible is NOT boolean:", typeof isPanelAccessible);
+        return res.status(400).json({ error: "isPanelAccessible must be boolean" });
+      }
+
+      const therapist = await TherapistProfile.findByIdAndUpdate(
+        id,
+        { isPanelAccessible },
+        { new: true }
+      );
+      console.log("[setPanelAccessible] Therapist after update:", therapist);
+
+      if (!therapist) {
+        console.log("[setPanelAccessible] Therapist not found for id:", id);
+        return res.status(404).json({ error: "Therapist not found" });
+      }
+      res.json({ success: true, therapist });
+    } catch (e) {
+      console.log("[setPanelAccessible] Error:", e);
+      res.status(400).json({ error: "Failed to update panel accessibility", details: e.message });
+    }
+  };
+
+
+  
 }
 
 export default TherapistAdminController;

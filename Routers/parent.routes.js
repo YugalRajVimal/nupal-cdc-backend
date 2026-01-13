@@ -1,5 +1,6 @@
 import express from "express";
 import ParentController from "../Controllers/Parent/parent.controller.js";
+import jwtAuth from "../middlewares/Auth/auth.middleware.js";
 
 
 const parentRouter = express.Router();
@@ -9,18 +10,18 @@ const parentController = new ParentController();
 // INSERT_YOUR_CODE
 
 // Dashboard details for parent
-parentRouter.get('/dashboard', (req, res) => parentController.getDashboardDetails(req, res));
+parentRouter.get('/dashboard',jwtAuth, (req, res) => parentController.getDashboardDetails(req, res));
 
 // Get profile details for parent
-parentRouter.get('/profile', (req, res) => parentController.getProfileDetails(req, res));
+parentRouter.get('/profile',jwtAuth, (req, res) => parentController.getProfileDetails(req, res));
 
 // Get all children for the parent
-parentRouter.get('/childrens', (req, res) => parentController.getAllChildrens(req, res));
+parentRouter.get('/childrens',jwtAuth, (req, res) => parentController.getAllChildrens(req, res));
 
 // Get all appointments for the parent's children
-parentRouter.get('/appointments', (req, res) => parentController.getAllAppointments(req, res));
+parentRouter.get('/appointments',jwtAuth, (req, res) => parentController.getAllAppointments(req, res));
 
-parentRouter.get('/request-appointment-homepage', (req, res) => parentController.getRequestAppointmentHomePage(req, res));
+parentRouter.get('/request-appointment-homepage',jwtAuth, (req, res) => parentController.getRequestAppointmentHomePage(req, res));
 
 parentRouter.get('/all-bookings', (req, res) =>
   parentController.allBookings(req, res)
@@ -29,10 +30,26 @@ parentRouter.get('/all-bookings', (req, res) =>
 parentRouter.post('/create-booking-request', (req, res) => parentController.createBookingRequest(req, res));
 parentRouter.put('/booking-request/:id', (req, res) => parentController.updateBookingRequest(req, res));
 
-parentRouter.get('/booking-requests', (req, res) => parentController.getAllBookingRequests(req, res));
+parentRouter.get('/booking-requests',jwtAuth, (req, res) => parentController.getAllBookingRequests(req, res));
 parentRouter.delete('/booking-request/:id', (req, res) => parentController.deleteBookingRequest(req, res));
 
 parentRouter.get('/booking-requests/:id', (req, res) => parentController.getBookingRequestById(req, res));
+
+
+
+// INSERT_YOUR_CODE
+
+// Session Edit Request CRUD routes
+parentRouter.post('/session-edit-request-bulk', (req, res) => parentController.createSessionEditRequest(req, res));
+parentRouter.get('/session-edit-request', (req, res) => parentController.getSessionEditRequests(req, res));
+parentRouter.put('/session-edit-request/:id', (req, res) => parentController.updateSessionEditRequest(req, res));
+parentRouter.delete('/session-edit-request/:id', (req, res) => parentController.deleteSessionEditRequest(req, res));
+
+
+
+// INSERT_YOUR_CODE
+// Route to get invoice and payment details for parent's bookings/appointments
+parentRouter.get('/invoice-and-payment',jwtAuth, (req, res) => parentController.getInvoiceAndPayment(req, res));
 
 
 
