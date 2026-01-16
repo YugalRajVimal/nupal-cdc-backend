@@ -101,4 +101,31 @@ therapistAdminRouter.patch(
 
 
 
+// Pay therapist (add entry to earnings array)
+therapistAdminRouter.post(
+  "/:id/pay",
+  // jwtAuth, 
+  // authorize("admin.write"),
+  (req, res) => {
+    therapistAdminController.payTherapist(req, res);
+  }
+);
+
+
+
+// Set holidays for therapist (POST /:id/holidays)
+therapistAdminRouter.post(
+  "/:id/holidays",
+  // jwtAuth, 
+  // authorize("admin.write"),
+  (req, res) => {
+    therapistAdminController.setHolidays(req, res);
+  }
+);
+
+
+
+
+
+
 export default therapistAdminRouter;

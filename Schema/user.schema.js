@@ -116,6 +116,17 @@ const TherapistProfileSchema = new mongoose.Schema({
 
   remarks:         { type: String, default: "" },
 
+  earnings: [
+    {
+      amount: { type: Number, required: true },
+      type: { type: String, enum: ["salary", "contract"], required: true },
+      fromDate: { type: Date, required: true },
+      toDate: { type: Date, required: true },
+      remark: { type: String, default: "" },
+      paidOn: { type: Date }
+    }
+  ],
+
   // original fields from previous TherapistProfileSchema:
   specializations: { type: String, default: "" },
   experienceYears: Number,
@@ -125,7 +136,7 @@ const TherapistProfileSchema = new mongoose.Schema({
   // Therapist holidays: Array of objects { date: Date, reason: String }
   holidays: [
     {
-      date: { type: Date, required: true },
+      date: { type: String, required: true },
       reason: { type: String, default: "" },
       // Optional: restrict to certain slots or mark full-day
       slots: [

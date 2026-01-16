@@ -39,6 +39,8 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 const port = process.env.PORT || 8080;
 
+app.use("/Uploads/Therapist", express.static("Uploads/Therapist"));
+
 app.get("/", (req, res) => {
   res.send("Welcome to Nupal CDC App Server");
 });

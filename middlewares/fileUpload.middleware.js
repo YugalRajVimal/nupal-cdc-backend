@@ -6,8 +6,32 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     let uploadPath = "./Uploads/"; // default fallback
 
-    if (file.fieldname === "excelFile") {
-      uploadPath = "./Uploads/ExcelFiles"; // ✅ new case for Excel uploads
+    // Special case: if used from therapist-admin.routes.js (lines 19-33)
+    // We detect if request route matches exactly the therapist admin "create" route
+    // POST /api/admin/therapist -- adapt if route is mounted differently
+    // Most robust: If the fieldname matches any of the expected therapist file fields, route is POST and path matches therapist
+    // You may adapt this logic if sub-path changes.
+    const therapistFileFields = [
+      "aadhaarFront",
+      "aadhaarBack",
+      "photo",
+      "resume",
+      "certificate",
+    ];
+
+    // If request has any of the therapist fields and matches upload route for Therapist
+    if (
+      therapistFileFields.includes(file.fieldname) &&
+      req.method === "POST" &&
+      req.originalUrl &&
+      (
+        req.originalUrl === "/api/admin/therapist" ||
+        req.originalUrl.endsWith("/admin/therapist") // fallback for mounting
+      )
+    ) {
+      uploadPath = "./Uploads/Therapist";
+    } else if (file.fieldname === "excelFile") {
+      uploadPath = "./Uploads/ExcelFiles";
     }
 
     // Ensure the folder exists

@@ -9,7 +9,10 @@ class AppointmentSuperAdminController {
   async getAllBookings(req, res) {
     try {
       const bookings = await Booking.find()
-        .populate("package")
+        .populate({
+          path: "package",
+          model: "Package"
+        })
         .populate({
           path: "patient",
           model: "PatientProfile",
@@ -17,10 +20,6 @@ class AppointmentSuperAdminController {
             path: "userId",
             model: "User"
           }
-        })
-        .populate({
-          path: "therapy",
-          model: "TherapyType"
         })
         .populate({
           path: "therapist",
@@ -31,9 +30,30 @@ class AppointmentSuperAdminController {
           }
         })
         .populate({
+          path: "therapy",
+          model: "TherapyType"
+        })
+        .populate({
+          path: "sessions.therapist",
+          model: "TherapistProfile",
+          populate: {
+            path: "userId",
+            model: "User"
+          }
+        })
+        .populate({
+          path: "sessions.therapyTypeId",
+          model: "TherapyType"
+        })
+        .populate({
           path: "discountInfo.coupon",
           model: "Discount"
+        })
+        .populate({
+          path: "payment",
+          model: "Payment"
         });
+
       res.json({
         success: true,
         bookings,

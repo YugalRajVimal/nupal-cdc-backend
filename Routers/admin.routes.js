@@ -11,6 +11,7 @@ import bookingsAdminRouter from "./Admin/bookings-admin.routes.js";
 import availabilitySlotsRouter from "./Admin/availability-slots.routes.js";
 import discountCouponRouter from "./SuperAdmin/discount-coupons.super-admin.routes.js";
 import financeAdminRouter from "./Admin/finance.routes.js";
+import { User } from "../Schema/user.schema.js";
 
 
 
@@ -56,6 +57,25 @@ adminRouter.use("/discount-coupons", discountCouponRouter);
 
 
 adminRouter.use("/finance", financeAdminRouter);
+
+adminRouter.get("/profile", async (req, res) => {
+  try {
+    // Option 1: If only one admin in DB
+    const adminData = await User.findOne({ role: "admin" }).select("-password");
+
+    // Option 2: If using JWT and admin id is in req.user
+    // const adminData = await Admin.findById(req.user.id).select("-password");
+
+    if (!adminData) {
+      return res.status(404).json({ success: false, message: "Admin not found." });
+    }
+
+    res.json({ success: true, data: adminData });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Error fetching admin profile", error: error.message });
+  }
+});
+
 
 
 

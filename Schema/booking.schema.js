@@ -10,6 +10,10 @@ const SessionSchema = new Schema({
     ref: 'TherapistProfile', 
     required: true 
   },
+  therapyTypeId: { 
+  type: Schema.Types.ObjectId, 
+  ref: 'TherapyType' 
+},
 isCheckedIn: { 
   type: Boolean, 
   default: false 

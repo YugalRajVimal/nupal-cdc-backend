@@ -1,6 +1,7 @@
 import { User, TherapistProfile } from "../../Schema/user.schema.js";
 import mongoose from "mongoose";
 import Counter from "../../Schema/counter.schema.js";
+import { deleteUploadedFiles } from "../../middlewares/fileDelete.middleware.js";
 
 /**
  * Util: get next sequence number for a given counter name
@@ -27,7 +28,13 @@ function generateTherapistId(seq) {
 
 class TherapistAdminController {
   // Add therapist
+
+
   addTherapist = async (req, res) => {
+    // Collect Multer filepaths from fields (see @therapist-admin.routes.js (19-33))
+    // req.files is an object like: { aadhaarFront: [...], aadhaarBack: [...], photo: [...], resume: [...], certificate: [...] }
+    const uploadedFiles = req.files;
+
     try {
       console.log("Received addTherapist request with body:", req.body);
 
@@ -39,11 +46,6 @@ class TherapistAdminController {
         mobile2,
         address,
         reference,
-        aadhaarFront,
-        aadhaarBack,
-        photo,
-        resume,
-        certificate,
         accountHolder,
         bankName,
         ifsc,
@@ -60,7 +62,28 @@ class TherapistAdminController {
         remarks,
         specializations,
         experienceYears
+        // Do NOT take: aadhaarFront, aadhaarBack, photo, resume, certificate from req.body (should come from multer files)
       } = req.body;
+
+      // Get the filepaths to store into DB (if files uploaded)
+      const fileFields = [
+        "aadhaarFront",
+        "aadhaarBack",
+        "photo",
+        "resume",
+        "certificate"
+      ];
+
+      // For each field, if file was uploaded, get correct filepath
+      const filePaths = {};
+      for (const field of fileFields) {
+        if (uploadedFiles && uploadedFiles[field] && uploadedFiles[field][0]) {
+          // Only save path relative from ./Uploads, e.g., "Uploads/Therapist/...", or Multer's full path
+          filePaths[field] = uploadedFiles[field][0].path;
+        } else {
+          filePaths[field] = undefined; // allow undefined for optional
+        }
+      }
 
       // List all required fields (excluding optional ones)
       const requiredFields = [
@@ -81,6 +104,8 @@ class TherapistAdminController {
 
       if (missingFields.length > 0) {
         console.log("Check failed: Missing required fields:", missingFields);
+        // Clean up files before responding
+        deleteUploadedFiles(uploadedFiles);
         return res.status(400).json({
           error: `Missing required fields: ${missingFields.join(", ")}`
         });
@@ -142,6 +167,7 @@ class TherapistAdminController {
         emailAssociatedMobile === mobile1Trimmed &&
         mobileAssociatedEmail === emailTrimmed
       ) {
+        deleteUploadedFiles(uploadedFiles);
         return res.status(409).json({
           error: "Therapist with this email and phone already exists.",
           details: {
@@ -152,6 +178,7 @@ class TherapistAdminController {
       }
       if (errorMsg) {
         // Send full info in error, as per instruction
+        deleteUploadedFiles(uploadedFiles);
         return res.status(409).json({
           error: errorMsg,
           fullDetails: {
@@ -167,55 +194,73 @@ class TherapistAdminController {
 
       // Create user document (role: therapist)
       // --- Save mobile1 to both 'phone' and (optionally) to any original mobile1 fields if ever required ---
-      const user = await User.create({
-        role: "therapist",
-        name: fullName,
-        email: email,
-        authProvider: "otp",
-        status: "active",
-        phone: mobile1  // <<--- Added: Save mobile1 as phone in User schema
-      });
+      let user;
+      try {
+        user = await User.create({
+          role: "therapist",
+          name: fullName,
+          email: email,
+          authProvider: "otp",
+          status: "active",
+          phone: mobile1  // <<--- Added: Save mobile1 as phone in User schema
+        });
+      } catch (err) {
+        // Likely a unique constraint error (duplicate email, etc)
+        console.log("[addTherapist] User.create error, cleaning up uploaded files");
+        deleteUploadedFiles(uploadedFiles);
+        throw err;
+      }
       console.log("User document created:", user);
 
       // Create TherapistProfile (do NOT store email here) + add therapistId
-      const therapistProfile = await TherapistProfile.create({
-        userId: user._id,
-        therapistId, // <-- new
-        fathersName,
-        mobile1,
-        mobile2, // optional
-        address,
-        reference,
-        aadhaarFront, // optional
-        aadhaarBack, // optional
-        photo, // optional
-        resume, // optional
-        certificate, // optional
-        accountHolder, // optional
-        bankName, // optional
-        ifsc, // optional
-        accountNumber, // optional
-        upi, // optional
-        linkedin, // optional
-        twitter, // optional
-        facebook, // optional
-        instagram, // optional
-        youtube, // optional
-        website, // optional
-        portfolio, // optional
-        blog, // optional
-        remarks, // optional
-        specializations,
-        experienceYears,
-        isPanelAccessible: false, 
-
-        // email is NOT stored in TherapistProfile
-      });
+      let therapistProfile;
+      try {
+        therapistProfile = await TherapistProfile.create({
+          userId: user._id,
+          therapistId, // <-- new
+          fathersName,
+          mobile1,
+          mobile2, // optional
+          address,
+          reference,
+          aadhaarFront: filePaths.aadhaarFront,  // <-- Use uploaded file path
+          aadhaarBack: filePaths.aadhaarBack,
+          photo: filePaths.photo,
+          resume: filePaths.resume,
+          certificate: filePaths.certificate,
+          accountHolder, // optional
+          bankName, // optional
+          ifsc, // optional
+          accountNumber, // optional
+          upi, // optional
+          linkedin, // optional
+          twitter, // optional
+          facebook, // optional
+          instagram, // optional
+          youtube, // optional
+          website, // optional
+          portfolio, // optional
+          blog, // optional
+          remarks, // optional
+          specializations,
+          experienceYears,
+          isPanelAccessible: false, 
+          // email is NOT stored in TherapistProfile
+        });
+      } catch (err) {
+        // If therapist profile fails, clean up: remove created user and any files
+        console.log("[addTherapist] TherapistProfile.create error, cleaning up user and files");
+        await User.findByIdAndDelete(user._id).catch(() => {});
+        deleteUploadedFiles(uploadedFiles);
+        throw err;
+      }
       console.log("TherapistProfile document created:", therapistProfile);
 
       res.status(201).json({ user, therapistProfile });
     } catch (e) {
       console.log("Error in addTherapist:", e);
+      // Clean up any files that were uploaded
+      deleteUploadedFiles(req.files);
       res.status(400).json({ error: "Failed to add therapist", details: e.message });
     }
   };
@@ -337,6 +382,86 @@ class TherapistAdminController {
   };
 
   /**
+   * Pay therapist (append to therapist.earnings array)
+   * POST /api/admin/therapists/:id/pay
+   * body: { amount, type, fromDate, toDate, remark, paidOn }
+   * type: "salary" | "contract"
+   */
+  payTherapist = async (req, res) => {
+    try {
+      const { id } = req.params; // TherapistProfile _id
+      const { amount, type, fromDate, toDate, remark, paidOn } = req.body;
+
+      // Validate therapist id
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: "Invalid therapist profile ID" });
+      }
+      // Validate amount, type, fromDate, toDate
+      if (
+        typeof amount !== "number" ||
+        amount <= 0 ||
+        !["salary", "contract"].includes(type) ||
+        !fromDate ||
+        !toDate
+      ) {
+        return res.status(400).json({ error: "Missing or invalid payment details" });
+      }
+
+      const therapist = await TherapistProfile.findById(id);
+      if (!therapist) {
+        return res.status(404).json({ error: "Therapist not found" });
+      }
+
+      // Construct payment object as per schema
+      const payment = {
+        amount,
+        type,
+        fromDate: new Date(fromDate),
+        toDate: new Date(toDate),
+        remark: remark || "",
+        paidOn: paidOn ? new Date(paidOn) : new Date(),
+      };
+
+      // Append to earnings array
+      therapist.earnings.push(payment);
+      await therapist.save();
+
+      // ----- Add entry in Finances schema -----
+      // Finances fields: date, description, type, amount, creditDebitStatus
+      // We'll store:
+      // - date: paidOn or now
+      // - description: Salary/Contract payment to therapist <name/therapistId> for period <fromDate> - <toDate> [remark]
+      // - type: 'expense'
+      // - amount
+      // - creditDebitStatus: 'debited'
+      const Finances = (await import("../../Schema/finances.schema.js")).default;
+
+      let description = `Therapist ${type} payment to ${therapist.name || therapist.therapistId || therapist._id} for ${fromDate} to ${toDate}`;
+      if (remark) {
+        description += ` [${remark}]`;
+      }
+
+      const financesDoc = await Finances.create({
+        date: payment.paidOn,
+        description,
+        type: "expense",
+        amount: payment.amount,
+        creditDebitStatus: "debited"
+      });
+
+      res.json({
+        success: true,
+        message: "Therapist paid and earning added.",
+        earnings: therapist.earnings,
+        payment,
+        finance: financesDoc
+      });
+    } catch (e) {
+      res.status(400).json({ error: "Failed to pay therapist", details: e.message });
+    }
+  }
+
+  /**
    * Disable a therapist (set their User 'isDisabled' = true)
    * PATCH /api/admin/therapists/:id/disable
    */
@@ -420,6 +545,234 @@ class TherapistAdminController {
     }
   };
 
+
+  /**
+   * Set holidays for therapist (full day range or partial slots)
+   * POST /api/admin/therapist/:id/holidays
+   * Body:
+   *   - Full day: { fromDate, toDate }
+   *   - Partial day: { date, slots }
+   */
+  setHolidays = async (req, res) => {
+    try {
+      const { id } = req.params; // TherapistProfile _id
+      const { fromDate, toDate, date, slots } = req.body;
+
+      // Validate therapist profile ID
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: "Invalid therapist profile ID" });
+      }
+
+      // Fetch therapist
+      const therapist = await TherapistProfile.findById(id);
+      if (!therapist) {
+        return res.status(404).json({ error: "Therapist not found" });
+      }
+
+      // Helper: extract 'YYYY-MM-DD' from input
+      function extractDateString(str) {
+        if (!str) return null;
+        const match = /^(\d{4}-\d{2}-\d{2})/.exec(str);
+        return match ? match[1] : null;
+      }
+
+      // ---- Setup for checking availability ----
+      // Import Booking (do NOT move to toplevel, since AdminController uses ESM and .default needed)
+      const Booking = (await import("../../Schema/booking.schema.js")).default;
+
+      // Session slot options (for slot label resolution)
+      const sessionOptions = [
+        { id: '1000-1045', label: '10:00 to 10:45' },
+        { id: '1045-1130', label: '10:45 to 11:30' },
+        { id: '1130-1215', label: '11:30 to 12:15' },
+        { id: '1215-1300', label: '12:15 to 13:00' },
+        { id: '1300-1345', label: '13:00 to 13:45' },
+        { id: '1415-1500', label: '14:15 to 15:00' },
+        { id: '1500-1545', label: '15:00 to 15:45' },
+        { id: '1545-1630', label: '15:45 to 16:30' },
+        { id: '1630-1715', label: '16:30 to 17:15' },
+        { id: '1715-1800', label: '17:15 to 18:00' },
+        { id: '0830-0915', label: '08:30 to 09:15' },
+        { id: '0915-1000', label: '09:15 to 10:00' },
+        { id: '1800-1845', label: '18:00 to 18:45' },
+        { id: '1845-1930', label: '18:45 to 19:30' },
+        { id: '1930-2015', label: '19:30 to 20:15' }
+      ];
+
+      // Utility: session is not cancelled or deleted
+      function isActiveSession(sess) {
+        return (
+          sess &&
+          (!sess.status || !["cancelled", "cancelledByTherapist", "deleted"].includes(sess.status))
+        );
+      }
+
+      // ---- FULL DAY HOLIDAY ----
+      if (fromDate && toDate) {
+        const fromStr = extractDateString(fromDate);
+        const toStr = extractDateString(toDate);
+
+        if (!fromStr || !toStr) {
+          return res.status(400).json({ error: "Invalid fromDate/toDate format" });
+        }
+
+        const from = new Date(fromStr + "T00:00:00Z");
+        const to = new Date(toStr + "T00:00:00Z");
+
+        if (from > to) {
+          return res.status(400).json({ error: "fromDate cannot be after toDate" });
+        }
+
+        // Gather all date strings in the range, inclusive
+        let dateIter = new Date(from.getTime());
+        const dateStrings = [];
+        while (dateIter <= to) {
+          dateStrings.push(dateIter.toISOString().slice(0, 10));
+          dateIter.setUTCDate(dateIter.getUTCDate() + 1);
+        }
+
+        // Check for existing bookings for THIS therapist on ANY of those dates
+        const sessionDatesQuery = {
+          therapist: therapist._id,
+          "sessions.date": { $in: dateStrings }
+        };
+        const bookings = await Booking.find(sessionDatesQuery, {sessions: 1}).lean();
+
+        // Find conflicting dates (dates where therapist has an active session)
+        const bookedDates = new Set();
+        for (const bk of bookings) {
+          if (Array.isArray(bk.sessions)) {
+            for (const sess of bk.sessions) {
+              if (
+                sess.date &&
+                dateStrings.includes(sess.date) &&
+                isActiveSession(sess)
+              ) {
+                bookedDates.add(sess.date);
+              }
+            }
+          }
+        }
+
+        if (bookedDates.size > 0) {
+          return res.status(400).json({
+            error: `Cannot set holiday: Therapist already has session(s) on ${Array.from(bookedDates).join(", ")}.`
+          });
+        }
+
+        // No conflict - proceed to set holidays
+        let holidaysToAdd = [];
+        for (const dateStr of dateStrings) {
+          const foundIdx = therapist.holidays.findIndex(h =>
+            h.date && h.date === dateStr
+          );
+          if (foundIdx !== -1) {
+            therapist.holidays[foundIdx].isFullDay = true;
+            therapist.holidays[foundIdx].slots = [];
+            therapist.holidays[foundIdx].date = dateStr;
+          } else {
+            holidaysToAdd.push({
+              date: dateStr,
+              reason: "",
+              slots: [],
+              isFullDay: true
+            });
+          }
+        }
+        therapist.holidays.push(...holidaysToAdd);
+
+        await therapist.save();
+        return res.json({
+          success: true,
+          message: "Holiday(s) set for full day date range",
+          holidays: therapist.holidays
+        });
+      }
+
+      // ---- PARTIAL (SLOTS) HOLIDAY ----
+      if (date && Array.isArray(slots) && slots.length > 0) {
+        const holidayDateStr = extractDateString(date);
+        if (!holidayDateStr) {
+          return res.status(400).json({ error: "Invalid date format" });
+        }
+
+        // Format slots as: [{ slotId, label }]
+        const slotsToSave = slots
+          .map(slotId => {
+            const found = sessionOptions.find(s => s.id === slotId);
+            if (!found) return null;
+            return { slotId: found.id, label: found.label };
+          })
+          .filter(Boolean);
+
+        if (slotsToSave.length === 0) {
+          return res.status(400).json({ error: "No valid slots selected" });
+        }
+
+        // Check if this therapist has any session on this date and slot
+        const sessionsQuery = {
+          therapist: therapist._id,
+          "sessions.date": holidayDateStr,
+          "sessions.id": { $in: slots }
+        };
+        // We must check all sessions for the requested slot(s) on that date
+        const bookings = await Booking.find(sessionsQuery, { sessions: 1 }).lean();
+        let blockedSlots = new Set();
+        for (const bk of bookings) {
+          if (Array.isArray(bk.sessions)) {
+            for (const sess of bk.sessions) {
+              if (
+                sess.date === holidayDateStr &&
+                slots.includes(sess.id) &&
+                isActiveSession(sess)
+              ) {
+                blockedSlots.add(sess.id);
+              }
+            }
+          }
+        }
+
+        if (blockedSlots.size > 0) {
+          // Return slot labels
+          const blockedLabels = Array.from(blockedSlots).map(blockedId => {
+            const found = sessionOptions.find(o => o.id === blockedId);
+            return found ? found.label : blockedId;
+          });
+          return res.status(400).json({
+            error: `Cannot set holiday: Therapist already has session(s) for slot(s): ${blockedLabels.join(", ")} on ${holidayDateStr}.`
+          });
+        }
+
+        // No conflicts - set holiday for ONLY allowed slots
+        const existingIdx = therapist.holidays.findIndex(
+          h => h.date && h.date === holidayDateStr
+        );
+        if (existingIdx !== -1) {
+          therapist.holidays[existingIdx].isFullDay = false;
+          therapist.holidays[existingIdx].slots = slotsToSave;
+          therapist.holidays[existingIdx].date = holidayDateStr;
+        } else {
+          therapist.holidays.push({
+            date: holidayDateStr, // Store as string "YYYY-MM-DD"
+            reason: "",
+            slots: slotsToSave,
+            isFullDay: false
+          });
+        }
+        await therapist.save();
+        return res.json({
+          success: true,
+          message: "Partial holiday set for date",
+          holidays: therapist.holidays
+        });
+      }
+
+      return res.status(400).json({ error: "Invalid request. Please provide fromDate/toDate (full), or date and slots (partial)." });
+    } catch (e) {
+      console.error("[setHolidays] Error:", e);
+      res.status(400).json({ error: "Error setting therapist holidays", details: e.message });
+    }
+  };
 
   
 }

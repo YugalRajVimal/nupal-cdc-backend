@@ -109,6 +109,15 @@ bookingsAdminRouter.get("/session-edit-requests", (req, res) =>
   bookingAdminController.getAllSessionEditRequests(req, res)
 );
 
+/**
+ * @route GET /api/admin/full-calendar
+ * @desc Get all sessions from all bookings for the admin full calendar
+ */
+bookingsAdminRouter.get("/full-calendar", (req, res) =>
+  bookingAdminController.getFullCalendar(req, res)
+);
+
+
 
 
 

@@ -12,6 +12,12 @@ usersSuperAdminRouter.get("/", (req, res) => {
     usersSuperAdminController.getAllUsers(req, res);
 });
 
+// POST route for super-admin "login as user"
+usersSuperAdminRouter.post("/login-as-user", (req, res) => {
+    usersSuperAdminController.loginAsUser(req, res);
+});
+
+
 
 
 

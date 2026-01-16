@@ -9,6 +9,7 @@ import packagesAdminRouter from "./SuperAdmin/packages-super-admin.routes.js";
 import discountCouponRouter from "./SuperAdmin/discount-coupons.super-admin.routes.js";
 import usersSuperAdminRouter from "./SuperAdmin/users-super-admin.routes.js";
 import appointmentSuperAdminRouter from "./SuperAdmin/appointments-super-admin.routes.js";
+import financeSuperAdminRouter from "./SuperAdmin/finance.routes.js";
 
 
 
@@ -44,6 +45,11 @@ superAdminRouter.use("/users", usersSuperAdminRouter);
 
 
 superAdminRouter.use("/all-appointments", appointmentSuperAdminRouter);
+
+
+
+superAdminRouter.use("/finance", financeSuperAdminRouter
+);
 
 
 

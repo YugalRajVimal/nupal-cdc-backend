@@ -35,7 +35,7 @@ class ParentController {
         .populate({
           path: "patient",
           model: "PatientProfile",
-          select: "patientId",
+          select: "patientId name",
           populate: {
             path: "userId",
             model: "User",
@@ -66,7 +66,7 @@ class ParentController {
             if (!session.isCheckedIn) {
               uncheckedSessions.push({
                 patientId: booking.patient.patientId,
-                name: booking.patient.userId.name, // adjust based on actual patient name field
+                name: booking.patient.name, // adjust based on actual patient name field
                 notCheckedInSession: session
               });
             }
