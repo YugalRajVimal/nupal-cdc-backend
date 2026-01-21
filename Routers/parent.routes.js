@@ -8,6 +8,19 @@ const parentController = new ParentController();
 
 
 // INSERT_YOUR_CODE
+// INSERT_YOUR_CODE
+
+// Parent sign up - Send OTP
+parentRouter.post('/signup', (req, res) => parentController.parentSignUpSendOTP(req, res));
+
+// Parent sign up - Verify OTP
+parentRouter.post('/verify-otp', (req, res) => parentController.parentSignUpVerifyOTP(req, res));
+
+// Complete parent profile (and create child profile/patientProfile)
+// Protected: requires authentication
+parentRouter.post('/complete-profile', jwtAuth, (req, res) => parentController.completeParentProfile(req, res));
+
+
 
 // Dashboard details for parent
 parentRouter.get('/dashboard',jwtAuth, (req, res) => parentController.getDashboardDetails(req, res));

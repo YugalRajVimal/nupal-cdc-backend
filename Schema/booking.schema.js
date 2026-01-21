@@ -11,19 +11,18 @@ const SessionSchema = new Schema({
     required: true 
   },
   therapyTypeId: { 
-  type: Schema.Types.ObjectId, 
-  ref: 'TherapyType' 
-},
-isCheckedIn: { 
-  type: Boolean, 
-  default: false 
-}
-
+    type: Schema.Types.ObjectId, 
+    ref: 'TherapyType' 
+  },
+  isCheckedIn: { 
+    type: Boolean, 
+    default: false 
+  }
   // add more fields as needed
 });
 
 const BookingSchema = new Schema({
-  appointmentId:{
+  appointmentId: {
     type: String, 
     required: true 
   },
@@ -51,15 +50,15 @@ const BookingSchema = new Schema({
     type: Schema.Types.ObjectId, 
     ref: 'Therapy', 
     required: true 
+  },
+  payment: { 
+    type: Schema.Types.ObjectId, 
+    ref: 'Payment'
+  },
+  remark: { 
+    type: String 
   }
-
-,
-payment: { 
-  type: Schema.Types.ObjectId, 
-  ref: 'Payment'
-}
 }, { timestamps: true });
-
 
 const Booking = mongoose.model("Booking", BookingSchema);
 

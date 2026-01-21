@@ -169,7 +169,8 @@ class BookingAdminController {
         followupRequired,
         followupDate,
         isBookingRequest,
-        bookingRequestId
+        bookingRequestId,
+        remark // <-- added remark in destructure
       } = req.body;
 
       console.log("[CREATE BOOKING CHECK] Incoming body:", req.body);
@@ -427,6 +428,7 @@ class BookingAdminController {
         appointmentId,
         status,
         notes,
+        remark, // <-- added remark to bookingPayload
         discountInfo,
         package: packageId,
         patient: patientId,
@@ -678,6 +680,7 @@ class BookingAdminController {
         followupRequired,
         followupDate,
         therapist: bodyTherapist,
+        remark, // <-- added remark
       } = req.body;
 
       console.log(sessions);
@@ -961,7 +964,8 @@ class BookingAdminController {
         paymentDueDate,
         invoiceNumber,
         followupRequired,
-        followupDate
+        followupDate,
+        remark // <-- added remark to updatePayload
       };
       Object.keys(updatePayload).forEach(
         k => updatePayload[k] === undefined && delete updatePayload[k]

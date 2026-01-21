@@ -1,10 +1,38 @@
 import express from "express";
 import TherapistController from "../Controllers/Therapist/therapist.controller.js";
 import jwtAuth from "../middlewares/Auth/auth.middleware.js";
+import { upload } from "../middlewares/fileUpload.middleware.js";
 
 
 const therapistRouter = express.Router();
 const therapistController = new TherapistController();
+
+// Therapist sign-up with email OTP (send OTP)
+therapistRouter.post(
+  '/signup/send-otp',
+  (req, res) => therapistController.therapistSignUpSendOTP(req, res)
+);
+
+// Therapist sign-up (verify OTP)
+therapistRouter.post(
+  '/signup/verify-otp',
+  (req, res) => therapistController.therapistSignUpVerifyOTP(req, res)
+);
+
+// Therapist completes their profile (only allowed if incomplete)
+therapistRouter.post(
+  '/complete-profile',
+  jwtAuth,
+  upload.fields([
+    { name: "aadhaarFront", maxCount: 1 },
+    { name: "aadhaarBack", maxCount: 1 },
+    { name: "photo", maxCount: 1 },
+    { name: "resume", maxCount: 1 },
+    { name: "certificate", maxCount: 1 },
+  ]),
+  (req, res) => therapistController.completeProfile(req, res)
+);
+
 
 // Dashboard details for therapist
 therapistRouter.get('/dashboard',jwtAuth, (req, res) => therapistController.getDashboardDetails(req, res));

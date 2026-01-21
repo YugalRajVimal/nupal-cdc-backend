@@ -1,137 +1,218 @@
 import sendMail from "../../config/nodeMailer.config.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import {
-  User,
-  PatientProfile,
-  TherapistProfile,
-  AdminProfile,
-  SuperAdminProfile
-} from "../../Schema/user.schema.js";
-import ExpiredTokenModel from "../../Schema/expired-token.schema.js";
-import Maintenance from "../../Schema/maintenance.schema.js";
+import { User, SuperAdminProfile } from "../../Schema/user.schema.js";
 
-// Allowed roles from user.schema.js (see enum in file_context_2 line 8)
-const ALLOWED_ROLES = ["parent", "therapist", "admin", "superadmin"];
+// Only allow superadmin for these endpoints
+const ALLOWED_ROLES = ["superadmin"];
 
 class SuperAdminAuthController {
-  // Check Authorization with user.schema.js roles & maintenance
+  // Check Auth Token - expects Bearer token in Authorization header
   checkAuth = async (req, res) => {
     try {
-      const { role } = req.user || {};
+      const { id, role } = req.user || {};
+      console.log(req);
+      console.log("[SuperAdmin checkAuth] User id from req.user:", id);
+      console.log("[SuperAdmin checkAuth] User role from req.user:", role);
 
-      if (!role || !ALLOWED_ROLES.includes(role)) {
-        return res.status(401).json({ message: "Unauthorized: Invalid user role" });
+      if (role !== "superadmin") {
+        console.log("[SuperAdmin checkAuth] Role is not superadmin:", role);
+        return res.status(401).json({ message: "Unauthorized: Role must be superadmin" });
       }
 
-      // Only allow maintenance bypass for 'admin' or 'superadmin'
-      if (!["admin", "superadmin"].includes(role)) {
-        const maintenanceStatus = await Maintenance.findOne({});
-        if (maintenanceStatus && maintenanceStatus.isMaintenanceMode) {
-          return res.status(423).json({
-            message: "The application is under maintenance. Please try again later.",
-          });
-        }
+      // Check if superadmin with provided id and role exists in the database
+      const dbUser = await User.findOne({ _id: id, role });
+      console.log("[SuperAdmin checkAuth] Looked up user from DB:", dbUser ? dbUser._id : "NOT FOUND");
+
+      if (!dbUser) {
+        console.log("[SuperAdmin checkAuth] No user found in DB for id and role.");
+        return res.status(401).json({ message: "Unauthorized: User not found" });
       }
 
+      console.log("[SuperAdmin checkAuth] User is authorized.");
       return res.status(200).json({ message: "Authorized" });
     } catch (error) {
+      console.error("[SuperAdmin checkAuth] Error encountered:", error);
       return res.status(401).json({ message: "Unauthorized" });
     }
   };
 
-  // Verify Account with OTP (parent/therapist/admin/superadmin) using user.schema.js
-  verifyAccount = async (req, res) => {
+  // Superadmin Login: with email and password
+  login = async (req, res) => {
     try {
-      let { email, otp, role } = req.body;
-
-      if (!email || !otp || !role) {
-        return res.status(400).json({ message: "Email, OTP, and Role are required" });
+      const { email, password } = req.body;
+      if (!email || !password) {
+        console.log("Login failed: email or password missing");
+        return res.status(400).json({ message: "Email and password are required." });
       }
 
-      email = email.trim().toLowerCase();
-      role = role.trim();
-
-      if (!ALLOWED_ROLES.includes(role)) {
-        return res.status(400).json({ message: "Invalid user role." });
-      }
-
-      // Find user by email, role and OTP (atomic find+verify OTP+clear OTP)
-      const user = await User.findOneAndUpdate(
-        {
-          email,
-          role,
-          otp
-        },
-        { $unset: { otp: 1 }, lastLogin: new Date() },
-        { new: true }
-      ).lean();
-
+      const user = await User.findOne({ email: email.trim().toLowerCase(), role: "superadmin" });
+      console.log("Login user lookup:", user);
       if (!user) {
-        return res.status(401).json({ message: "Invalid credentials or OTP" });
+        console.log("Login failed: user not found");
+        return res.status(404).json({ message: "Superadmin not found" });
       }
 
-      // Generate JWT with profile info optionally
-      const tokenPayload = {
+      // Check for passwordHash existence
+      if (!user.passwordHash) {
+        console.log("Login failed: password hash not present");
+        return res.status(401).json({ message: "Invalid credentials." });
+      }
+
+      // Compare password
+      const match = await bcrypt.compare(password, user.passwordHash);
+      console.log("Password match result:", match);
+      if (!match) {
+        console.log("Login failed: password does not match");
+        return res.status(401).json({ message: "Invalid credentials." });
+      }
+
+
+      // Generate JWT
+      const payload = {
         id: user._id,
         email: user.email,
         role: user.role
       };
+      const token = jwt.sign(payload, process.env.JWT_SECRET);
 
-      const token = jwt.sign(tokenPayload, process.env.JWT_SECRET);
+      console.log("SuperAdmin login successful:", user.email);
 
-      return res
-        .status(200)
-        .json({ message: "Account verified successfully", token });
-    } catch (error) {
-      console.error("VerifyAccount Error:", error);
+      return res.status(200).json({
+        message: "Logged in successfully",
+        token,
+        data: {
+          id: user._id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          status: user.status,
+        }
+      });
+    } catch (err) {
+      console.log("Login error:", err);
       return res.status(500).json({ message: "Internal Server Error" });
     }
   };
 
-  // Sign In → Send OTP, only for known roles
-  signin = async (req, res) => {
+  // Forgot Password (superadmin): send OTP (always 000000 for now)
+  forgotPassword = async (req, res) => {
     try {
-      let { email, role } = req.body;
-
-      if (!email || !role) {
-        return res.status(400).json({ message: "Email and role are required" });
+      const { email } = req.body;
+      if (!email) {
+        console.log("Forgot password: email missing");
+        return res.status(400).json({ message: "Email is required." });
       }
 
-      email = email.trim().toLowerCase();
-      role = role.trim();
-
-      if (!ALLOWED_ROLES.includes(role)) {
-        return res.status(400).json({ message: "Invalid user role." });
-      }
-
-      const user = await User.findOne({ email, role }).lean();
+      const user = await User.findOne({ email: email.trim().toLowerCase(), role: "superadmin" });
+      console.log("Forgot password user lookup:", user);
       if (!user) {
-        return res.status(404).json({ message: "User not found" });
+        console.log("Forgot password: superadmin not found");
+        return res.status(404).json({ message: "Superadmin not found" });
       }
 
-      // Generate 6-digit OTP
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      // Save OTP ("000000") and expiry (optionally 10min)
+      await User.findByIdAndUpdate(user._id, {
+        otp: "000000",
+        otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      });
 
-      // Save OTP with expiry (10 min)
-      await User.findByIdAndUpdate(
-        user._id,
-        {
-          otp,
-          otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 min expiry
-        },
-        { new: true }
-      );
-
-      // Send OTP via mail
-      sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
-
-      return res.status(200).json({ message: "OTP sent successfully" });
-    } catch (error) {
-      console.error("Signin Error:", error);
+      // Optionally send email (for dev, just say sent)
+      console.log("OTP set for superadmin:", email);
+      // await sendMail(email, "Your OTP Code", `Your OTP is: 000000`);
+      return res.status(200).json({ message: "OTP sent to your registered email (for demo, OTP is 000000)" });
+    } catch (err) {
+      console.log("Forgot password error:", err);
       return res.status(500).json({ message: "Internal Server Error" });
     }
   };
+
+  // Verify Account - superadmin only, checks OTP (default 000000)
+  verifyAccount = async (req, res) => {
+    try {
+      let { email, otp } = req.body;
+      if (!email || !otp) {
+        console.log("Verify account: email or otp missing");
+        return res.status(400).json({ message: "Email and OTP are required" });
+      }
+      email = email.trim().toLowerCase();
+      // Find superadmin with OTP (default OTP is 000000)
+      const user = await User.findOneAndUpdate(
+        {
+          email,
+          role: "superadmin",
+          otp,
+          otpExpiresAt: { $gte: new Date() },
+        },
+        { $unset: { otp: 1, otpExpiresAt: 1 } },
+        { new: true }
+      ).lean();
+
+      console.log("Verify account lookup result:", user);
+
+      if (!user) {
+        console.log("Verify account: invalid email or otp");
+        return res.status(401).json({ message: "Invalid email or OTP." });
+      }
+
+      // Generate JWT
+      const payload = {
+        id: user._id,
+        email: user.email,
+        role: user.role
+      };
+      const token = jwt.sign(payload, process.env.JWT_SECRET);
+
+      console.log("SuperAdmin OTP verified:", user.email);
+
+      return res.status(200).json({
+        message: "Account verified, please reset your password",
+        token,
+        data: {
+          id: user._id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          status: user.status
+        }
+      });
+    } catch (error) {
+      console.log("Verify account error:", error);
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+  };
+
+  // Optional: Reset password after verifying OTP (requires token)
+  resetPassword = async (req, res) => {
+    try {
+      // Token must be provided (eg, after verifyAccount)
+      const header = req.headers["authorization"];
+      if (!header || !header.startsWith("Bearer ")) {
+        return res.status(401).json({ message: "Authorization token is missing or malformed." });
+      }
+      const token = header.replace("Bearer ", "").trim();
+      let decoded;
+      try {
+        decoded = jwt.verify(token, process.env.JWT_SECRET);
+      } catch {
+        return res.status(401).json({ message: "Invalid token." });
+      }
+      if (!decoded || decoded.role !== "superadmin" || !decoded.id) {
+        return res.status(401).json({ message: "Invalid credentials." });
+      }
+      const { newPassword } = req.body;
+      if (!newPassword || newPassword.length < 6)
+        return res.status(400).json({ message: "Password must be at least 6 characters." });
+
+      const hash = await bcrypt.hash(newPassword, 10);
+      await User.findByIdAndUpdate(decoded.id, { password: hash });
+
+      return res.status(200).json({ message: "Password reset successfully." });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+  };
+
 }
 
 export default SuperAdminAuthController;

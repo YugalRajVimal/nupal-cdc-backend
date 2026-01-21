@@ -39,6 +39,41 @@ class AuthController {
         return res.status(403).json({ message: "Your account has been deleted. Please contact support." });
       }
 
+      // If therapist and incompleteTherapistProfile is true, return error with unique status code
+      if (dbUser.role === "therapist" && dbUser.incompleteTherapistProfile === true) {
+        console.log("[checkAuth] Therapist profile is incomplete.");
+        // 428 Precondition Required: used as unique, fits context of incomplete profile
+        return res.status(428).json({ 
+          message: "Therapist profile is incomplete. Please complete your profile to continue.",
+          name: dbUser.name,
+          email: dbUser.email
+        });
+      }
+      // If parent and incompleteParentProfile is true, return error with unique status code
+      if (dbUser.role === "patient" && dbUser.incompleteParentProfile === true) {
+        console.log("[checkAuth] Parent/Patient profile is incomplete.");
+        // 428 Precondition Required, as above
+        return res.status(428).json({ 
+          message: "Parent profile is incomplete. Please complete your profile to continue.",
+          name: dbUser.name,
+          email: dbUser.email
+        });
+      }
+      // If therapist and profile complete, but therapist panel is not accessible
+      if (dbUser.role === "therapist" && dbUser.incompleteTherapistProfile === false) {
+        // Need to check TherapistProfile for isPanelAccessible
+        const therapistProfile = await (await import("../../Schema/user.schema.js")).TherapistProfile.findOne({ userId: dbUser._id }).lean();
+        if (therapistProfile && therapistProfile.isPanelAccessible === false) {
+          console.log("[checkAuth] Therapist panel is not accessible for this user.");
+          // 451 Unavailable For Legal Reasons (as unique error, since 403/423 are common)
+          return res.status(451).json({
+            message: "Your therapist panel access is currently not enabled. Please contact support.",
+            name: dbUser.name,
+            email: dbUser.email
+          });
+        }
+      }
+
       console.log("[checkAuth] User is authorized.");
       return res.status(200).json({ message: "Authorized" });
     } catch (error) {

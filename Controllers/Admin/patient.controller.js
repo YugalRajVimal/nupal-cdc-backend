@@ -35,6 +35,7 @@ class PatientAdminController {
         mobile2,                 // optional
         address,
         areaName,
+        pincode,                 // now mandatory
         diagnosisInfo,
         childReference,
         parentOccupation,
@@ -60,6 +61,7 @@ class PatientAdminController {
         { key: "mobile1", value: mobile1 },
         { key: "address", value: address },
         { key: "areaName", value: areaName },
+        { key: "pincode", value: pincode }, // now required
         { key: "diagnosisInfo", value: diagnosisInfo },
         { key: "childReference", value: childReference },
         { key: "parentOccupation", value: parentOccupation },
@@ -80,6 +82,7 @@ class PatientAdminController {
       // Prepare trimmed input for comparisons
       const emailTrimmed = email.trim();
       const mobile1Trimmed = mobile1.trim();
+      const pincodeValue = typeof pincode === "string" ? pincode.trim() : "";
 
       // Check for existing associations
       const existingUserByEmail = await User.findOne({ email: emailTrimmed, role: "patient" });
@@ -211,6 +214,7 @@ class PatientAdminController {
           mobile2,                 // optional
           address,
           areaName,
+          pincode: pincodeValue,   // mandatory, set from trimmed input
           diagnosisInfo,
           childReference,
           parentOccupation,
@@ -251,6 +255,7 @@ class PatientAdminController {
         mobile2,                 // optional
         address,
         areaName,
+        pincode: pincodeValue,   // mandatory, set from trimmed input
         diagnosisInfo,
         childReference,
         parentOccupation,
@@ -345,14 +350,14 @@ class PatientAdminController {
       if (associationCheckNeeded) {
         // Check for an existing patient with newEmail as parentEmail and newMobile as mobile1
         const patientWithBoth = await PatientProfile.findOne({
-          parentEmail: newEmail,
+          email: newEmail,
           mobile1: newMobile,
           _id: { $ne: patientProfile._id }
         });
 
         // Check for any patient with newEmail and another phone
         const patientWithEmail = await PatientProfile.findOne({
-          parentEmail: newEmail,
+          email: newEmail,
           _id: { $ne: patientProfile._id }
         });
 
@@ -413,6 +418,7 @@ class PatientAdminController {
         "mobile2",
         "address",
         "areaName",
+        "pincode", // <-- pincode added here
         "diagnosisInfo",
         "childReference",
         "parentOccupation",

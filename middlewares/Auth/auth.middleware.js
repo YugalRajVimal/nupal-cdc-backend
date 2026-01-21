@@ -109,8 +109,6 @@ const jwtAuth = async (req, res, next) => {
         });
     }
 
-    // Optionally, check for further restrictions if needed
-
     // Proceed to the next middleware or route handler
     console.log("[jwtAuth] Auth checks passed. Calling next().--");
     next();

@@ -42,6 +42,16 @@ const UserSchema = new mongoose.Schema(
       default: "active",
     },
     isDisabled: { type: Boolean, default: false },
+
+    // Fields for managing OTP during signup flow (separate from login OTP fields)
+    signUpOTP: { type: String, default: null },
+    signUpOTPExpiresAt: { type: Date, default: null },
+    signUpOTPSentAt: { type: Date, default: null },
+    signUpOTPAttempts: { type: Number, default: 0 },
+    signUpOTPLastUsedAt: { type: Date, default: null },
+    incompleteTherapistProfile:{ type: Boolean, default: true },
+    incompleteParentProfile:{ type: Boolean, default: true },
+    manualSignUp:{ type: Boolean, default: false },
     
 
 
@@ -70,6 +80,7 @@ const PatientProfileSchema = new mongoose.Schema({
   mobile1Verified: { type: Boolean, default: false },
   mobile2: { type: String, default: "" },
   address: { type: String, default: "" },
+  pincode: { type: String, default: "" },
   areaName: { type: String, default: "" },
   diagnosisInfo: { type: String, default: "" },
   childReference: { type: String, default: "" },

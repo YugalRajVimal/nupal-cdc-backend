@@ -12,6 +12,275 @@ import { PatientProfile, TherapistProfile, User } from '../../Schema/user.schema
 
 class ParentController {
 
+
+  /**
+   * POST /parent/signup
+   * Body: { email: string, name: string }
+   * Sends OTP to the given email, stores OTP record (now uses User.signUpOTP fields in DB)
+   * Parent signup by OTP (role: "parent")
+   */
+  async parentSignUpSendOTP(req, res) {
+    try {
+      const { email, name } = req.body;
+
+      if (!email || typeof email !== "string") {
+        return res.status(400).json({ success: false, message: "Valid email is required." });
+      }
+
+      if (!name || typeof name !== "string") {
+        return res.status(400).json({ success: false, message: "Name is required." });
+      }
+
+      // Only check if a parent user exists with this email
+      const userExists = await User.findOne({ email, role: "patient" });
+      if (userExists) {
+        // If a parent user with this email already exists, no new OTP is sent.
+        return res.status(409).json({ success: false, message: "A parent with this email already exists." });
+      }
+
+      // Use default OTP 000000 for demo; replace with real random OTP generator in prod.
+      const otp = "000000";
+      const expiresInMs = 1000 * 300; // 5 min
+
+      // Always create a new temp User record for sign up (never update existing)
+      const newUser = new User({
+        email,
+        name,
+        role: "patient",
+        authProvider: "otp",
+        signUpOTP: otp,
+        signUpOTPExpiresAt: new Date(Date.now() + expiresInMs),
+        signUpOTPSentAt: new Date(),
+        signUpOTPAttempts: 0,
+        signUpOTPLastUsedAt: null,
+        status: "active",
+        isDisabled: false, // default is enabled
+        manualSignUp:true
+      });
+      await newUser.save();
+
+      // Do NOT create PatientProfile or patientId yet (done on completeProfile)
+
+      // Real: Send OTP via nodemailer/sendgrid here. --- For demo, just log.
+      console.log(`[ParentSignup] OTP for ${email}:`, otp);
+
+      return res.json({ success: true, message: "OTP sent to email address." });
+    } catch (e) {
+      console.error("Error in parentSignUpSendOTP:", e);
+      return res.status(500).json({ success: false, message: "Server error." });
+    }
+  }
+
+  /**
+   * POST /parent/verify-otp
+   * Body: { email: string, otp: string }
+   * Verifies OTP and creates/activates the parent user (using User.signUpOTP fields)
+   */
+  async parentSignUpVerifyOTP(req, res) {
+    try {
+      const { email, otp } = req.body;
+
+      if (!email || !otp) {
+        return res.status(400).json({ success: false, message: "Email and OTP are required." });
+      }
+
+      // Find the user-in-signup (either existing with pending signUpOTP, or never started)
+      const signupUser = await User.findOne({ email, role: "patient" });
+
+      if (!signupUser || (!signupUser.signUpOTP || !signupUser.signUpOTPExpiresAt)) {
+        return res.status(400).json({ success: false, message: "No OTP request found or OTP expired." });
+      }
+
+      // Check expiration
+      if (Date.now() > new Date(signupUser.signUpOTPExpiresAt).getTime()) {
+        // Optionally clear the OTP fields (cleanup)
+        signupUser.signUpOTP = null;
+        signupUser.signUpOTPExpiresAt = null;
+        signupUser.signUpOTPSentAt = null;
+        signupUser.signUpOTPAttempts = 0;
+        signupUser.signUpOTPLastUsedAt = null;
+        await signupUser.save();
+        return res.status(400).json({ success: false, message: "OTP has expired. Please request a new one." });
+      }
+
+      // Increment attempts
+      signupUser.signUpOTPAttempts = (signupUser.signUpOTPAttempts || 0) + 1;
+      await signupUser.save();
+
+      if (signupUser.signUpOTP !== otp) {
+        return res.status(401).json({ success: false, message: "Invalid OTP." });
+      }
+
+      // OTP is valid
+      // Mark signUpOTPLastUsedAt and clear OTP fields
+      signupUser.signUpOTPLastUsedAt = new Date();
+      signupUser.signUpOTP = null;
+      signupUser.signUpOTPExpiresAt = null;
+      signupUser.signUpOTPSentAt = null;
+      signupUser.signUpOTPAttempts = 0;
+
+      // Set identity fields, redundantly
+      if (!signupUser.role) signupUser.role = "patient";
+      if (!signupUser.authProvider) signupUser.authProvider = "otp";
+      signupUser.status = "active";
+      signupUser.isDisabled = false;
+
+      await signupUser.save();
+
+      // No separate ParentProfile collection -- parent is done upon user creation.
+      return res.json({ success: true, message: "Parent account created. You may now login." });
+    } catch (e) {
+      console.error("Error in parentSignUpVerifyOTP:", e);
+      return res.status(500).json({ success: false, message: "Server error." });
+    }
+  }
+
+  // Parent complete profile (now also creates patientId ONCE for their child profile)
+  // PATCH /api/parent/complete-profile
+  // Expects (optionally) phone in body to patch onto User profile, and creates PatientProfile with unique patientId
+  async completeParentProfile(req, res) {
+    try {
+      // Expect parent user is authenticated (from JWT) and userId is req.user.id
+      const parentUserId = req.user?.id;
+      if (!parentUserId) {
+        return res.status(401).json({ error: "Unauthorized: No user ID found." });
+      }
+
+      // Find user
+      const user = await User.findById(parentUserId);
+      if (!user || user.role !== "patient") {
+        return res.status(404).json({ error: "No parent user found." });
+      }
+
+      // Save mobile1 in phone field of User schema, with uniqueness check
+      const { 
+        mobile1, 
+        childFullName,
+        gender,
+        childDOB,
+        fatherFullName,
+        motherFullName,
+        parentEmail,
+        mobile2,
+        address,
+        areaName,
+        pincode,
+        diagnosisInfo,
+        childReference,
+        parentOccupation,
+        remarks,
+        otherDocument
+      } = req.body;
+
+      console.log(req.body);
+
+      const phone = mobile1;
+
+      if (phone && typeof phone === "string" && phone.trim() !== "") {
+        // Check whether another user has this phone
+        const existingUser = await User.findOne({
+          phone: phone.trim(),
+          _id: { $ne: parentUserId }
+        });
+        if (existingUser) {
+          return res.status(409).json({
+            error: `This phone number is already used by another user (Email: ${existingUser.email || "[none]"})`
+          });
+        }
+        user.phone = phone.trim();
+        user.incompleteParentProfile = false;
+      }
+      await user.save();
+
+      // Only create PatientProfile (and patientId) if not already present
+      let existingProfile = await PatientProfile.findOne({ userId: user._id });
+      let createdProfile = null;
+      let patientId = null;
+
+      if (!existingProfile) {
+        // Require childFullName to create PatientProfile
+        if (!childFullName || typeof childFullName !== "string" || !childFullName.trim()) {
+          return res.status(400).json({ error: "Child name (childFullName) is required to complete profile for the first time." });
+        }
+
+        // Generate next unique patientId
+        let seq;
+        try {
+          const counter = await counterSchema.findOneAndUpdate(
+            { name: "patient" },
+            { $inc: { seq: 1 } },
+            { new: true, upsert: true }
+          );
+          seq = counter.seq;
+        } catch (counterErr) {
+          return res.status(500).json({ error: "Could not generate patient ID." });
+        }
+        patientId = `P${seq.toString().padStart(4, "0")}`;
+
+        // Save all details per code block (file_context_0)
+        createdProfile = new PatientProfile({
+          userId: user._id,
+          name: childFullName ? childFullName.trim() : "",
+          patientId,
+          gender: gender || "",
+          childDOB: childDOB || "",
+          fatherFullName: fatherFullName || "",
+          motherFullName: motherFullName || "",
+          parentEmail: parentEmail || "",
+          mobile1: mobile1 || "",
+          mobile2: mobile2 || "",
+          address: address || "",
+          areaName: areaName || "",
+          pincode: pincode || "",
+          diagnosisInfo: diagnosisInfo || "",
+          childReference: childReference || "",
+          parentOccupation: parentOccupation || "",
+          remarks: remarks || "",
+          parentEmail: parentEmail || user.email,
+          otherDocument: otherDocument || undefined,
+          // Add other profile fields here as needed
+        });
+        await createdProfile.save();
+      }
+
+      return res.status(200).json({
+        success: true,
+        user: {
+          email: user.email,
+          name: user.name,
+          phone: user.phone,
+          role: user.role,
+          _id: user._id
+        },
+        patientProfile: createdProfile
+          ? {
+              _id: createdProfile._id,
+              name: createdProfile.name,
+              patientId: createdProfile.patientId,
+              gender: createdProfile.gender,
+              childDOB: createdProfile.childDOB,
+              fatherFullName: createdProfile.fatherFullName,
+              motherFullName: createdProfile.motherFullName,
+              parentEmail: createdProfile.parentEmail,
+              mobile1: createdProfile.mobile1,
+              mobile2: createdProfile.mobile2,
+              address: createdProfile.address,
+              areaName: createdProfile.areaName,
+              pincode: createdProfile.pincode,
+              diagnosisInfo: createdProfile.diagnosisInfo,
+              childReference: createdProfile.childReference,
+              parentOccupation: createdProfile.parentOccupation,
+              remarks: createdProfile.remarks,
+              otherDocument: createdProfile.otherDocument,
+            }
+          : undefined
+      });
+    } catch (e) {
+      console.error("Error in completeParentProfile:", e);
+      res.status(400).json({ error: "Failed to complete parent profile", details: e.message });
+    }
+  }
+
   async getDashboardDetails(req, res) {
     try {
       // 1. Extract parentId from token/user

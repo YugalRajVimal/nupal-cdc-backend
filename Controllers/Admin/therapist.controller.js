@@ -26,6 +26,9 @@ function generateTherapistId(seq) {
   return "NPL" + seq.toString().padStart(3, "0");
 }
 
+// const therapistSeq = await getNextSequence("therapist");
+// const therapistId = generateTherapistId(therapistSeq);
+
 class TherapistAdminController {
   // Add therapist
 
@@ -202,7 +205,8 @@ class TherapistAdminController {
           email: email,
           authProvider: "otp",
           status: "active",
-          phone: mobile1  // <<--- Added: Save mobile1 as phone in User schema
+          phone: mobile1,  // <<--- Added: Save mobile1 as phone in User schema
+incompleteTherapistProfile:false
         });
       } catch (err) {
         // Likely a unique constraint error (duplicate email, etc)
