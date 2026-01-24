@@ -4,7 +4,7 @@
   "description": "",
   "license": "ISC",
   "author": "",
-  "type": "commonjs",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -23,6 +23,5 @@
     "react-icons": "^5.5.0",
     "react-router-dom": "^6.30.1",
     "xlsx": "^0.18.5"
-  },
-  "type":"module"
+  }
 }
