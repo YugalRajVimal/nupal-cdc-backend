@@ -650,12 +650,23 @@ class TherapistController {
   }
 
   // Fetch all bookings, then for all sessions, match with therapist, and respond with appointmentId, patient, therapyType, this therapist's session details
+  // Supports: search (patient name, patient id, appointmentId), pagination (?page, ?limit)
   async getAllTherapistSessions(req, res) {
     try {
       const therapistId = req.user.id;
       if (!therapistId) {
         return res.status(401).json({ success: false, message: "Unauthorized: Therapist not found from token." });
       }
+
+      // Pagination
+      let page = parseInt(req.query.page, 10) || 1;
+      let limit = parseInt(req.query.limit, 10) || 10;
+      page = Math.max(1, page);
+      limit = Math.max(1, Math.min(limit, 100));
+      const skip = (page - 1) * limit;
+
+      // Search
+      const search = (req.query.search || "").toLowerCase().trim();
 
       // Find user document
       const user = await User.findById(therapistId).lean();
@@ -669,7 +680,7 @@ class TherapistController {
         return res.status(404).json({ success: false, message: "Therapist profile not found." });
       }
 
-      // Fetch all bookings
+      // Fetch all bookings (filtering will be done after population, for simplicity)
       const bookings = await Booking.find({})
         .populate({
           path: "patient",
@@ -685,7 +696,6 @@ class TherapistController {
         })
         .lean();
 
-      // Build filtered therapist sessions
       let therapistSessions = [];
 
       bookings.forEach(booking => {
@@ -703,7 +713,42 @@ class TherapistController {
         }
       });
 
-      res.json({ success: true, data: therapistSessions });
+      // Searching
+      let filteredSessions = therapistSessions;
+      if (search.length > 0) {
+        filteredSessions = therapistSessions.filter(sess => {
+          // Check patient name
+          let patientName = "";
+          if (sess.patient && sess.patient.name) {
+            patientName = sess.patient.name.toLowerCase();
+          }
+          // Patient ID
+          let patientId = "";
+          if (sess.patient && sess.patient.patientId) {
+            patientId = (sess.patient.patientId + "").toLowerCase();
+          }
+          // Appointment ID (as string, in case someone searches by it)
+          let appointmentId = (sess.appointmentId ? sess.appointmentId + "" : "").toLowerCase();
+          return (
+            patientName.includes(search) ||
+            patientId.includes(search) ||
+            appointmentId.includes(search)
+          );
+        });
+      }
+
+      const total = filteredSessions.length;
+
+      // Pagination
+      const paginatedSessions = filteredSessions.slice(skip, skip + limit);
+
+      res.json({
+        success: true,
+        data: paginatedSessions,
+        total,
+        page,
+        limit,
+      });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message || String(err) });
     }
@@ -828,6 +873,11 @@ class TherapistController {
    * GET /api/therapist/earnings
    * Optionally filter by month & year (?month=MM&year=YYYY) based on the earnings.fromDate/toDate/paidOn.
    */
+  /**
+   * Therapist earnings summary/report endpoint with search & pagination.
+   * GET /api/therapist/earnings
+   * Query: ?month=MM&year=YYYY&search=foo&page=1&limit=10
+   */
   async getEarnings(req, res) {
     try {
       const therapistId = req.user.id;
@@ -846,7 +896,7 @@ class TherapistController {
         return res.status(404).json({ success: false, message: "Therapist profile not found." });
       }
 
-      const { month, year } = req.query;
+      const { month, year, search = "", page = 1, limit = 15 } = req.query;
 
       let filteredEarnings = Array.isArray(therapistProfile.earnings)
         ? therapistProfile.earnings
@@ -867,6 +917,41 @@ class TherapistController {
         });
       }
 
+      // Filter by search, supporting search on type, remark, amount and date fields
+      if (search && typeof search === "string" && search.trim().length > 0) {
+        const q = search.trim().toLowerCase();
+        filteredEarnings = filteredEarnings.filter((entry) => {
+          return (
+            // type (like "session", "payout", etc)
+            (entry.type && String(entry.type).toLowerCase().includes(q)) ||
+            // remark
+            (entry.remark && String(entry.remark).toLowerCase().includes(q)) ||
+            // amount (match if query is numeric)
+            (!isNaN(Number(q)) && entry.amount && Number(entry.amount) === Number(q)) ||
+            // fromDate, toDate, paidOn (search date as y-m-d or dd-mm-yyyy)
+            (entry.paidOn && new Date(entry.paidOn).toLocaleDateString("en-GB").includes(q)) ||
+            (entry.fromDate && new Date(entry.fromDate).toLocaleDateString("en-GB").includes(q)) ||
+            (entry.toDate && new Date(entry.toDate).toLocaleDateString("en-GB").includes(q))
+          );
+        });
+      }
+
+      // Total before pagination
+      const totalResults = filteredEarnings.length;
+
+      // Pagination
+      const pageNumber = parseInt(page, 10) || 1;
+      const pageSize = parseInt(limit, 10) || 15;
+
+      // Sort by paidOn DESC (most recent first) - null goes last
+      filteredEarnings = filteredEarnings.sort((a, b) => {
+        const aDate = a.paidOn ? new Date(a.paidOn) : a.fromDate ? new Date(a.fromDate) : new Date(0);
+        const bDate = b.paidOn ? new Date(b.paidOn) : b.fromDate ? new Date(b.fromDate) : new Date(0);
+        return bDate - aDate;
+      });
+
+      const pagedEarnings = filteredEarnings.slice((pageNumber - 1) * pageSize, pageNumber * pageSize);
+
       let totalEarnings = 0;
       filteredEarnings.forEach(entry => {
         if (typeof entry.amount === "number") {
@@ -874,13 +959,15 @@ class TherapistController {
         }
       });
 
-      // "details" may match frontend usage, provide id and all fields
       res.json({
         success: true,
         data: {
           totalEarnings,
-          totalBookings: filteredEarnings.length,
-          details: filteredEarnings.map(item => ({
+          totalBookings: totalResults,
+          page: pageNumber,
+          pageSize,
+          totalPages: Math.ceil(totalResults / pageSize),
+          details: pagedEarnings.map(item => ({
             _id: item._id,
             amount: item.amount,
             type: item.type,

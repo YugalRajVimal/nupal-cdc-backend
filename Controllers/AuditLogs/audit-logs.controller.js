@@ -1,4 +1,4 @@
-import { AuditLog } from "../../Schema/logs.schema";
+import { AuditLog } from "../../Schema/logs.schema.js";
 
 class AuditLogService {
   async addLog({

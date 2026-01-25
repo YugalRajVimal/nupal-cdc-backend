@@ -86,10 +86,60 @@ class LeadsAdminController {
   }
 
   // Fetch all leads
+  // Fetch leads with search, filter & pagination
   async getAllLeads(req, res) {
     try {
-      const leads = await Lead.find().sort({ createdAt: -1 }); // most recent first
-      return res.json({ success: true, leads });
+      // Pagination parameters (default page 1, 10 per page)
+      let { page = 1, limit = 10, search = "", ...filters } = req.query;
+      page = parseInt(page);
+      limit = parseInt(limit);
+
+      // Build MongoDB query object
+      const query = {};
+
+      // Search functionality (searching on parentName, parentMobile, childName)
+      if (search && typeof search === 'string' && search.trim().length > 0) {
+        const searchRegex = new RegExp(search.trim(), 'i');
+        query.$or = [
+          { parentName: searchRegex },
+          { parentMobile: searchRegex },
+          { parentEmail: searchRegex },
+          { childName: searchRegex }
+        ];
+      }
+
+      // Add filters for allowed fields (and ignore pagination fields)
+      // You may add more allowed filter fields as desired
+      const allowedFilters = [
+        "status", "staff", "referralSource", "parentMobile", "parentName", "childName", "parentArea", "diagnosis"
+      ];
+
+      for (const key of allowedFilters) {
+        if (filters[key]) {
+          query[key] = filters[key];
+        }
+      }
+
+      // Default to 10 per page
+      const skip = (page - 1) * limit;
+
+      // Get total count for pagination
+      const total = await Lead.countDocuments(query);
+
+      // Fetch leads with sorting, pagination, filtering, search
+      const leads = await Lead.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit);
+
+      return res.json({
+        success: true,
+        leads,
+        page,
+        perPage: limit,
+        totalPages: Math.ceil(total / limit),
+        total
+      });
     } catch (error) {
       return res.status(500).json({ success: false, message: "Failed to fetch leads.", error: error.message });
     }

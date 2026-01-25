@@ -271,17 +271,73 @@ incompleteTherapistProfile:false
 
   // Fetch all therapists
   fetchTherapists = async (req, res) => {
-
-
     try {
-      // Populate userId so email appears in .userId.email
-      const therapists = await TherapistProfile.find().populate({
-        path: "userId"
+      // Destructure query params, only allow search input, remove both filters
+      let {
+        page = 1,
+        pageSize = 20,
+        search = "",
+        sortField = "createdAt",
+        sortOrder = "desc"
+      } = req.query;
+
+      page = parseInt(page, 10) || 1;
+      pageSize = parseInt(pageSize, 10) || 20;
+
+      // No filters -- just fetch all
+      let query = {};
+
+      // Setup sorting object
+      let sortObj = {};
+      if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+
+      // Fetch all matching therapists, populate userId for searching in populated data
+      let therapists = await TherapistProfile.find(query)
+        .populate({ path: "userId" })
+        .sort(sortObj)
+        .lean();
+
+      // Search logic: filter over both TherapistProfile and populated userId.* fields in-memory
+      if (search && typeof search === "string" && search.trim().length > 0) {
+        const regex = new RegExp(search.trim(), "i");
+        therapists = therapists.filter(t => {
+          // Search fields direct in TherapistProfile
+          const matchesTherapist = 
+            (t.fullName && regex.test(t.fullName)) ||
+            (t.name && regex.test(t.name)) || // fallback for any legacy use
+            (t.mobile1 && regex.test(t.mobile1)) ||
+            (t.mobile2 && regex.test(t.mobile2)) ||
+            (t.reference && regex.test(t.reference)) ||
+            (t.therapistId && regex.test(t.therapistId)) ||
+            (t.specializations && regex.test(t.specializations));
+
+          // Search in populated userId fields
+          const matchesUser = t.userId && (
+            (t.userId.email && regex.test(t.userId.email)) ||
+            (t.userId.name && regex.test(t.userId.name)) ||
+            (t.userId.phone && regex.test(t.userId.phone)) ||
+            (t.userId.role && regex.test(t.userId.role))
+          );
+
+          return matchesTherapist || matchesUser;
+        });
+      }
+
+      // No other filters
+
+      const total = therapists.length;
+
+      // Pagination
+      const offset = (page - 1) * pageSize;
+      const pagedTherapists = therapists.slice(offset, offset + pageSize);
+
+      res.json({
+        therapists: pagedTherapists,
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
       });
-
-
-
-      res.json({ therapists });
     } catch (e) {
       res.status(500).json({ error: "Failed to fetch therapists", details: e.message });
     }

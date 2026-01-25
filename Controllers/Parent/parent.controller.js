@@ -421,14 +421,13 @@ class ParentController {
   }
 
 
-  // Returns a list of all children assigned to the parent
+  // Returns a paginated & searchable list of all children assigned to the parent
   async getAllChildrens(req, res) {
     try {
       const parentId = req.user.id;
       if (!parentId) {
         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
       }
-      // Replace with real schema/model for child (E.g. Child or Patient)
       const userId = parentId;
 
       // Fetch the user using the given id (parentId)
@@ -437,141 +436,348 @@ class ParentController {
         return res.status(404).json({ success: false, message: "User not found." });
       }
 
-      // Fetch all patient profiles who have userId equal to this user
-      const children = await PatientProfile.find({ userId: user._id }).lean();
+      // --- Pagination & Search Setup ---
+      let { page = 1, limit = 10, search = "" } = req.query;
+      page = Math.max(parseInt(page) || 1, 1);
+      limit = Math.max(parseInt(limit) || 10, 1);
+      search = (search || "").trim();
 
-      res.json({ success: true, data: children });
+      // Build query
+      const dbQuery = { userId: user._id };
+      if (search) {
+        // Searching by child name, patientId, or father's/mother's name (case-insensitive)
+        dbQuery.$or = [
+          { name: { $regex: search, $options: "i" } },
+          { patientId: { $regex: search, $options: "i" } },
+          { fatherFullName: { $regex: search, $options: "i" } },
+          { motherFullName: { $regex: search, $options: "i" } }
+        ];
+      }
+
+      // Get total for pagination
+      const total = await PatientProfile.countDocuments(dbQuery);
+
+      // Fetch paginated results
+      const children = await PatientProfile.find(dbQuery)
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean();
+
+      res.json({
+        success: true,
+        data: children,
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page * limit < total,
+        hasPrevPage: page > 1
+      });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message || String(err) });
     }
   }
 
-  // Returns all appointments for the parent's children
+  // Returns all appointments for the parent's children with proper search & pagination (search/pagination handled at DB, not table, so table refresh does not affect search state)
   async getAllAppointments(req, res) {
     try {
-      // Use a hardcoded parent ID for demonstration. Replace with req.user?._id in production.
       const parentId = req.user.id;
       if (!parentId) {
         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
       }
 
-      // 1. Fetch parent user
+      // Fetch parent user
       const user = await User.findById(parentId).lean();
       if (!user) {
         return res.status(404).json({ success: false, message: "Parent user not found." });
       }
 
-      // 2. Fetch all children (PatientProfiles) who belong to parent user
+      // Fetch all child PatientProfiles for parent
       const children = await PatientProfile.find({ userId: user._id }).lean();
       if (!children || children.length === 0) {
-        return res.json({ success: true, data: [] });
+        return res.json({ success: true, data: [], page: 1, limit: 10, total: 0, totalPages: 1 });
       }
       const childIds = children.map(child => child._id);
 
-      // 3. Fetch all bookings where patient is any of the children
-      // Populate package, patient, therapist, and therapy everywhere (including in sessions)
-      const appointments = await Booking.find({ patient: { $in: childIds } })
+      // --- Pagination & Search ---
+      let { page = 1, limit = 10, search = "" } = req.query;
+      page = Math.max(parseInt(page) || 1, 1);
+      limit = Math.max(parseInt(limit) || 10, 1);
+      search = (search || "").trim();
+
+      // Build the booking query: all bookings for the parent's children
+      const bookingQuery = { patient: { $in: childIds } };
+
+      if (search) {
+        // Build search $or clause, searching by:
+        //   - Booking requestId/appointmentId
+        //   - Patient name/patientId
+        //   - Therapy name
+        //   - Status/RequestStatus
+        //   - Coupon Code
+        //   - Session date/slotId
+        // To efficiently search, we will fetch booking IDs filtered by search then fetch details
+        // Otherwise, we'd need to populate to search across referenced fields.
+        // We'll use aggregation for more sophisticated search
+
+        // Step 1: Build $lookup and $match stages
+        const orConditions = [
+          { requestId: { $regex: search, $options: "i" } },
+          { appointmentId: { $regex: search, $options: "i" } },
+          { status: { $regex: search, $options: "i" } },
+          { requestStatus: { $regex: search, $options: "i" } }
+        ];
+
+        // For patient fields (name, patientId)
+        orConditions.push(
+          { 
+            // Must cast to string for aggregation: look up patient name
+            // We'll look up on PatientProfile as joined
+            "patientProfile.name": { $regex: search, $options: "i" } 
+          },
+          { 
+            "patientProfile.patientId": { $regex: search, $options: "i" } 
+          }
+        );
+
+        // For therapy name
+        orConditions.push(
+          {
+            "therapyProfile.name": { $regex: search, $options: "i" }
+          }
+        );
+
+        // For coupon code (discountInfo.coupon.couponCode)
+        orConditions.push(
+          { "discountInfo.coupon.couponCode": { $regex: search, $options: "i" } }
+        );
+        // For session date and session slotId
+        orConditions.push(
+          { "sessions.date": { $regex: search, $options: "i" } },
+          { "sessions.slotId": { $regex: search, $options: "i" } }
+        );
+
+        // Setup aggregation pipeline for search+pagination
+        const pipeline = [
+          { $match: bookingQuery },
+          // Join for patientProfile on patient
+          {
+            $lookup: {
+              from: 'patientprofiles',
+              localField: 'patient',
+              foreignField: '_id',
+              as: 'patientProfile'
+            }
+          },
+          { $unwind: { path: "$patientProfile", preserveNullAndEmptyArrays: true } },
+          // Join for therapy name
+          {
+            $lookup: {
+              from: 'therapytypes',
+              localField: 'therapy',
+              foreignField: '_id',
+              as: 'therapyProfile'
+            }
+          },
+          { $unwind: { path: "$therapyProfile", preserveNullAndEmptyArrays: true } },
+          // $match with $or search on all keys above
+          { $match: { $or: orConditions } }
+        ];
+
+        // For pagination/total count
+        const pipelineCount = [...pipeline, { $count: "total" }];
+        const pipelineData = [
+          ...pipeline,
+          { $sort: { createdAt: -1, _id: -1 } },
+          { $skip: (page - 1) * limit },
+          { $limit: limit }
+        ];
+
+        // Find total count
+        const countResult = await Booking.aggregate(pipelineCount);
+        const total = countResult?.[0]?.total || 0;
+
+        // Get booking _ids for the paginated result
+        const pagedDocs = await Booking.aggregate([
+          ...pipelineData,
+          { $project: { _id: 1 } }
+        ]);
+        const pagedBookingIds = pagedDocs.map(doc => doc._id);
+
+        // Now fetch/populate the actual paged bookings (full objects with populations)
+        let appointments = [];
+        if (pagedBookingIds.length > 0) {
+          appointments = await Booking.find({ _id: { $in: pagedBookingIds } })
+            .populate({ path: 'package' })
+            .populate({ path: 'patient', model: 'PatientProfile' })
+            .populate({
+              path: 'therapist',
+              model: 'TherapistProfile',
+              select: "therapistId",
+              populate: {
+                path: 'userId',
+                model: 'User',
+                select: 'name'
+              }
+            })
+            .populate({ path: 'therapy', model: 'TherapyType' })
+            .populate({ path: 'payment' })
+            // preserve order
+            .lean();
+
+          // Restore sort order (Mongo may rearrange order on $in)
+          const orderMap = {};
+          pagedBookingIds.forEach((id, i) => { orderMap[String(id)] = i; });
+          appointments.sort((a, b) => (orderMap[String(a._id)] ?? 0) - (orderMap[String(b._id)] ?? 0));
+        }
+
+        // --- [continue after population below...]
+
+        // Gather all therapist ids and therapy ids used in all sessions
+        const therapistIds = [];
+        appointments.forEach((appointment) => {
+          if (Array.isArray(appointment.sessions)) {
+            appointment.sessions.forEach((session) => {
+              if (session.therapist) therapistIds.push(session.therapist);
+            });
+          }
+        });
+        const uniqueTherapistIds = [...new Set(therapistIds.map(id => id?.toString()).filter(Boolean))];
+        const therapists = await TherapistProfile.find({ _id: { $in: uniqueTherapistIds } })
+          .populate({
+            path: 'userId',
+            model: 'User',
+            select: 'name'
+          })
+          .select('userId name therapistId')
+          .lean();
+        const therapistMap = {};
+        therapists.forEach(t => { therapistMap[String(t._id)] = t; });
+
+        // Attach therapist object on sessions
+        for (const appointment of appointments) {
+          if (Array.isArray(appointment.sessions)) {
+            appointment.sessions = appointment.sessions.map((session) => {
+              const sessionCopy = { ...session };
+              if (session.therapist && therapistMap[session.therapist?.toString()]) {
+                sessionCopy.therapist = therapistMap[session.therapist?.toString()];
+              }
+              return sessionCopy;
+            });
+          }
+        }
+
+        // Fetch and attach edit requests
+        const appointmentIds = appointments.map(a => a._id);
+        const sessionEditRequests = await SessionEditRequest.find({ appointmentId: { $in: appointmentIds } }).lean();
+        const editRequestsByAppointment = {};
+        sessionEditRequests.forEach(er => {
+          const apptId = er.appointmentId?.toString?.() || er.appointmentId;
+          if (!editRequestsByAppointment[apptId]) editRequestsByAppointment[apptId] = [];
+          editRequestsByAppointment[apptId].push(er);
+        });
+        for (const appointment of appointments) {
+          const apptId = appointment._id?.toString?.() || appointment._id;
+          appointment.editRequests = editRequestsByAppointment[apptId] || [];
+        }
+
+        res.json({
+          success: true,
+          data: appointments,
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+          hasNextPage: page * limit < total,
+          hasPrevPage: page > 1
+        });
+        return;
+      }
+
+      // --- No search filter: paginate ALL for parent's children ---
+      // Get total
+      const total = await Booking.countDocuments(bookingQuery);
+
+      // Get paginated result
+      let appointments = await Booking.find(bookingQuery)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
         .populate({ path: 'package' })
         .populate({ path: 'patient', model: 'PatientProfile' })
-        .populate({ 
-          path: 'therapist', 
+        .populate({
+          path: 'therapist',
           model: 'TherapistProfile',
-          select:"therapistId",
-          populate: { 
-            path: 'userId', 
-            model: 'User', 
-            select: 'name' // Only fetch the name field in the User document 
+          select: "therapistId",
+          populate: {
+            path: 'userId',
+            model: 'User',
+            select: 'name'
           }
         })
         .populate({ path: 'therapy', model: 'TherapyType' })
         .populate({ path: 'payment' })
         .lean();
 
-
-
-
-      // Gather all therapist ids and therapy ids used in all sessions
+      // Therapist for sessions
       const therapistIds = [];
-      const therapyIds = [];
-      appointments.forEach((appointment, i) => {
+      appointments.forEach((appointment) => {
         if (Array.isArray(appointment.sessions)) {
-          appointment.sessions.forEach((session, j) => {
+          appointment.sessions.forEach((session) => {
             if (session.therapist) therapistIds.push(session.therapist);
-            if (session.therapy) therapyIds.push(session.therapy);
-            // Check session structure
-
           });
         }
       });
-
-
-      // Unique ids
       const uniqueTherapistIds = [...new Set(therapistIds.map(id => id?.toString()).filter(Boolean))];
-      const uniqueTherapyIds = [...new Set(therapyIds.map(id => id?.toString()).filter(Boolean))];
-
-
-
-      // Fetch all therapist User docs and TherapyType docs
       const therapists = await TherapistProfile.find({ _id: { $in: uniqueTherapistIds } })
-        .populate({ 
-          path: 'userId', 
-          model: 'User', 
-          select: 'name' // Only fetch the name field in the User document 
+        .populate({
+          path: 'userId',
+          model: 'User',
+          select: 'name'
         })
-        .select('userId name therapistId') // Only fetch userId and name in TherapistProfile
+        .select('userId name therapistId')
         .lean();
-
-
-      // Build lookup maps
       const therapistMap = {};
       therapists.forEach(t => { therapistMap[String(t._id)] = t; });
 
-
-
-
-
-      // Attach the populated therapist & therapy for each session
-      for (const [i, appointment] of appointments.entries()) {
+      // Attach therapist object on sessions
+      for (const appointment of appointments) {
         if (Array.isArray(appointment.sessions)) {
-          appointment.sessions = appointment.sessions.map((session, j) => {
+          appointment.sessions = appointment.sessions.map((session) => {
             const sessionCopy = { ...session };
             if (session.therapist && therapistMap[session.therapist?.toString()]) {
               sessionCopy.therapist = therapistMap[session.therapist?.toString()];
             }
-          
             return sessionCopy;
           });
         }
       }
 
-      // INSERT_YOUR_CODE
-
-      // Fetch all session edit requests for these appointments and map them by appointmentId and sessionId
-
+      // Fetch and attach edit requests
       const appointmentIds = appointments.map(a => a._id);
-      // Only fetch edit requests for these appointments
       const sessionEditRequests = await SessionEditRequest.find({ appointmentId: { $in: appointmentIds } }).lean();
-
-      // Map edit requests by appointmentId (array), for direct access
       const editRequestsByAppointment = {};
       sessionEditRequests.forEach(er => {
         const apptId = er.appointmentId?.toString?.() || er.appointmentId;
         if (!editRequestsByAppointment[apptId]) editRequestsByAppointment[apptId] = [];
         editRequestsByAppointment[apptId].push(er);
       });
-
-      // Attach all session edit requests for this appointment to appointment object (flat array)
       for (const appointment of appointments) {
         const apptId = appointment._id?.toString?.() || appointment._id;
         appointment.editRequests = editRequestsByAppointment[apptId] || [];
       }
 
-      console.log(appointments);
+      res.json({
+        success: true,
+        data: appointments,
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page * limit < total,
+        hasPrevPage: page > 1
+      });
 
-
-
-
-      res.json({ success: true, data: appointments });
     } catch (err) {
       console.error("[getAllAppointments] error:", err);
       res.status(500).json({ success: false, error: err.message || String(err) });
@@ -605,26 +811,102 @@ class ParentController {
     try {
       const parentId = req.user.id;
 
-      // Fetch patients for dropdown
-      // Only fetch patient profiles belonging to this parent
-      const patientProfiles = await PatientProfile.find({ userId: parentId }, "name userId patientId mobile1").populate({
-        path: "userId",
-        select: "name",
-      });
+      // Pagination & Search setup for patients dropdown
+      let {
+        patientPage = 1,
+        patientLimit = 25,
+        patientSearch = ""
+      } = req.query;
+      patientPage = Math.max(parseInt(patientPage) || 1, 1);
+      patientLimit = Math.max(parseInt(patientLimit) || 25, 1);
+      patientSearch = (patientSearch || "").trim();
 
-      const patients = patientProfiles.map((profile) => ({
+      const patientQuery = { userId: parentId };
+      if (patientSearch) {
+        patientQuery.$or = [
+          { name: { $regex: patientSearch, $options: "i" } },
+          { patientId: { $regex: patientSearch, $options: "i" } },
+          { mobile1: { $regex: patientSearch, $options: "i" } }
+        ];
+      }
+
+      // Find total patients for pagination
+      const totalPatients = await PatientProfile.countDocuments(patientQuery);
+
+      // Search & paginated fetch of patient profiles
+      const patientProfiles = await PatientProfile.find(
+        patientQuery,
+        "name userId patientId mobile1"
+      )
+        .populate({ path: "userId", select: "name" })
+        .skip((patientPage - 1) * patientLimit)
+        .limit(patientLimit)
+        .lean();
+
+      const patients = (patientProfiles || []).map((profile) => ({
         id: profile._id,
         patientId: profile.patientId,
         name: profile.name || "",
         phoneNo: profile.mobile1 || "",
       }));
 
-      // Fetch therapy types and packages
-      const therapyTypes = await TherapyType.find();
-      const packages = await Package.find();
+      // Therapy Types: pagination/search support
+      let {
+        therapyPage = 1,
+        therapyLimit = 100,
+        therapySearch = ""
+      } = req.query;
+      therapyPage = Math.max(parseInt(therapyPage) || 1, 1);
+      therapyLimit = Math.max(parseInt(therapyLimit) || 100, 1);
+      therapySearch = (therapySearch || "").trim();
 
-      // Fetch all active therapists with their holidays
-      const activeTherapists = await (await import("../../Schema/user.schema.js")).TherapistProfile.aggregate([
+      const therapyQuery = therapySearch
+        ? { name: { $regex: therapySearch, $options: "i" } }
+        : {};
+
+      const totalTherapy = await TherapyType.countDocuments(therapyQuery);
+      const therapyTypes = await TherapyType.find(therapyQuery)
+        .skip((therapyPage - 1) * therapyLimit)
+        .limit(therapyLimit)
+        .lean();
+
+      // Packages: pagination/search support
+      let {
+        packagePage = 1,
+        packageLimit = 100,
+        packageSearch = ""
+      } = req.query;
+      packagePage = Math.max(parseInt(packagePage) || 1, 1);
+      packageLimit = Math.max(parseInt(packageLimit) || 100, 1);
+      packageSearch = (packageSearch || "").trim();
+
+      const packageQuery = packageSearch
+        ? {
+            $or: [
+              { name: { $regex: packageSearch, $options: "i" } },
+              { packageId: { $regex: packageSearch, $options: "i" } }
+            ]
+          }
+        : {};
+
+      const totalPackages = await Package.countDocuments(packageQuery);
+      const packages = await Package.find(packageQuery)
+        .skip((packagePage - 1) * packageLimit)
+        .limit(packageLimit)
+        .lean();
+
+      // Therapists: pagination/search support
+      let {
+        therapistPage = 1,
+        therapistLimit = 50,
+        therapistSearch = ""
+      } = req.query;
+      therapistPage = Math.max(parseInt(therapistPage) || 1, 1);
+      therapistLimit = Math.max(parseInt(therapistLimit) || 50, 1);
+      therapistSearch = (therapistSearch || "").trim();
+
+      // Therapist text search applies on user's name and therapistId
+      const therapistLookupPipeline = [
         {
           $lookup: {
             from: "users",
@@ -635,22 +917,50 @@ class ParentController {
         },
         { $unwind: "$user" },
         { $match: { "user.status": "active" } },
-        {
-          $project: {
-            _id: 1,
-            therapistId: 1,
-            name: "$user.name",
-            holidays: 1,
-            mobile1: 1
+      ];
+      if (therapistSearch) {
+        therapistLookupPipeline.push({
+          $match: {
+            $or: [
+              { "user.name": { $regex: therapistSearch, $options: "i" } },
+              { therapistId: { $regex: therapistSearch, $options: "i" } }
+            ]
           }
+        });
+      }
+      therapistLookupPipeline.push({
+        $project: {
+          _id: 1,
+          therapistId: 1,
+          name: "$user.name",
+          holidays: 1,
+          mobile1: 1
         }
+      });
+
+      // Count for therapists
+      const totalTherapistsAgg = [
+        ...therapistLookupPipeline,
+        { $count: "total" }
+      ];
+      // Paginated therapists fetch (pipeline)
+      const therapistAggPaginated = [
+        ...therapistLookupPipeline,
+        { $skip: (therapistPage - 1) * therapistLimit },
+        { $limit: therapistLimit }
+      ];
+
+      const TherapistProfileModel = (await import("../../Schema/user.schema.js")).TherapistProfile;
+      const [totalTherapistsResult, activeTherapists] = await Promise.all([
+        TherapistProfileModel.aggregate(totalTherapistsAgg),
+        TherapistProfileModel.aggregate(therapistAggPaginated)
       ]);
-      
-      // 2. Get bookings count per therapist grouped by date
+      const totalTherapists = totalTherapistsResult && totalTherapistsResult[0]?.total ? totalTherapistsResult[0].total : 0;
+
+      // Get bookings count per therapist grouped by date
+      // (not paginated; assumes all for calendar display)
       const bookingCounts = await Booking.aggregate([
-        {
-          $unwind: "$sessions"
-        },
+        { $unwind: "$sessions" },
         {
           $group: {
             _id: { therapist: "$therapist", date: "$sessions.date" },
@@ -661,28 +971,82 @@ class ParentController {
 
       const therapistBookingMap = {};
       bookingCounts.forEach((row) => {
-        const therapistId = row._id.therapist.toString();
+        const therapistId = row._id.therapist?.toString?.() || "";
         const date = row._id.date;
         if (!therapistBookingMap[therapistId]) therapistBookingMap[therapistId] = {};
         therapistBookingMap[therapistId][date] = row.count;
       });
 
-      const therapistsWithCounts = activeTherapists.map((t) => {
+      const therapistsWithCounts = (activeTherapists || []).map((t) => {
         const bookingsByDate = therapistBookingMap[t._id.toString()] || {};
         return { ...t, bookingsByDate };
       });
 
-      // Fetch discount coupons (for booking form, show only enabled)
-      const coupons = await DiscountModel.find({ discountEnabled: true }).sort({ createdAt: -1 }).lean();
+      // Coupons: search & paginated
+      let {
+        couponPage = 1,
+        couponLimit = 50,
+        couponSearch = ""
+      } = req.query;
+      couponPage = Math.max(parseInt(couponPage) || 1, 1);
+      couponLimit = Math.max(parseInt(couponLimit) || 50, 1);
+      couponSearch = (couponSearch || "").trim();
 
+      const couponQuery = {
+        discountEnabled: true,
+        ...(couponSearch && {
+          $or: [
+            { couponCode: { $regex: couponSearch, $options: "i" } },
+            { description: { $regex: couponSearch, $options: "i" } }
+          ]
+        })
+      };
+
+      const totalCoupons = await DiscountModel.countDocuments(couponQuery);
+      const coupons = await DiscountModel.find(couponQuery)
+        .sort({ createdAt: -1 })
+        .skip((couponPage - 1) * couponLimit)
+        .limit(couponLimit)
+        .lean();
+
+      // Compose final response, with pagination info for each section
       return res.json({
         success: true,
         patients,
+        patientPage,
+        patientLimit,
+        totalPatients,
+        patientTotalPages: Math.ceil(totalPatients / patientLimit),
+        hasMorePatients: patientPage * patientLimit < totalPatients,
+
         therapyTypes,
+        therapyPage,
+        therapyLimit,
+        totalTherapy,
+        therapyTotalPages: Math.ceil(totalTherapy / therapyLimit),
+        hasMoreTherapy: therapyPage * therapyLimit < totalTherapy,
+
         packages,
+        packagePage,
+        packageLimit,
+        totalPackages,
+        packageTotalPages: Math.ceil(totalPackages / packageLimit),
+        hasMorePackages: packagePage * packageLimit < totalPackages,
+
         therapists: activeTherapists,
         therapistsWithCounts,
-        coupons
+        therapistPage,
+        therapistLimit,
+        totalTherapists,
+        therapistTotalPages: Math.ceil(totalTherapists / therapistLimit),
+        hasMoreTherapists: therapistPage * therapistLimit < totalTherapists,
+
+        coupons,
+        couponPage,
+        couponLimit,
+        totalCoupons,
+        couponTotalPages: Math.ceil(totalCoupons / couponLimit),
+        hasMoreCoupons: couponPage * couponLimit < totalCoupons
       });
 
     } catch (error) {
@@ -808,16 +1172,28 @@ class ParentController {
   // INSERT_YOUR_CODE
 
   // Fetch all booking requests for the logged-in parent (optionally can filter as needed)
+  /**
+   * Fetch all booking requests for the logged-in parent, with server-side search and pagination.
+   * Query Params:
+   *   - search: string (optional, search by patient name/id, therapist name/id, therapy/package, requestId)
+   *   - page: number (1-based)
+   *   - limit: number (default 10)
+   */
   async getAllBookingRequests(req, res) {
     try {
-      const parentUserId =  req.user?.id;
+      const parentUserId = req.user?.id;
 
-      // Support filter: only my requests
-      const filter = {};
+      // --- Server-side Pagination ---
+      let page = Number(req.query.page) || 1;
+      let limit = Math.max(1, Math.min(Number(req.query.limit) || 10, 100)); // Max 100 per page
+      const skip = (page - 1) * limit;
+
+      // --- Server-side Search ---
+      const search = (req.query.search || "").trim();
+      let filter = {};
+
       if (parentUserId) {
-        // Find all PatientProfiles for this parent
-
-        // Fetch the user first, then fetch all Patient Profiles for that user
+        // Step 1: Find user and all their PatientProfiles (children)
         const user = await User.findById(parentUserId).lean();
         if (!user) {
           return res.status(404).json({ success: false, message: "User not found" });
@@ -828,29 +1204,116 @@ class ParentController {
         if (myPatientIds.length > 0) {
           filter.patient = { $in: myPatientIds };
         } else {
-          // No patients for this parent, no booking requests
-          return res.json({ success: true, bookingRequests: [] });
+          // Parent has no children, nothing to return
+          return res.json({ success: true, bookingRequests: [], total: 0, page, totalPages: 1 });
         }
       }
 
-      const requests = await BookingRequests.find(filter)
-        .populate("package")
-        .populate({
-          path: "patient",
-          model: "PatientProfile",
-          populate: {
-            path: "userId",
-            model: "User"
+      // Prepare aggregate pipeline for search on patient/therapist/therapy fields
+      const aggregatePipeline = [
+        // Filter: matching this parent
+        { $match: filter },
+        // Lookup: PatientProfile
+        {
+          $lookup: {
+            from: "patientprofiles",
+            localField: "patient",
+            foreignField: "_id",
+            as: "patient",
           }
-        })
-        .populate({ path: "therapy", model: "TherapyType" })
-        .sort({ createdAt: -1 });
+        },
+        { $unwind: "$patient" },
+        // Lookup: userId in patient
+        {
+          $lookup: {
+            from: "users",
+            localField: "patient.userId",
+            foreignField: "_id",
+            as: "patient.userObj",
+          }
+        },
+        {
+          $addFields: {
+            "patient.user": { $arrayElemAt: ["$patient.userObj", 0] }
+          }
+        },
+        // Lookup: therapy
+        {
+          $lookup: {
+            from: "therapytypes",
+            localField: "therapy",
+            foreignField: "_id",
+            as: "therapy",
+          }
+        },
+        { $unwind: { path: "$therapy", preserveNullAndEmptyArrays: true } },
+        // Lookup: package
+        {
+          $lookup: {
+            from: "packages",
+            localField: "package",
+            foreignField: "_id",
+            as: "package",
+          }
+        },
+        { $unwind: { path: "$package", preserveNullAndEmptyArrays: true } },
+      ];
+
+      // If search present, add $match with OR on relevant fields
+      if (search) {
+        const regex = new RegExp(search, "i");
+        aggregatePipeline.push({
+          $match: {
+            $or: [
+              { "patient.name": regex },
+              { "patient.patientId": regex },
+              { "patient.user.name": regex },
+              { "therapy.name": regex },
+              { "package.name": regex },
+              { "requestId": regex },
+              { "appointmentId": regex }
+              // Add more fields as needed
+            ]
+          }
+        });
+      }
+
+      // --- For total count (before paginating) ---
+      const countPipeline = [...aggregatePipeline, { $count: "total" }];
+      const countResult = await BookingRequests.aggregate(countPipeline).allowDiskUse(true);
+      const total = countResult[0]?.total || 0;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      if (page > totalPages) page = totalPages;
+      const newSkip = (page - 1) * limit;
+
+      // --- Pagination + sorting (after search/filter) ---
+      aggregatePipeline.push({ $sort: { createdAt: -1 } });
+      aggregatePipeline.push({ $skip: newSkip });
+      aggregatePipeline.push({ $limit: limit });
+
+      // Clean up embedded "userObj" after joins
+      aggregatePipeline.push({
+        $project: {
+          "patient.userObj": 0,
+        }
+      });
+
+      // Run aggregate
+      const requests = await BookingRequests.aggregate(aggregatePipeline).allowDiskUse(true);
+
       res.json({
         success: true,
-        bookingRequests: requests
+        bookingRequests: requests,
+        total,
+        page,
+        totalPages,
+        limit,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
       });
+
     } catch (error) {
-      console.error("[GET ALL BOOKING REQUESTS]", error);
+      console.error("[GET ALL BOOKING REQUESTS] (search/pagination)", error);
       res.status(500).json({
         success: false,
         message: "Failed to fetch booking requests.",
@@ -1194,11 +1657,20 @@ class ParentController {
   /**
    * Fetch User, then Patient Profiles, then all their Bookings, and populate payments for each Booking.
    */
+  /**
+   * Get invoice and payment details for this parent's children
+   * Supports: search (by patient name/ID, paymentId), pagination (?page, ?limit)
+   */
   async getInvoiceAndPayment(req, res) {
     try {
       const userId = req.user.id;
 
-      // 1. Fetch User (assuming you have a User model)
+      // Parse query parameters for search & pagination
+      const search = (req.query.search || "").trim();
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 10, 100));
+
+      // 1. Fetch User
       const user = await User.findById(userId);
       if (!user) {
         return res.status(404).json({
@@ -1208,7 +1680,7 @@ class ParentController {
       }
 
       // 2. Fetch all Patient Profiles linked to this user
-      const patientProfiles = await PatientProfile.find({ userId: userId });
+      const patientProfiles = await PatientProfile.find({ userId });
       if (!patientProfiles || patientProfiles.length === 0) {
         return res.status(404).json({
           success: false,
@@ -1217,8 +1689,34 @@ class ParentController {
       }
       const patientProfileIds = patientProfiles.map((p) => p._id);
 
-      // 3. Fetch all Bookings for these Patient Profiles and populate related fields + payments
-      const bookings = await Booking.find({ patient: { $in: patientProfileIds } })
+      // 3. Build Booking query (with search if provided)
+      let bookingQuery = { patient: { $in: patientProfileIds } };
+      if (search.length > 0) {
+        // build a regex for "patient name", "patientId", or paymentId on payment subdocs
+        const patientProfileIdObj = {}; // for $elemMatch on populate
+        bookingQuery = {
+          ...bookingQuery,
+          $or: [
+            // try patient name or patientId
+            { 'patientNameForSearch': { $regex: search, $options: "i" } }, // fallback if you set this field
+            // fallback: support searching via $lookup on patient model (patient.name matching)
+            // But since we do not have $lookup directly, we filter after population below
+          ]
+        };
+      }
+
+      // 4. Count matching bookings (for pagination)
+      // We'll fetch all, but filter by populated patient/payment for search after pop if needed
+      const totalCount = await Booking.countDocuments({ patient: { $in: patientProfileIds } });
+
+      // 5. Pagination: skip/limit
+      const skip = (page - 1) * limit;
+
+      // 6. Fetch and populate bookings for this parent, sorted by most recent
+      let bookings = await Booking.find({ patient: { $in: patientProfileIds } })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
         .populate("package")
         .populate({
           path: "patient",
@@ -1249,7 +1747,37 @@ class ParentController {
           model: "Payment"
         });
 
-      // Structure all populated payments: [{ InvoiceId, date, patientName, amount, status }]
+      // 7. Search filtering for patient name/ID & paymentId (since not in root doc, filter after populate)
+      if (search.length > 0) {
+        const searchLower = search.toLowerCase();
+        bookings = bookings.filter(b => {
+          // Check patient name
+          let found = false;
+          if (b.patient?.name && b.patient.name.toLowerCase().includes(searchLower)) {
+            found = true;
+          }
+          // Check patientId
+          if (!found && b.patient?.patientId && (b.patient.patientId + "").toLowerCase().includes(searchLower)) {
+            found = true;
+          }
+          // Check paymentId inside payment(s)
+          if (!found && b.payment) {
+            // Either is array or single
+            let payments = Array.isArray(b.payment) ? b.payment : [b.payment];
+            for (let pay of payments) {
+              if (!pay) continue;
+              if (pay.paymentId && (pay.paymentId + "").toLowerCase().includes(searchLower)) {
+                found = true;
+                break;
+              }
+            }
+          }
+          // Optionally could also add search for InvoiceId, status, or other fields
+          return found;
+        });
+      }
+
+      // 8. Structure all payments for these filtered bookings
       const paymentDetails = [];
       for (const booking of bookings) {
         // May be a single payment, or potentially an array (if ref type is array), handle both
@@ -1263,8 +1791,8 @@ class ParentController {
           if (!pay) continue;
           let invoiceId = pay.paymentId ? pay.paymentId.toString() : "";
           let date = pay.createdAt || pay.date || booking.createdAt;
-          // Try to resolve patient name from populated path
           let patientName = "";
+          // Patient name from populated booking
           if (
             booking.patient &&
             booking.patient.userId &&
@@ -1274,7 +1802,7 @@ class ParentController {
           } else if (booking.patient && booking.patient.name) {
             patientName = booking.patient.name;
           }
-          let patientId = booking.patient.patientId;
+          let patientId = booking.patient ? booking.patient.patientId : undefined;
           // Fallback: user field
           if (!patientName && user && user.name) patientName = user.name;
 
@@ -1295,7 +1823,11 @@ class ParentController {
       res.json({
         success: true,
         payments: paymentDetails,
+        total: search.length > 0 ? paymentDetails.length : totalCount,
+        page,
+        limit,
       });
+
     } catch (error) {
       console.error("[GET INVOICE AND PAYMENT]", error);
       res.status(500).json({

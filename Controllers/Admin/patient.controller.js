@@ -285,11 +285,81 @@ class PatientAdminController {
   }
 
   // Fetch all patients (join with User)
+  // Fetch all patients (with search and pagination similar to therapist controller)
   async getAllPatients(req, res) {
     try {
-      // Populates userId reference from User collection
-      const patients = await PatientProfile.find().populate("userId");
-      return res.json({ success: true, patients });
+      let {
+        page = 1,
+        pageSize = 20,
+        search = "",
+        sortField = "createdAt",
+        sortOrder = "desc"
+      } = req.query;
+
+      page = parseInt(page, 10) || 1;
+      pageSize = parseInt(pageSize, 10) || 20;
+
+      // No filters -- just fetch all first
+      let query = {};
+
+      // Sort setup
+      let sortObj = {};
+      if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+
+      // Fetch all matching patients, populate userId for searching in populated data
+      let patients = await PatientProfile.find(query)
+        .populate({ path: "userId" })
+        .sort(sortObj)
+        .lean();
+
+      // Search logic: filter over both PatientProfile and populated userId.* fields in-memory
+      if (search && typeof search === "string" && search.trim().length > 0) {
+        const regex = new RegExp(search.trim(), "i");
+        patients = patients.filter(p => {
+          // Search fields direct in PatientProfile
+          const matchesProfile =
+            (p.name && regex.test(p.name)) ||
+            (p.patientId && regex.test(p.patientId)) ||
+            (p.mobile1 && regex.test(p.mobile1)) ||
+            (p.mobile2 && regex.test(p.mobile2)) ||
+            (p.fatherFullName && regex.test(p.fatherFullName)) ||
+            (p.motherFullName && regex.test(p.motherFullName)) ||
+            (p.plannedSessionsPerMonth && regex.test(p.plannedSessionsPerMonth)) ||
+            (p.package && regex.test(p.package)) ||
+            (p.parentEmail && regex.test(p.parentEmail)) ||
+            (p.address && regex.test(p.address)) ||
+            (p.areaName && regex.test(p.areaName)) ||
+            (p.pincode && regex.test(p.pincode)) ||
+            (p.diagnosisInfo && regex.test(p.diagnosisInfo)) ||
+            (p.childReference && regex.test(p.childReference)) ||
+            (p.parentOccupation && regex.test(p.parentOccupation)) ||
+            (p.remarks && regex.test(p.remarks));
+          
+          // Search in populated userId fields
+          const matchesUser = p.userId && (
+            (p.userId.email && regex.test(p.userId.email)) ||
+            (p.userId.name && regex.test(p.userId.name)) ||
+            (p.userId.phone && regex.test(p.userId.phone)) ||
+            (p.userId.role && regex.test(p.userId.role))
+          );
+
+          return matchesProfile || matchesUser;
+        });
+      }
+
+      // Pagination and response
+      const total = patients.length;
+      const offset = (page - 1) * pageSize;
+      const pagedPatients = patients.slice(offset, offset + pageSize);
+
+      return res.json({
+        success: true,
+        patients: pagedPatients,
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      });
     } catch (error) {
       return res.status(500).json({ success: false, message: "Failed to fetch patients.", error: error.message });
     }

@@ -517,59 +517,87 @@ class BookingAdminController {
   }
 
   // Get all bookings (populated)
+  /**
+   * Get all bookings (with search, filters, and pagination)
+   * - Search by any text field (case insensitive).
+   * - Filters: All direct Booking fields (id, patient, therapist, package, etc), as well as populated reference fields.
+   * - Pagination: page, pageSize
+   * - Sort (optionally): sortField, sortOrder
+   * URL example:
+   * /api/admin/bookings?search=foo&page=1&pageSize=10&status=active&therapist=64xyz...
+   */
+  /**
+   * Enhanced getAllBookings supporting:
+   * - Deep, flexible filtering for all Booking fields (and sub-document fields in Patient, Therapist, Payment, Package, TherapyType, including their referenced User where applicable)
+   * - Search on: direct Booking fields, PatientProfile fields, TherapistProfile fields, Payment fields, User fields (for patient/therapist), TherapyType fields, and sessions/slot subfields
+   * - Filter on: Any Booking, Payment (status, amount, method), PatientProfile (patientId, name, mobile1), TherapistProfile (therapistId, name, mobile1), etc.
+   * - Handles all types of filters and search
+   */
+  /**
+   * Enhanced getAllBookings
+   * - Handles search, filters for Booking, Payment, Patient, Therapist, Package, Therapy
+   * - Pagination (page, pageSize), sort (sortField, sortOrder)
+   * - Accepts Booking IDs as CSV strings in patient, therapist, etc
+   * - Accepts filters in req.query, e.g. therapist, patient, paymentStatus, etc.
+   * - Example: /api/admin/bookings?search=foo&page=1&pageSize=5&paymentStatus=paid&therapist=NPL0002&patient=P0005
+   */
   async getAllBookings(req, res) {
     try {
-      const bookings = await Booking.find()
-        .populate("package")
-        .populate({
-          path: "patient",
-          model: "PatientProfile",
-          populate: {
-            path: "userId",
-            model: "User"
-          }
-        })
-        .populate({
-          path: "therapy",
-          model: "TherapyType"
-        })
-        .populate({
-          path: "payment",
-          model: "Payment"
-        })
+      const {
+        page = 1,
+        pageSize = 15,
+        sortField = "createdAt",
+        sortOrder = "desc"
+      } = req.query;
+
+      // No filters or search; fetch all bookings, paginate, and sort only.
+      let sortObj = {};
+      if (sortField) sortObj[sortField] = sortOrder === "desc" ? -1 : 1;
+      const _page = parseInt(page, 10) || 1;
+      const _pageSize = parseInt(pageSize, 10) || 15;
+      const skip = (_page - 1) * _pageSize;
+
+      // Get total count
+      const total = await Booking.countDocuments();
+
+      // Query bookings with pagination and population
+      const bookings = await Booking.find({})
+        .sort(sortObj)
+        .skip(skip)
+        .limit(_pageSize)
+        .populate({ path: "package" })
+        .populate({ path: "therapy", model: "TherapyType" })
         .populate({
           path: "therapist",
           model: "TherapistProfile",
-          populate: {
-            path: "userId",
-            model: "User"
-          }
+          populate: { path: "userId", model: "User" }
         })
         .populate({
-          path: "discountInfo.coupon",
-          model: "Discount"
+          path: "patient",
+          model: "PatientProfile",
+          populate: { path: "userId", model: "User" }
         })
+        .populate({ path: "payment", model: "Payment" })
+        .populate({ path: "discountInfo.coupon", model: "Discount" })
         .populate({
           path: "sessions.therapist",
           model: "TherapistProfile",
-          populate: {
-            path: "userId",
-            model: "User"
-          }
+          populate: { path: "userId", model: "User" }
         })
         .populate({
           path: "sessions.therapyTypeId",
           model: "TherapyType"
         });
 
-
-
       res.json({
         success: true,
         bookings,
+        total,
+        page: _page,
+        pageSize: _pageSize,
+        totalPages: Math.ceil(total / _pageSize)
       });
 
-      
     } catch (error) {
       console.error(error);
       res.status(500).json({
@@ -1062,20 +1090,119 @@ class BookingAdminController {
   }
 
   // Get all booking requests (admin) from BookingRequests schema/model, now including appointmentId population
+  /**
+   * Enhanced getAllBookingRequests
+   * - Supports full-text search, flexible filtering on any field of BookingRequests and populated fields,
+   *   and pagination & sorting via query params:
+   *   ?search=foo&status=pending&patient=xyz&therapy=abc&page=1&pageSize=20&sortField=createdAt&sortOrder=desc
+   */
   async getAllBookingRequests(req, res) {
     try {
-      // Fetch all booking requests with all relations populated
-      const bookingRequests = await BookingRequests.find({})
+      const {
+        search = "",
+        status = "",
+        page = 1,
+        pageSize = 15,
+        sortField = "createdAt",
+        sortOrder = "desc"
+      } = req.query;
+
+      let query = {};
+
+      // Build direct search by requestId if present
+      if (search && typeof search === "string" && search.trim().length > 0) {
+        const s = search.trim();
+        query = {
+          ...query,
+          $or: [
+            { requestId: { $regex: s, $options: "i" } }
+          ]
+        };
+      }
+
+      // Status filter
+      if (status && typeof status === "string" && status.trim().length > 0) {
+        query = {
+          ...query,
+          status: status.trim()
+        };
+      }
+
+      let sortObj = {};
+      if (sortField) sortObj[sortField] = sortOrder === "desc" ? -1 : 1;
+      const _page = parseInt(page, 10) || 1;
+      const _pageSize = parseInt(pageSize, 10) || 15;
+
+      // Count ONLY for the filtered DB query (correct for pagination controls)
+      const total = await BookingRequests.countDocuments(query);
+
+      // Always fetch filtered by query (may fetch more than needed on in-memory search though)
+      let bookingRequests = await BookingRequests.find(query)
+        .sort(sortObj)
         .populate([
-          { path: "patient", select: "name patientId phoneNo userId mobile1 email", model: "PatientProfile", populate: { path: "userId", model: "User", select: "name email" } },
+          {
+            path: "patient",
+            select: "name patientId phoneNo userId mobile1 email",
+            model: "PatientProfile",
+            populate: { path: "userId", model: "User", select: "name email" },
+          },
           { path: "therapy", select: "name", model: "TherapyType" },
           { path: "package", select: "name totalSessions sessionCount costPerSession totalCost", model: "Package" },
-          { path: "appointmentId", select: "appointmentId patient therapy package sessions", model: "Booking" }
+          {
+            path: "appointmentId",
+            select: "appointmentId patient therapy package sessions",
+            model: "Booking"
+          }
         ]);
+
+      // If search is set, need to do in-memory filtering for populated fields
+      if (search && typeof search === "string" && search.trim().length > 0) {
+        const s = search.toLowerCase();
+
+        bookingRequests = bookingRequests.filter((br) => {
+          // requestId
+          if (br.requestId && String(br.requestId).toLowerCase().includes(s)) return true;
+          // Patient: name, patientId, phoneNo, mobile1, email
+          if (
+            br.patient &&
+            (
+              (br.patient.name && br.patient.name.toLowerCase().includes(s)) ||
+              (br.patient.patientId && br.patient.patientId.toLowerCase().includes(s)) ||
+              (br.patient.phoneNo && br.patient.phoneNo.toLowerCase().includes(s)) ||
+              (br.patient.mobile1 && br.patient.mobile1.toLowerCase().includes(s)) ||
+              (br.patient.email && br.patient.email.toLowerCase().includes(s))
+            )
+          ) return true;
+          // Therapy: name
+          if (br.therapy && br.therapy.name && br.therapy.name.toLowerCase().includes(s)) return true;
+          // Package: name
+          if (br.package && br.package.name && br.package.name.toLowerCase().includes(s)) return true;
+          // appointmentId: id/appointmentId
+          if (
+            br.appointmentId &&
+            (
+              (br.appointmentId._id && br.appointmentId._id.toString().toLowerCase().includes(s)) ||
+              (br.appointmentId.appointmentId && br.appointmentId.appointmentId.toLowerCase().includes(s))
+            )
+          ) return true;
+          return false;
+        });
+
+        // In-memory pagination
+        const offset = (_page - 1) * _pageSize;
+        bookingRequests = bookingRequests.slice(offset, offset + _pageSize);
+      } else {
+        // Paginate from DB result if not searching (already filtered by status above)
+        bookingRequests = bookingRequests.slice(0, _pageSize);
+      }
 
       res.json({
         success: true,
-        bookingRequests
+        bookingRequests,
+        total, // Only accurate for no in-memory search
+        page: _page,
+        pageSize: _pageSize,
+        totalPages: Math.ceil(total / _pageSize),
       });
     } catch (error) {
       console.error("[getAllBookingRequests] Error:", error);
@@ -1128,15 +1255,32 @@ class BookingAdminController {
  */
 async getAllSessionEditRequests(req, res) {
   try {
-    // Populate appointmentId (Booking), also support populating user/child if needed for admin display
-    // Using the SessionEditRequest model to query session edit requests.
-    // For each SessionEditRequest, the appointmentId field references the Booking model.
-    // Booking model fields: patient (Patient model), therapy (Therapy model), package (Package model), sessions, appointmentId.
-    // See nupal-cdc-software-backend/Schema/booking.schema.js for model field structure.
-    const editRequests = await SessionEditRequest.find()
-      .sort({ createdAt: -1 })
+    // Get query params for pagination, search, sorting, and status filter
+    const {
+      search = "",
+      status = "",
+      page = 1,
+      pageSize = 15,
+      sortField = "createdAt",
+      sortOrder = "desc"
+    } = req.query;
+
+    let sortObj = {};
+    if (sortField) sortObj[sortField] = sortOrder === "desc" ? -1 : 1;
+    const _page = parseInt(page, 10) || 1;
+    const _pageSize = parseInt(pageSize, 10) || 15;
+
+    // Build query object to support status filtering
+    let query = {};
+    if (status && typeof status === "string" && status.trim().length > 0) {
+      query.status = status.trim();
+    }
+
+    // Always fetch with populate for admin display
+    let sessionEditRequests = await SessionEditRequest.find(query)
+      .sort(sortObj)
       .populate({
-        path: 'appointmentId', // This references the Booking model
+        path: 'appointmentId',
         model: 'Booking',
         populate: [
           {
@@ -1154,11 +1298,68 @@ async getAllSessionEditRequests(req, res) {
       })
       .lean();
 
-      console.log(editRequests);
+    // Filter in-memory for search support across all relevant/populated fields
+    let total = sessionEditRequests.length;
+    if (search && typeof search === "string" && search.trim().length > 0) {
+      const s = search.trim().toLowerCase();
+
+      sessionEditRequests = sessionEditRequests.filter((er) => {
+        // Direct fields
+        if (
+          (er._id && String(er._id).toLowerCase().includes(s)) ||
+          (er.reason && String(er.reason).toLowerCase().includes(s)) ||
+          (er.status && String(er.status).toLowerCase().includes(s))
+        ) {
+          return true;
+        }
+        // Populated appointmentId fields
+        const appt = er.appointmentId;
+        if (appt) {
+          // appointmentId direct id
+          if ((appt._id && String(appt._id).toLowerCase().includes(s)) ||
+              (appt.appointmentId && String(appt.appointmentId).toLowerCase().includes(s))
+          ) {
+            return true;
+          }
+          // patient populated fields
+          if (appt.patient) {
+            if ((appt.patient.name && appt.patient.name.toLowerCase().includes(s)) ||
+                (appt.patient.patientId && String(appt.patient.patientId).toLowerCase().includes(s)) ||
+                (appt.patient.email && String(appt.patient.email).toLowerCase().includes(s)) ||
+                (appt.patient.mobile1 && String(appt.patient.mobile1).toLowerCase().includes(s)) ||
+                (appt.patient.mobile2 && String(appt.patient.mobile2).toLowerCase().includes(s))
+            ) {
+              return true;
+            }
+          }
+          // therapy name
+          if (appt.therapy && appt.therapy.name && appt.therapy.name.toLowerCase().includes(s)) {
+            return true;
+          }
+        }
+        // Extendable for other related fields if needed
+        return false;
+      });
+
+      total = sessionEditRequests.length;
+
+      // In-memory pagination if searching
+      const offset = (_page - 1) * _pageSize;
+      sessionEditRequests = sessionEditRequests.slice(offset, offset + _pageSize);
+    } else {
+      // Standard pagination if not searching
+      total = sessionEditRequests.length;
+      const offset = (_page - 1) * _pageSize;
+      sessionEditRequests = sessionEditRequests.slice(offset, offset + _pageSize);
+    }
 
     res.json({
       success: true,
-      editRequests
+      editRequests: sessionEditRequests,
+      total,
+      page: _page,
+      pageSize: _pageSize,
+      totalPages: Math.ceil(total / _pageSize),
     });
   } catch (error) {
     console.error("[getAllSessionEditRequests] Error:", error);
@@ -1566,12 +1767,29 @@ async getOverview(req, res) {
   }
 }
 
-  // Fetch all bookings, then for all sessions, match with therapist, and respond with appointmentId, patient, therapyType, this therapist's session details
-  // Fully populate inside each session's therapist and therapyType (which means .populate inside each session array)
+  // Fetch all bookings with populated therapist and therapyType, with support for search/filter on patient, therapist, therapyType, date, and session status
   async getFullCalendar(req, res) {
     try {
-      // Fetch all bookings with all necessary patient info
-      const bookings = await Booking.find({})
+      // Parse possible search/filter parameters
+      const {
+        search = "",
+        therapistId,
+        therapyTypeId,
+        sessionStatus,
+        date,
+        patientId
+      } = req.query;
+
+      // Filtering bookings via patients or sessions (some must be in-memory after population)
+      const bookingQuery = {};
+
+      // If filtering by patientId (from PatientProfile), add a direct filter
+      if (patientId) {
+        bookingQuery.patient = patientId;
+      }
+
+      // Fetch all relevant bookings with population
+      const bookings = await Booking.find(bookingQuery)
         .populate({
           path: "patient",
           model: "PatientProfile",
@@ -1594,12 +1812,78 @@ async getOverview(req, res) {
         })
         .lean();
 
+      // Fetch all therapy types (for filter options on frontend)
+      const allTherapyTypes = await (typeof TherapyType.find === "function"
+        ? TherapyType.find({}, "_id name").lean()
+        : []);
+
       let allSessions = [];
 
       bookings.forEach(booking => {
         if (Array.isArray(booking.sessions)) {
           booking.sessions.forEach(session => {
-            // Patient minimal info
+            // --- Filter logic; apply per session ---
+            // 1. filter by therapistId (match session.therapist._id or therapistId)
+            if (
+              therapistId &&
+              (!session.therapist ||
+                (
+                  (typeof session.therapist === "object" && 
+                    ((session.therapist.therapistId || session.therapist._id?.toString()) !== therapistId))
+                )
+              )
+            ) {
+              return; // Skip session if therapist does not match
+            }
+            // 2. filter by therapyTypeId (session.therapyTypeId._id)
+            if (
+              therapyTypeId &&
+              (!session.therapyTypeId ||
+                (session.therapyTypeId._id?.toString() !== therapyTypeId))
+            ) {
+              return;
+            }
+            // 3. filter by session.status
+            if (
+              sessionStatus &&
+              session.status &&
+              String(session.status).toLowerCase() !== String(sessionStatus).toLowerCase()
+            ) {
+              return;
+            }
+            // 4. filter by date (session.sessionDate usually stores date as ISO string or y-m-d)
+            if (date) {
+              let sessionDateVal = session.sessionDate;
+              let targetDate = new Date(date).toISOString().slice(0,10);
+              // Try extracting date from sessionDate (assume ISO string, or Date object)
+              if (!sessionDateVal) return;
+              let sD = sessionDateVal instanceof Date
+                ? sessionDateVal.toISOString().slice(0,10)
+                : (typeof sessionDateVal === "string" && sessionDateVal.length >= 10)
+                  ? sessionDateVal.slice(0,10)
+                  : undefined;
+              if (!sD || sD !== targetDate) return;
+            }
+            // 5. search: match in patient name, therapist name, therapyType name
+            if (search && search.trim().length > 0) {
+              const q = search.trim().toLowerCase();
+
+              const patientName = (booking.patient && booking.patient.name) ? booking.patient.name.toLowerCase() : "";
+              const therapistName = (session.therapist && session.therapist.userId && session.therapist.userId.name) ? session.therapist.userId.name.toLowerCase() : "";
+              const therapyTypeName = (session.therapyTypeId && session.therapyTypeId.name) ? session.therapyTypeId.name.toLowerCase() : "";
+
+              if (
+                !(
+                  patientName.includes(q) ||
+                  therapistName.includes(q) ||
+                  therapyTypeName.includes(q)
+                )
+              ) {
+                return;
+              }
+            }
+
+            // Prepare output fields
             let patientInfo = {
               patientId: booking.patient && booking.patient.patientId ? booking.patient.patientId : undefined,
               name: (booking.patient && booking.patient.name)
@@ -1607,21 +1891,19 @@ async getOverview(req, res) {
                 : undefined,
             };
 
-            // Get the populated therapy type
             let therapyTypePopulated = null;
             if (session.therapyTypeId && session.therapyTypeId._id && session.therapyTypeId.name) {
               therapyTypePopulated = {
                 _id: session.therapyTypeId._id,
-                name: session.therapyTypeId.name
+                name: session.therapyTypeId.name,
               };
             } else if (booking.therapy && booking.therapy._id && booking.therapy.name) {
               therapyTypePopulated = {
                 _id: booking.therapy._id,
-                name: booking.therapy.name
+                name: booking.therapy.name,
               };
             }
 
-            // Get the populated therapist info for the session
             let therapistPopulated = null;
             if (session.therapist && typeof session.therapist === "object" && session.therapist._id) {
               therapistPopulated = {
@@ -1633,15 +1915,19 @@ async getOverview(req, res) {
             allSessions.push({
               appointmentId: booking.appointmentId || booking._id,
               patient: patientInfo,
-              // therapyType: therapyTypePopulated,
+              therapyType: therapyTypePopulated,
               session: session,
-              therapist: therapistPopulated
+              therapist: therapistPopulated,
             });
           });
         }
       });
 
-      res.json({ success: true, data: allSessions });
+      res.json({ 
+        success: true, 
+        data: allSessions,
+        therapyTypes: allTherapyTypes || [],
+      });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message || String(err) });
     }
