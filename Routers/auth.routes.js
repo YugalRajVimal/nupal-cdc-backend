@@ -21,7 +21,7 @@ authRouter.post("/super-admin/check-auth",jwtAuth, superAdminAuthController.chec
 authRouter.post("/super-admin/login", superAdminAuthController.login);
 authRouter.post("/super-admin/forgot-password", superAdminAuthController.forgotPassword);
 authRouter.post("/super-admin/verify-account", superAdminAuthController.verifyAccount);
-authRouter.post("/super-admin/reset-password", superAdminAuthController.resetPassword);
+authRouter.post("/super-admin/reset-password",jwtAuth, superAdminAuthController.resetPassword);
 
 
 export default authRouter;

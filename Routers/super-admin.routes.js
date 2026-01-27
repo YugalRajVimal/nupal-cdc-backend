@@ -10,6 +10,7 @@ import discountCouponRouter from "./SuperAdmin/discount-coupons.super-admin.rout
 import usersSuperAdminRouter from "./SuperAdmin/users-super-admin.routes.js";
 import appointmentSuperAdminRouter from "./SuperAdmin/appointments-super-admin.routes.js";
 import financeSuperAdminRouter from "./SuperAdmin/finance.routes.js";
+import { User } from "../Schema/user.schema.js";
 
 
 
@@ -25,6 +26,38 @@ const superAdminRouter = express.Router();
 superAdminRouter.get("/", (req, res) => {
   res.send("Welcome to Nupal CDC Super Admin APIs");
 });
+
+superAdminRouter.get("/profile", async (req, res) => {
+  try {
+    // Assume you have a super admin model
+    // You might want to use the authenticated super-admin's ID in a real setup
+    // Here we'll fetch the "main" admin, assuming singleton
+    // Find from User model by role 'superadmin'
+    const admin = await User.findOne(
+      { role: "superadmin" },
+      "-password" // Exclude the password field
+    );
+
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin profile not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: admin,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching admin profile",
+      error: error.message,
+    });
+  }
+});
+
 
 
 

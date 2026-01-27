@@ -185,42 +185,37 @@ class SuperAdminAuthController {
   // Optional: Reset password after verifying OTP (requires token)
   resetPassword = async (req, res) => {
     try {
-      // The token should be extracted from the Authorization header as "Bearer <token>"
-      const authHeader = req.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ message: "Authorization token missing." });
-      }
+      const { id, role } = req.user;
+      console.log("ResetPassword req.user:", req.user);
 
-      const token = authHeader.split(' ')[1];
-      let decoded;
-      try {
-        decoded = jwt.verify(token, process.env.JWT_SECRET);
-      } catch (err) {
-        return res.status(401).json({ message: "Invalid token." });
-      }
-
-      if (!decoded || decoded.role !== "superadmin" || !decoded.id) {
-        return res.status(401).json({ message: "Invalid credentials." });
+      // Check if user exists and role is superadmin
+      if (!id || role !== "superadmin") {
+        console.log("ResetPassword - Unauthorized: id missing or role not superadmin");
+        return res.status(403).json({ message: "Unauthorized. Only superadmin can reset password." });
       }
 
       const { newPassword } = req.body;
       if (!newPassword || newPassword.length < 6) {
+        console.log("ResetPassword - Invalid newPassword: missing or too short");
         return res.status(400).json({ message: "Password must be at least 6 characters." });
       }
 
       // Fetch the superadmin user and update their password
       const user = await User.findOneAndUpdate(
-        { _id: decoded.id, role: "superadmin" },
-        { password: await bcrypt.hash(newPassword, 10) },
+        { _id: id, role: "superadmin" },
+        { passwordHash: await bcrypt.hash(newPassword, 10) },
         { new: true }
       );
 
       if (!user) {
+        console.log("ResetPassword - Superadmin not found:", id);
         return res.status(404).json({ message: "Superadmin not found." });
       }
 
+      console.log("Superadmin password reset:", user.email || user._id);
       return res.status(200).json({ message: "Password reset successfully." });
     } catch (error) {
+      console.log("ResetPassword error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
   };
