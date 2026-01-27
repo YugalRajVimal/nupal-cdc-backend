@@ -75,7 +75,11 @@ class AuthController {
       }
 
       console.log("[checkAuth] User is authorized.");
-      return res.status(200).json({ message: "Authorized" });
+      return res.status(200).json({ 
+        message: "Authorized",
+        name: dbUser.name,
+        email: dbUser.email
+      });
     } catch (error) {
       console.error("[checkAuth] Error encountered:", error);
       return res.status(401).json({ message: "Unauthorized" });

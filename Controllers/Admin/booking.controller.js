@@ -1381,8 +1381,14 @@ async collectPayment(req, res) {
   session.startTransaction();
   try {
     const { id } = req.params;
+    // paymentType: "full" | "partial"
+    // partialAmount: number (if partial payment)
+    const { paymentType = "full", partialAmount } = req.body;
+
+    console.log(`[collectPayment] Called with id=${id}, paymentType=${paymentType}, partialAmount=${partialAmount}`);
 
     if (!id) {
+      console.log("[collectPayment] Missing Booking ID.");
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -1394,6 +1400,7 @@ async collectPayment(req, res) {
     // Find and update the booking's payment info and mark as paid
     const booking = await Booking.findById(id).session(session);
     if (!booking) {
+      console.log(`[collectPayment] Booking not found for id=${id}.`);
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
@@ -1404,6 +1411,7 @@ async collectPayment(req, res) {
 
     const paymentId = booking.payment;
     if (!paymentId) {
+      console.log(`[collectPayment] No associated paymentId for booking id=${id}.`);
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -1416,6 +1424,7 @@ async collectPayment(req, res) {
     const payment = await Payment.findOne({ _id: paymentId }).session(session);
 
     if (!payment) {
+      console.log(`[collectPayment] Payment record not found for paymentId=${paymentId}.`);
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
@@ -1424,30 +1433,89 @@ async collectPayment(req, res) {
       });
     }
 
-    // Mark payment as paid and set paymentTime
-    payment.status = "paid";
-    payment.paymentTime = new Date();
-    await payment.save({ session });
-
-    // Optionally update booking status as well (and link the payment)
-    booking.paymentStatus = "paid";
-    await booking.save({ session });
-
-    // Record this payment as an income in the finances table
-    // Avoid duplicate finance records for the same payment by checking for it
-    const financeExists = await Finances.findOne({
-      description: { $regex: `Payment for Booking #${booking.appointmentId}`, $options: "i" }
-    }).session(session);
-
     let financeRecord = null;
-    if (!financeExists) {
-      financeRecord = await Finances.create([{
-        date: payment.paymentTime || new Date(),
-        description: `Payment for Booking #${booking.appointmentId}`,
-        type: "income",
-        amount: payment.amount,
-        creditDebitStatus: "credited",
-      }], { session });
+
+    if (paymentType === "partial") {
+      // Partial payment requested
+      const { amountPaid = 0, amount } = payment;
+      const remaining = amount - amountPaid;
+      console.log(`[collectPayment] Partial payment requested. Paid: ${amountPaid}, Amount: ${amount}, Remaining: ${remaining}, partialAmount: ${partialAmount}`);
+
+      // Validate partialAmount
+      if (
+        typeof partialAmount !== "number" ||
+        partialAmount <= 0 ||
+        partialAmount > remaining
+      ) {
+        console.log(`[collectPayment] Invalid partialAmount: ${partialAmount}. Remaining: ${remaining}`);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: `Partial amount to pay must be a number > 0 and <= remaining amount (${remaining}).`
+        });
+      }
+
+      // Update amountPaid and status
+      payment.amountPaid = (payment.amountPaid || 0) + partialAmount;
+
+      if (payment.amountPaid < payment.amount) {
+        payment.status = "partiallypaid";
+        payment.paymentTime = new Date();
+        booking.paymentStatus = "partiallypaid";
+        console.log("[collectPayment] Marking as partiallypaid.");
+      } else {
+        payment.status = "paid";
+        payment.paymentTime = new Date();
+        booking.paymentStatus = "paid";
+        console.log("[collectPayment] Marking as fully paid after partial payment.");
+      }
+      await payment.save({ session });
+      await booking.save({ session });
+
+      // Record this (partial) payment as an income in the finances table
+      // Only record *new* income for this partial payment (not for total)
+      financeRecord = await Finances.create([
+        {
+          date: payment.paymentTime || new Date(),
+          description: `Partial Payment for Booking #${booking.appointmentId}`,
+          type: "income",
+          amount: partialAmount,
+          creditDebitStatus: "credited",
+        }
+      ], { session });
+
+      console.log(`[collectPayment] Finance record created for partial payment: Booking #${booking.appointmentId}, Amount: ${partialAmount}`);
+
+    } else {
+      // Full payment
+      payment.status = "paid";
+      payment.paymentTime = new Date();
+      payment.amountPaid = payment.amount;
+      await payment.save({ session });
+
+      // Optionally update booking status as well (and link the payment)
+      booking.paymentStatus = "paid";
+      await booking.save({ session });
+
+      // Avoid duplicate finance records for the same payment by checking for it
+      const financeExists = await Finances.findOne({
+        description: { $regex: `Payment for Booking #${booking.appointmentId}`, $options: "i" }
+      }).session(session);
+
+      if (!financeExists) {
+        financeRecord = await Finances.create([{
+          date: payment.paymentTime || new Date(),
+          description: `Payment for Booking #${booking.appointmentId}`,
+          type: "income",
+          amount: payment.amount,
+          creditDebitStatus: "credited",
+        }], { session });
+        console.log(`[collectPayment] Finance record created for full payment: Booking #${booking.appointmentId}, Amount: ${payment.amount}`);
+      } else {
+        financeRecord = financeExists;
+        console.log(`[collectPayment] Existing finance record found for Booking #${booking.appointmentId}`);
+      }
     }
 
     await session.commitTransaction();
@@ -1455,10 +1523,17 @@ async collectPayment(req, res) {
 
     res.json({
       success: true,
-      message: "Payment recorded successfully.",
+      message:
+        paymentType === "partial"
+          ? payment.status === "paid"
+            ? "Partial payment received. Booking now fully paid."
+            : "Partial payment received. Remaining balance is due."
+          : "Payment recorded successfully.",
       booking,
       payment,
-      finance: financeRecord ? financeRecord[0] : financeExists
+      finance: Array.isArray(financeRecord)
+        ? financeRecord[0]
+        : financeRecord
     });
 
   } catch (error) {

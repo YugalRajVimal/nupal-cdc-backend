@@ -20,10 +20,14 @@ const PaymentSchema = new Schema({
     type: Number,
     required: true, // Final payment amount after discount
   },
+  amountPaid: {
+    type: Number,
+    default: 0, // Amount actually paid by the user (could be partial)
+  },
   status: {
     type: String,
     required: true,
-    enum: ['pending', 'paid', 'failed', 'refunded'],
+    enum: ['pending', 'partiallypaid', 'paid', 'failed', 'refunded'],
     default: 'pending', // Payment status
   },
   paymentTime: {
