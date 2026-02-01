@@ -2,6 +2,8 @@
 import Lead from "../../Schema/leads.schema.js";
 import mongoose from "mongoose";
 import Counter from "../../Schema/counter.schema.js";
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+
 
 // Utility: Get next lead sequence for LeadID generation
 const getNextSequence = async (name) => {
@@ -41,7 +43,7 @@ class LeadsAdminController {
         appointmentDate,
         appointmentTime,
         status,
-        remarks, // add remarks from body
+        remarks,
       } = req.body;
 
       // Required validations
@@ -54,7 +56,7 @@ class LeadsAdminController {
       const leadId = generateLeadId(leadSeq);
 
       const lead = new Lead({
-        leadId, // Added leadId field
+        leadId,
         callDate,
         staff,
         staffOther,
@@ -72,16 +74,202 @@ class LeadsAdminController {
         visitFinalized,
         appointmentDate,
         appointmentTime,
-        remarks, // save remarks
+        remarks,
         status: status || "pending",
       });
 
       await lead.save();
 
+      // --- Audit log ---
+      try {
+        await AuditLogService.addLog({
+          action: "CREATE_LEAD",
+          user: req?.user?.id,
+          role: req?.user?.role,
+          resource: "Lead",
+          resourceId: lead._id,
+          details: {
+            leadId: lead.leadId,
+            parentName,
+            parentMobile,
+            childName,
+            createdFields: {
+              callDate,
+              staff,
+              staffOther,
+              referralSource,
+              parentRelationship,
+              parentEmail,
+              parentArea,
+              childDOB,
+              childGender,
+              therapistAlready,
+              diagnosis,
+              visitFinalized,
+              appointmentDate,
+              appointmentTime,
+              status,
+              remarks,
+            }
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"]
+        });
+      } catch (auditErr) {
+        // Don't block, just log
+        console.error("Audit log (CREATE_LEAD) failed:", auditErr.message);
+      }
+
       return res.status(201).json({ success: true, message: "Lead added successfully.", lead });
     } catch (error) {
       console.error(error);
       return res.status(500).json({ success: false, message: "Failed to add lead.", error: error.message });
+    }
+  }
+
+  // Edit/update a lead
+  async editLead(req, res) {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid lead ID." });
+      }
+
+      const update = req.body;
+      // Don't allow to unset required fields to null
+      if (
+        ("parentName" in update && !update.parentName) ||
+        ("parentMobile" in update && !update.parentMobile) ||
+        ("childName" in update && !update.childName)
+      ) {
+        return res.status(400).json({ message: "parentName, parentMobile, and childName cannot be empty." });
+      }
+
+      const lead = await Lead.findById(id);
+      if (!lead) {
+        return res.status(404).json({ message: "Lead not found." });
+      }
+
+      // Only update allowed fields (match schema)
+      const allowedKeys = [
+        "callDate",
+        "staff",
+        "staffOther",
+        "referralSource",
+        "parentName",
+        "parentRelationship",
+        "parentMobile",
+        "parentEmail",
+        "parentArea",
+        "childName",
+        "childDOB",
+        "childGender",
+        "therapistAlready",
+        "diagnosis",
+        "visitFinalized",
+        "appointmentDate",
+        "appointmentTime",
+        "remarks",
+        "status",
+      ];
+
+      // Collect old values for audit (if needed)
+      const prevValues = {};
+      const newValues = {};
+      for (const key of allowedKeys) {
+        if (update[key] !== undefined) {
+          prevValues[key] = lead[key];
+          lead[key] = update[key];
+          newValues[key] = update[key];
+        }
+      }
+
+      await lead.save();
+
+      // Log all fields relevant to the update for debugging purposes
+      console.log("UPDATE_LEAD: AuditLog payload:");
+      console.log({
+        action: "UPDATE_LEAD",
+        user: req?.user?.id,
+        role: req?.user?.role,
+        resource: "Lead",
+        resourceId: lead._id,
+        details: {
+          leadId: lead.leadId,
+          updatedFields: newValues,
+          previousFields: prevValues,
+          message: `Lead updated by userId=${req?.user?.id || "SYSTEM"}`,
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"]
+      });
+      // --- Audit log ---
+      try {
+        await AuditLogService.addLog({
+          action: "UPDATE_LEAD",
+          user: req?.user?.id,
+          role: req?.user?.role,
+          resource: "Lead",
+          resourceId: lead._id,
+          details: {
+            leadId: lead.leadId,
+            updatedFields: newValues,
+            previousFields: prevValues,
+            message: `Lead updated by userId=${req?.user?.id || "SYSTEM"}`,
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"]
+        });
+      } catch (auditErr) {
+        // Don't block, just log
+        console.error("Audit log (UPDATE_LEAD) failed:", auditErr.message);
+      }
+
+      return res.json({ success: true, message: "Lead updated successfully.", lead });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: "Failed to update lead.", error: error.message });
+    }
+  }
+
+  // Delete lead
+  async deleteLead(req, res) {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ success: false, message: "Invalid lead ID." });
+      }
+      const lead = await Lead.findById(id);
+      if (!lead) {
+        return res.status(404).json({ success: false, message: "Lead not found." });
+      }
+      await Lead.findByIdAndDelete(id);
+
+      // --- Audit log ---
+      try {
+        await AuditLogService.addLog({
+          action: "DELETE_LEAD",
+          user: req?.user?.id,
+          role: req?.user?.role,
+          resource: "Lead",
+          resourceId: lead._id,
+          details: {
+            leadId: lead.leadId,
+            parentName: lead.parentName,
+            childName: lead.childName,
+            deletedFields: lead.toObject(),
+            message: `Lead deleted by userId=${req?.user?.id || "SYSTEM"}`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"]
+        });
+      } catch (auditErr) {
+        // Don't block, just log
+        console.error("Audit log (DELETE_LEAD) failed:", auditErr.message);
+      }
+
+      return res.json({ success: true, message: "Lead deleted successfully." });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: "Failed to delete lead.", error: error.message });
     }
   }
 
@@ -162,80 +350,6 @@ class LeadsAdminController {
     }
   }
 
-  // Edit/update a lead
-  async editLead(req, res) {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "Invalid lead ID." });
-      }
-
-      const update = req.body;
-      // Don't allow to unset required fields to null
-      if (
-        ("parentName" in update && !update.parentName) ||
-        ("parentMobile" in update && !update.parentMobile) ||
-        ("childName" in update && !update.childName)
-      ) {
-        return res.status(400).json({ message: "parentName, parentMobile, and childName cannot be empty." });
-      }
-
-      const lead = await Lead.findById(id);
-      if (!lead) {
-        return res.status(404).json({ message: "Lead not found." });
-      }
-
-      // Only update allowed fields (match schema)
-      for (const key of [
-        "callDate",
-        "staff",
-        "staffOther",
-        "referralSource",
-        "parentName",
-        "parentRelationship",
-        "parentMobile",
-        "parentEmail",
-        "parentArea",
-        "childName",
-        "childDOB",
-        "childGender",
-        "therapistAlready",
-        "diagnosis",
-        "visitFinalized",
-        "appointmentDate",
-        "appointmentTime",
-        "remarks",   // allow updating remarks
-        "status",
-      ]) {
-        if (update[key] !== undefined) {
-          lead[key] = update[key];
-        }
-      }
-
-      await lead.save();
-      return res.json({ success: true, message: "Lead updated successfully.", lead });
-    } catch (error) {
-      return res.status(500).json({ success: false, message: "Failed to update lead.", error: error.message });
-    }
-  }
-
-  // Delete lead
-  async deleteLead(req, res) {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ success: false, message: "Invalid lead ID." });
-      }
-      const lead = await Lead.findById(id);
-      if (!lead) {
-        return res.status(404).json({ success: false, message: "Lead not found." });
-      }
-      await Lead.findByIdAndDelete(id);
-      return res.json({ success: true, message: "Lead deleted successfully." });
-    } catch (error) {
-      return res.status(500).json({ success: false, message: "Failed to delete lead.", error: error.message });
-    }
-  }
 }
 
 export default LeadsAdminController;

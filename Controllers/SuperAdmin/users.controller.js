@@ -1,4 +1,5 @@
 import { PatientProfile, TherapistProfile, User } from "../../Schema/user.schema.js";
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 
 class UsersSuperAdminController {
 
@@ -142,53 +143,78 @@ async getAllUsers(req, res) {
 }
 
 async loginAsUser(req, res) {
+    const session = await User.startSession();
     try {
+        session.startTransaction();
         const { userId } = req.body;
 
         if (!userId) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({ error: "userId is required" });
         }
 
-        // Try to find user by ID in User collection
-        const user = await User.findById(userId);
+        // Try to find user by ID in User collection (in transaction session)
+        const user = await User.findById(userId).session(session);
         if (!user) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(404).json({ error: "User not found" });
         }
 
-        // Generate token: Assume we have a JWT utility, e.g. import jwt from 'jsonwebtoken';
-        // and a JWT_SECRET env variable (or hardcoded, but preferably in env).
-        // You might already have jwt setup in your project.
-        const jwt = (await import('jsonwebtoken')).default || (await import('jsonwebtoken'));
-
         // Generate JWT with profile info
+        const jwt = (await import('jsonwebtoken')).default || (await import('jsonwebtoken'));
         const tokenPayload = {
-          id: user._id,
-          email: user.email,
-          role: user.role
+            id: user._id,
+            email: user.email,
+            role: user.role
         };
-
-        // Set token to expire in 1 day
         const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: "1d" });
 
-        // Optionally store the token and expiry in ExpiredTokenModel (as in auth controller)
-        // await ExpiredTokenModel.create({
-        //   token,
-        //   tokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 1 day expiry
-        // });
+        // === Mandatory Audit Log (must succeed for transaction, else revert everything) ===
+        try {
+            await AuditLogService.addLog(
+                {
+                    action: "SUPERADMIN_LOGIN_AS_USER",
+                    user: req.user && req.user.id ? req.user.id : null,
+                    role: req.user && req.user.role ? req.user.role : undefined,
+                    resource: user.role,          // log the role we are logging in as
+                    resourceId: user._id,         // id of the user we are logging in as
+                    details: {
+                        changedFields: {},
+                        message: `Superadmin logged in as userId=${user._id} (${user.email}) with role "${user.role}"`
+                    },
+                    ipAddress: req.ip,
+                    userAgent: req.headers["user-agent"]
+                },
+                { session }
+            );
+        } catch (elog) {
+            // If log not created, revert everything (abort and do not commit)
+            console.error("[loginAsUser] Error writing audit log:", elog);
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(500).json({ message: "Audit log creation failed. Login as user aborted. All changes reverted." });
+        }
 
+        // Commit everything only if log succeeded
+        await session.commitTransaction();
+        session.endSession();
 
-          // Return the token & role info
-          return res.json({
-              success: true,
-              token,
-              role: user.role,
-              user: {
+        // Return the token & role info
+        return res.json({
+            success: true,
+            token,
+            role: user.role,
+            user: {
                 _id: user._id,
                 email: user.email,
                 name: user.name,
-              }
-          });
+            }
+        });
     } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
         console.error("Error in loginAsUser:", error);
         return res.status(500).json({ error: "Internal server error", details: error.message });
     }

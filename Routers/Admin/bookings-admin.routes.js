@@ -1,6 +1,7 @@
 
 import express from "express";
 import BookingAdminController from "../../Controllers/Admin/booking.controller.js";
+import jwtAuth from "../../middlewares/Auth/auth.middleware.js";
 
 const bookingsAdminRouter = express.Router();
 const bookingAdminController = new BookingAdminController();
@@ -18,7 +19,7 @@ bookingsAdminRouter.get("/home-details", (req, res) =>
  * @route POST /api/admin/bookings
  * @desc Create a new booking
  */
-bookingsAdminRouter.post("/", (req, res) => 
+bookingsAdminRouter.post("/",jwtAuth, (req, res) => 
   bookingAdminController.createBooking(req, res)
 );
 
@@ -35,15 +36,15 @@ bookingsAdminRouter.get("/", (req, res) =>
  * @route DELETE /api/admin/bookings/:id
  * @desc Delete booking by id
  */
-bookingsAdminRouter.delete("/:id", (req, res) =>
-  bookingAdminController.deleteBooking(req, res)
-);
+// bookingsAdminRouter.delete("/:id", (req, res) =>
+//   bookingAdminController.deleteBooking(req, res)
+// );
 
 /**
  * @route PUT /api/admin/bookings/:id
  * @desc Update booking by id
  */
-bookingsAdminRouter.put("/:id", (req, res) =>
+bookingsAdminRouter.put("/:id",jwtAuth, (req, res) =>
   bookingAdminController.updateBooking(req, res)
 );
 
@@ -60,7 +61,7 @@ bookingsAdminRouter.get("/booking-requests", (req, res) =>
  * @route POST /api/admin/booking-requests/:id/reject
  * @desc Reject a booking request by id (admin)
  */
-bookingsAdminRouter.post("/booking-requests/:id/reject", (req, res) => 
+bookingsAdminRouter.post("/booking-requests/:id/reject",jwtAuth, (req, res) => 
   bookingAdminController.rejectBookingRequest(req, res)
 );
 
@@ -68,7 +69,7 @@ bookingsAdminRouter.post("/booking-requests/:id/reject", (req, res) =>
  * @route POST /api/admin/bookings/:id/collect-payment
  * @desc Record payment for a booking by id
  */
-bookingsAdminRouter.post("/:id/collect-payment", (req, res) =>
+bookingsAdminRouter.post("/:id/collect-payment",jwtAuth, (req, res) =>
   bookingAdminController.collectPayment(req, res)
 );
 
@@ -76,7 +77,7 @@ bookingsAdminRouter.post("/:id/collect-payment", (req, res) =>
  * @route POST /api/admin/bookings/check-in
  * @desc Check-in a patient for a booking
  */
-bookingsAdminRouter.post("/check-in", (req, res) =>
+bookingsAdminRouter.post("/check-in",jwtAuth, (req, res) =>
   bookingAdminController.checkIn(req, res)
 );
 

@@ -18,7 +18,7 @@ const AuditLogSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ["patient", "therapist", "admin", "superadmin"],
+      enum: ["parent", "therapist", "admin", "superadmin"],
       required: true,
     },
 
@@ -26,7 +26,6 @@ const AuditLogSchema = new mongoose.Schema(
       type: String,
       index: true,
     },
-
     resourceId: {
       type: mongoose.Schema.Types.ObjectId,
       default: null,

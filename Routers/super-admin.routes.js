@@ -11,6 +11,7 @@ import usersSuperAdminRouter from "./SuperAdmin/users-super-admin.routes.js";
 import appointmentSuperAdminRouter from "./SuperAdmin/appointments-super-admin.routes.js";
 import financeSuperAdminRouter from "./SuperAdmin/finance.routes.js";
 import { User } from "../Schema/user.schema.js";
+import logsSuperAdminRouter from "./SuperAdmin/logs.routes.js";
 
 
 
@@ -86,15 +87,7 @@ superAdminRouter.use("/finance", financeSuperAdminRouter
 
 
 
-
-
-
-
-
-
-
-
-
+superAdminRouter.use("/logs", logsSuperAdminRouter);
 
 
 

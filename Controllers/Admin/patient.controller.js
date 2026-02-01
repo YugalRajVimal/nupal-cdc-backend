@@ -1,6 +1,8 @@
 import { User, PatientProfile } from "../../Schema/user.schema.js";
 import mongoose from "mongoose";
 import Counter from "../../Schema/counter.schema.js";
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+
 
 // Utility: Get next patient sequence for PatientID generation
 const getNextSequence = async (name) => {
@@ -20,6 +22,9 @@ const generatePatientId = (seq) => {
 class PatientAdminController {
   // Add new patient (user + patient profile)
   async addPatient(req, res) {
+    // Open a transaction for all database operations
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const {
         email,
@@ -73,6 +78,8 @@ class PatientAdminController {
         .map(f => f.key);
 
       if (missingRequired.length > 0) {
+        await session.abortTransaction();
+        session.endSession();
         console.log("Required fields missing:", missingRequired);
         return res.status(400).json({
           message: `Missing required fields: ${missingRequired.join(", ")}.`
@@ -85,8 +92,8 @@ class PatientAdminController {
       const pincodeValue = typeof pincode === "string" ? pincode.trim() : "";
 
       // Check for existing associations
-      const existingUserByEmail = await User.findOne({ email: emailTrimmed, role: "patient" });
-      const existingUserByMobile = await PatientProfile.findOne({ mobile1: mobile1Trimmed });
+      const existingUserByEmail = await User.findOne({ email: emailTrimmed, role: "patient" }).session(session);
+      const existingUserByMobile = await PatientProfile.findOne({ mobile1: mobile1Trimmed }).session(session);
 
       console.log("Check existingUserByEmail:", existingUserByEmail ? existingUserByEmail.email : null);
       console.log("Check existingUserByMobile:", existingUserByMobile ? existingUserByMobile.mobile1 : null);
@@ -97,7 +104,7 @@ class PatientAdminController {
       let mobileAssociatedEmailFull = null;
 
       if (existingUserByEmail) {
-        const patientProfileForEmail = await PatientProfile.findOne({ userId: existingUserByEmail._id });
+        const patientProfileForEmail = await PatientProfile.findOne({ userId: existingUserByEmail._id }).session(session);
         if (patientProfileForEmail) {
           emailAssociatedMobile = (patientProfileForEmail.mobile1 || "").trim();
           emailAssociatedMobileFull = patientProfileForEmail.mobile1 || "";
@@ -107,7 +114,7 @@ class PatientAdminController {
       console.log("emailAssociatedMobile for existingUserByEmail:", emailAssociatedMobile);
 
       if (existingUserByMobile) {
-        const userForMobile = await User.findById(existingUserByMobile.userId);
+        const userForMobile = await User.findById(existingUserByMobile.userId).session(session);
         if (userForMobile) {
           mobileAssociatedEmail = (userForMobile.email || "").trim();
           mobileAssociatedEmailFull = userForMobile.email || "";
@@ -129,10 +136,32 @@ class PatientAdminController {
         emailAssociatedMobile &&
         emailAssociatedMobile !== mobile1Trimmed
       ) {
+        await session.abortTransaction();
+        session.endSession();
         console.log(
           "Violation 1 - Email already registered with different phone:",
           { email: emailTrimmed, existingPhone: emailAssociatedMobile, inputPhone: mobile1Trimmed }
         );
+        // Log attempt
+        try {
+          await AuditLogService.addLog({
+            action: "PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_EMAIL_MOBILE_MISMATCH",
+            role: "admin",
+            user: req.user?.id,
+            resource: "Parent",
+            resourceId: null,
+            details: {
+              email: emailTrimmed,
+              attemptedMobile: mobile1Trimmed,
+              existingMobile: emailAssociatedMobile,
+              message: `Attempted to register ${emailTrimmed} with mobile ${mobile1Trimmed}, but email already has mobile ${emailAssociatedMobile}.`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent']
+          });
+        } catch (logErr) {
+          console.error('Failed to write audit log (PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_EMAIL_MOBILE_MISMATCH):', logErr);
+        }
         return res.status(409).json({
           success: false,
           message: `This email is already registered with a different phone number (ending ${(emailAssociatedMobile)}).`,
@@ -148,10 +177,32 @@ class PatientAdminController {
         mobileAssociatedEmail &&
         mobileAssociatedEmail !== emailTrimmed
       ) {
+        await session.abortTransaction();
+        session.endSession();
         console.log(
           "Violation 2 - Phone already registered with different email:",
           { phone: mobile1Trimmed, existingEmail: mobileAssociatedEmail, inputEmail: emailTrimmed }
         );
+        // Log attempt
+        try {
+          await AuditLogService.addLog({
+            action: "PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_MOBILE_EMAIL_MISMATCH",
+            role: "admin",
+            user: req.user?.id,
+            resource: "Parent",
+            resourceId: null,
+            details: {
+              phone: mobile1Trimmed,
+              attemptedEmail: emailTrimmed,
+              existingEmail: mobileAssociatedEmail,
+              message: `Attempted to register mobile ${mobile1Trimmed} with email ${emailTrimmed}, but phone is registered with email ${mobileAssociatedEmail}.`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent']
+          });
+        } catch (logErr) {
+          console.error('Failed to write audit log (PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_MOBILE_EMAIL_MISMATCH):', logErr);
+        }
         return res.status(409).json({
           success: false,
           message: `This phone number (${(mobile1Trimmed)}) is already registered with a different email.`,
@@ -164,6 +215,10 @@ class PatientAdminController {
       // CASE: If both email and mobile1 are paired together in a previous patient, only create PatientProfile, do not create User
       let user;
       let reusedExistingUser = false;
+      let patientProfile;
+      let patientId;
+      let nextSeq;
+
       if (
         existingUserByEmail &&
         emailAssociatedMobile &&
@@ -178,13 +233,13 @@ class PatientAdminController {
         mobileAssociatedEmail === emailTrimmed
       ) {
         // Defensive, in case only mobile->email found
-        user = await User.findOne({ _id: existingUserByMobile.userId });
+        user = await User.findOne({ _id: existingUserByMobile.userId }).session(session);
         reusedExistingUser = true;
       } else {
         // No match for BOTH, so create new User as before
         // Get next patient sequence and generate patientId
-        const nextSeq = await getNextSequence("patient");
-        const patientId = generatePatientId(nextSeq);
+        nextSeq = await getNextSequence("patient");
+        patientId = generatePatientId(nextSeq);
 
         user = new User({
           role: "patient",
@@ -196,10 +251,10 @@ class PatientAdminController {
           status: "active",
           phone: mobile1Trimmed // <--- Save mobile1 to User.phone
         });
-        await user.save();
+        await user.save({ session });
 
         // Create PatientProfile below using generated patientId
-        const patientProfile = new PatientProfile({
+        patientProfile = new PatientProfile({
           userId: user._id,
           patientId, // <-- Add generated patientId
           name: childFullName, // <-- Store child's name here
@@ -221,9 +276,34 @@ class PatientAdminController {
           remarks,                 // optional
           otherDocument: otherDocumentPath,
         });
-        await patientProfile.save();
+        await patientProfile.save({ session });
 
         console.log("Patient successfully created for:", { email: emailTrimmed, mobile1: mobile1Trimmed, patientId });
+
+        // ---- AUDIT LOG: Patient profile created ----
+        try {
+          await AuditLogService.addLog({
+            action: "PARENT_ONBOARDED",
+            role: "admin",
+            user: req.user?.id,
+            resource: "Parent",
+            resourceId: patientProfile._id,
+            details: {
+              email: emailTrimmed,
+              name: childFullName,
+              phone: mobile1Trimmed,
+              patientId: patientProfile.patientId,
+              message: `Patient profile created for ${childFullName} (${emailTrimmed})`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent']
+          });
+        } catch (logErr) {
+          console.error('Failed to write audit log (PATIENT_PROFILE_CREATED) in addPatient:', logErr);
+        }
+
+        await session.commitTransaction();
+        session.endSession();
 
         return res.status(201).json({
           success: true,
@@ -237,10 +317,10 @@ class PatientAdminController {
 
       // If here, reuse user and create PatientProfile (do not create User)
       // Still need to generate a new patientId for this PatientProfile
-      const nextSeq = await getNextSequence("patient");
-      const patientId = generatePatientId(nextSeq);
+      nextSeq = await getNextSequence("patient");
+      patientId = generatePatientId(nextSeq);
 
-      const patientProfile = new PatientProfile({
+      patientProfile = new PatientProfile({
         userId: user._id,
         patientId, // <-- Add generated patientId
         name: childFullName, // <-- Store child's name here
@@ -262,12 +342,37 @@ class PatientAdminController {
         remarks,                 // optional
         otherDocument: otherDocumentPath,
       });
-      await patientProfile.save();
+      await patientProfile.save({ session });
 
       console.log(
         "PatientProfile created for existing user:",
         { email: emailTrimmed, mobile1: mobile1Trimmed, patientId, reusedExistingUser }
       );
+
+      // ---- AUDIT LOG: Patient profile created (existing user) ----
+      try {
+        await AuditLogService.addLog({
+          action: "PARENT_ONBOARDED",
+          user: req.user?.id,
+          role: "admin",
+          resource: "Parent",
+          resourceId: patientProfile._id,
+          details: {
+            email: emailTrimmed,
+            name: childFullName,
+            phone: mobile1Trimmed,
+            patientId: patientProfile.patientId,
+            message: `Patient profile created for ${childFullName} (${emailTrimmed}) (existing user)`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        console.error('Failed to write audit log (PATIENT_PROFILE_CREATED) in addPatient (existing user):', logErr);
+      }
+
+      await session.commitTransaction();
+      session.endSession();
 
       return res.status(201).json({
         success: true,
@@ -279,6 +384,26 @@ class PatientAdminController {
         usedExistingUser: true,
       });
     } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+      // Mandatory logging even in error!
+      try {
+        await AuditLogService.addLog({
+          action: "PATIENT_PROFILE_CREATE_FAILED",
+          user: req.user?.id,
+          role: "admin",
+          resource: "Parent",
+          resourceId: null,
+          details: {
+            error: error.message || (typeof error === "string" ? error : JSON.stringify(error)),
+            message: "Patient creation failed."
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        console.error('Failed to write audit log (PATIENT_PROFILE_CREATE_FAILED) in catch:', logErr);
+      }
       console.error(error);
       return res.status(500).json({ success: false, message: "Error creating patient.", error: error.message });
     }
@@ -382,11 +507,15 @@ class PatientAdminController {
     }
   }
 
-  // Update/edit patient profile (and update child name on User if present)
+  // Update/edit patient profile (and update child name on User if present) -- now with transaction & mandatory audit log
   async editPatient(req, res) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const { id } = req.params;
       if (!mongoose.Types.ObjectId.isValid(id)) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Invalid patient ID." });
       }
       const update = req.body;
@@ -394,14 +523,18 @@ class PatientAdminController {
       // Remove email (can't update directly here)
       delete update.email;
 
-      const patientProfile = await PatientProfile.findById(id);
+      const patientProfile = await PatientProfile.findById(id).session(session);
       if (!patientProfile) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ message: "Patient not found." });
       }
 
       // Fetch current association for comparison
       const oldMobile = patientProfile.mobile1 ? patientProfile.mobile1.trim() : "";
-      const user = await User.findById(patientProfile.userId);
+      const user = patientProfile.userId
+        ? await User.findById(patientProfile.userId).session(session)
+        : null;
       const oldEmail = user && user.email ? user.email.trim() : "";
 
       // Prepare input values
@@ -423,24 +556,26 @@ class PatientAdminController {
           email: newEmail,
           mobile1: newMobile,
           _id: { $ne: patientProfile._id }
-        });
+        }).session(session);
 
         // Check for any patient with newEmail and another phone
         const patientWithEmail = await PatientProfile.findOne({
           email: newEmail,
           _id: { $ne: patientProfile._id }
-        });
+        }).session(session);
 
         // Check for any patient with newMobile and another email
         const patientWithMobile = await PatientProfile.findOne({
           mobile1: newMobile,
           _id: { $ne: patientProfile._id }
-        });
+        }).session(session);
 
         // If new association exists as a pair, allow; otherwise, error if either is already associated differently
         if (!patientWithBoth) {
           // If email exists but with another mobile number, error
           if (patientWithEmail && patientWithEmail.mobile1 !== newMobile) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({
               success: false,
               message: "This email is already associated with another phone number.",
@@ -450,6 +585,8 @@ class PatientAdminController {
           }
           // If phone exists but with another email, error
           if (patientWithMobile && patientWithMobile.parentEmail !== newEmail) {
+            await session.abortTransaction();
+            session.endSession();
             return res.status(400).json({
               success: false,
               message: "This phone number is already associated with another email.",
@@ -461,21 +598,36 @@ class PatientAdminController {
         // If both are already associated together on another record, that's fine; allow update to those values
       }
 
+      // Get pre-update snapshot for changed fields calculation
+      const oldProfile = { ...patientProfile.toObject() };
+
       // If updating childFullName, also update User.name
       if (update.childFullName && patientProfile.userId) {
-        await User.findByIdAndUpdate(patientProfile.userId, { name: update.childFullName });
+        await User.findByIdAndUpdate(
+          patientProfile.userId,
+          { name: update.childFullName },
+          { session }
+        );
       }
       // If updating parentEmail, also update User.email
       if (update.parentEmail && user) {
-        await User.findByIdAndUpdate(patientProfile.userId, { email: update.parentEmail.trim() });
+        await User.findByIdAndUpdate(
+          patientProfile.userId,
+          { email: update.parentEmail.trim() },
+          { session }
+        );
       }
       // If updating mobile1, also update User.phone
       if (update.mobile1 && patientProfile.userId) {
-        await User.findByIdAndUpdate(patientProfile.userId, { phone: update.mobile1.trim() });
+        await User.findByIdAndUpdate(
+          patientProfile.userId,
+          { phone: update.mobile1.trim() },
+          { session }
+        );
       }
 
       // Only update allowed fields on PatientProfile
-      for (const key of [
+      const allowedKeys = [
         "childFullName",
         "gender",
         "childDOB",
@@ -494,7 +646,9 @@ class PatientAdminController {
         "parentOccupation",
         "remarks",
         "otherDocument",
-      ]) {
+      ];
+
+      for (const key of allowedKeys) {
         if (update[key] !== undefined) {
           patientProfile[key] = update[key];
         }
@@ -505,37 +659,90 @@ class PatientAdminController {
         patientProfile.name = update.childFullName;
       }
 
-      await patientProfile.save();
+      await patientProfile.save({ session });
+
+      // Calculate changed fields
+      const changedFields = {};
+      for (const key of allowedKeys.concat("name")) {
+        // "name" on patientProfile: if changed due to childFullName, include it.
+        if (
+          oldProfile[key] === undefined &&
+          patientProfile[key] !== undefined
+        ) {
+          changedFields[key] = { from: undefined, to: patientProfile[key] };
+        } else if (
+          oldProfile[key] !== undefined &&
+          patientProfile[key] !== undefined &&
+          String(oldProfile[key]) !== String(patientProfile[key])
+        ) {
+          changedFields[key] = { from: oldProfile[key], to: patientProfile[key] };
+        }
+      }
+
+      // ---- AUDIT LOG: Patient profile edited ----
+      // Always attempt audit log: if log fails, abort transaction and send failure
+      try {
+        await AuditLogService.addLog({
+          action: "PATIENT_PROFILE_EDITED",
+          user: req.user?.id,
+          role: "admin",
+          resource: "Parent",
+          resourceId: patientProfile._id,
+          details: {
+            changedFields,
+            patientId: patientProfile.patientId,
+            childFullName: patientProfile.childFullName,
+            message: `Patient profile edited for ${patientProfile.childFullName || patientProfile.name} (${patientProfile.parentEmail || patientProfile.email})`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        // Audit logging is mandatory, so abort transaction & fail request if log fails
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          success: false,
+          message: "Failed to write audit log. Patient update not saved.",
+          error: logErr.message
+        });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+      // Get updated patient after commit (outside txn for consistency)
       const updated = await PatientProfile.findById(id).populate("userId");
 
       return res.json({ success: true, message: "Patient updated successfully.", patient: updated });
     } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(500).json({ success: false, message: "Failed to update patient.", error: error.message });
     }
   }
 
   // Delete patient (both patient profile and user)
-  async deletePatient(req, res) {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ success: false, message: "Invalid patient ID." });
-      }
-      const patientProfile = await PatientProfile.findById(id);
-      if (!patientProfile) {
-        return res.status(404).json({ success: false, message: "Patient not found." });
-      }
-      // Delete PatientProfile
-      await PatientProfile.findByIdAndDelete(id);
-      // Delete User
-      if (patientProfile.userId) {
-        await User.findByIdAndDelete(patientProfile.userId);
-      }
-      return res.json({ success: true, message: "Patient deleted successfully." });
-    } catch (error) {
-      return res.status(500).json({ success: false, message: "Failed to delete patient.", error: error.message });
-    }
-  }
+  // async deletePatient(req, res) {
+  //   try {
+  //     const { id } = req.params;
+  //     if (!mongoose.Types.ObjectId.isValid(id)) {
+  //       return res.status(400).json({ success: false, message: "Invalid patient ID." });
+  //     }
+  //     const patientProfile = await PatientProfile.findById(id);
+  //     if (!patientProfile) {
+  //       return res.status(404).json({ success: false, message: "Patient not found." });
+  //     }
+  //     // Delete PatientProfile
+  //     await PatientProfile.findByIdAndDelete(id);
+  //     // Delete User
+  //     if (patientProfile.userId) {
+  //       await User.findByIdAndDelete(patientProfile.userId);
+  //     }
+  //     return res.json({ success: true, message: "Patient deleted successfully." });
+  //   } catch (error) {
+  //     return res.status(500).json({ success: false, message: "Failed to delete patient.", error: error.message });
+  //   }
+  // }
 }
 
 export default PatientAdminController;

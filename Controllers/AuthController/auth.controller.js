@@ -4,6 +4,7 @@ import {
   User
 } from "../../Schema/user.schema.js";
 import ExpiredTokenModel from "../../Schema/expired-token.schema.js";
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 
 // Allowed roles from user.schema.js (see enum in file_context_2 line 8)
 const ALLOWED_ROLES = ["patient", "therapist", "admin"];
@@ -88,34 +89,44 @@ class AuthController {
 
   // Verify Account with OTP (parent/therapist/admin/superadmin) using user.schema.js
   verifyAccount = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
       let { email, otp, role } = req.body;
 
       if (!email || !otp || !role) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Email, OTP, and Role are required" });
       }
-
       email = email.trim().toLowerCase();
       role = role.trim();
 
       if (!ALLOWED_ROLES.includes(role)) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Invalid user role." });
       }
 
-      // Find user by email, role and OTP (atomic find+verify OTP+clear OTP)
-      const user = await User.findOneAndUpdate(
+      // Find user by email, role and OTP (inside transaction)
+      const user = await User.findOne(
         {
           email,
           role,
           otp
-        },
-        { $unset: { otp: 1 }, lastLogin: new Date() },
-        { new: true }
-      ).lean();
+        }
+      ).session(session);
 
       if (!user) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(401).json({ message: "Invalid credentials or OTP" });
       }
+
+      // Clear OTP and set lastLogin
+      user.otp = undefined;
+      user.lastLogin = new Date();
+      await user.save({ session });
 
       // Generate JWT with profile info optionally
       const tokenPayload = {
@@ -127,18 +138,50 @@ class AuthController {
       // Set token to expire in 1 day
       const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: "1d" });
 
-      await ExpiredTokenModel.create({
+      await ExpiredTokenModel.create([{
         token,
         tokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 1 day expiry
-      });
+      }], { session });
 
       console.log("Stored issued token in expired-tokens collection:", token);
 
+      // === Mandatory Audit Log (must succeed for transaction) ===
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "USER_ACCOUNT_VERIFIED",
+            user: user._id,
+            role: user.role === "patient" ? "parent" : user.role,
+            resource: "User",
+            resourceId: user._id,
+            details: {
+              changedFields: {
+                otp: { from: otp, to: undefined },
+                lastLogin: { from: null, to: (new Date()).toISOString() }
+              },
+              message: `Account verified with OTP for userId=${user._id} (${user.email})`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[verifyAccount] Error writing audit log:");
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ message: "Audit log creation failed. Account verification not saved." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
 
       return res
         .status(200)
         .json({ message: "Account verified successfully", token });
     } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
       console.error("VerifyAccount Error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
@@ -146,49 +189,85 @@ class AuthController {
 
   // Sign In → Send OTP, only for known roles
   signin = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
       let { email, role } = req.body;
 
       if (!email || !role) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Email and role are required" });
       }
-
 
       email = email.trim().toLowerCase();
       role = role.trim();
 
-      console.log(email,role)
+      console.log(email, role);
 
       if (!ALLOWED_ROLES.includes(role)) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Invalid user role." });
       }
 
-      const user = await User.findOne({ email, role }).lean();
+      const user = await User.findOne({ email, role }).session(session);
       if (user && user.role !== role) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Role does not match for this user." });
       }
       if (!user) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ message: "User not found" });
       }
 
-      // Generate 6-digit OTP
+      // Generate 6-digit OTP (here, hardcoded for demo; use random in production)
       // const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
       // Save OTP with expiry (10 min)
-      await User.findByIdAndUpdate(
-        user._id,
-        {
-          otp:"000000",
-          otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 min expiry
-        },
-        { new: true }
-      );
+      user.otp = "000000";
+      user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min expiry
+      await user.save({ session });
 
       // Send OTP via mail
       // sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
 
+      // === Mandatory Audit Log (must succeed for transaction) ===
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "USER_SIGNIN_OTP_SENT",
+            user: user._id,
+            role: user.role === "patient" ? "parent" : user.role,
+            resource: "User",
+            resourceId: user._id,
+            details: {
+              changedFields: {
+                otp: { from: null, to: "000000" },
+                otpExpiresAt: { from: null, to: (user.otpExpiresAt).toISOString() }
+              },
+              message: `Signin OTP sent to userId=${user._id} (${user.email})`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[signin] Error writing audit log:");
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ message: "Audit log creation failed. OTP not sent." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
       return res.status(200).json({ message: "OTP sent successfully" });
     } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
       console.error("Signin Error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }

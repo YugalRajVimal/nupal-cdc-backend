@@ -1,9 +1,9 @@
 import express from "express";
 import adminRouter from "./Routers/admin.routes.js";
 import authRouter from "./Routers/auth.routes.js";
-import parentRouter from "./Routers/parent.routes.js";
 import therapistRouter from "./Routers/therapist.routes.js";
 import superAdminRouter from "./Routers/super-admin.routes.js";
+import parentRouter from "./Routers/Parent/parent.routes.js";
 
 
 const router = express.Router();

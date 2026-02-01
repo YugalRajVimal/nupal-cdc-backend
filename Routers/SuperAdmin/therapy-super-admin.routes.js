@@ -1,5 +1,6 @@
 import express from "express";
 import TherapyAdminController from "../../Controllers/SuperAdmin/therapy.controller.js";
+import jwtAuth from "../../middlewares/Auth/auth.middleware.js";
 
 
 const therapyAdminRouter = express.Router();
@@ -10,7 +11,7 @@ const therapyAdminController = new TherapyAdminController();
 // Add Therapy Type
 therapyAdminRouter.post(
   "/", 
-  // jwtAuth, 
+  jwtAuth, 
   // authorize("admin.write"), 
   (req, res) => {
     therapyAdminController.addTherapyType(req, res);
@@ -20,7 +21,7 @@ therapyAdminRouter.post(
 // Edit Therapy Type
 therapyAdminRouter.put(
   "/:id", 
-  // jwtAuth, 
+  jwtAuth, 
   // authorize("admin.write"), 
   (req, res) => {
     therapyAdminController.editTherapyType(req, res);
@@ -28,14 +29,14 @@ therapyAdminRouter.put(
 );
 
 // Delete Therapy Type
-therapyAdminRouter.delete(
-  "/:id", 
-  // jwtAuth, 
-  // authorize("admin.write"), 
-  (req, res) => {
-    therapyAdminController.deleteTherapyType(req, res);
-  }
-);
+// therapyAdminRouter.delete(
+//   "/:id", 
+//   jwtAuth, 
+//   // authorize("admin.write"), 
+//   (req, res) => {
+//     therapyAdminController.deleteTherapyType(req, res);
+//   }
+// );
 
 // Fetch All Therapy Types
 therapyAdminRouter.get(

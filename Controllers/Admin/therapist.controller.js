@@ -2,6 +2,8 @@ import { User, TherapistProfile } from "../../Schema/user.schema.js";
 import mongoose from "mongoose";
 import Counter from "../../Schema/counter.schema.js";
 import { deleteUploadedFiles } from "../../middlewares/fileDelete.middleware.js";
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+
 
 /**
  * Util: get next sequence number for a given counter name
@@ -65,7 +67,6 @@ class TherapistAdminController {
         remarks,
         specializations,
         experienceYears
-        // Do NOT take: aadhaarFront, aadhaarBack, photo, resume, certificate from req.body (should come from multer files)
       } = req.body;
 
       // Get the filepaths to store into DB (if files uploaded)
@@ -205,8 +206,8 @@ class TherapistAdminController {
           email: email,
           authProvider: "otp",
           status: "active",
-          phone: mobile1,  // <<--- Added: Save mobile1 as phone in User schema
-incompleteTherapistProfile:false
+          phone: mobile1,
+          incompleteTherapistProfile: false
         });
       } catch (err) {
         // Likely a unique constraint error (duplicate email, etc)
@@ -221,13 +222,13 @@ incompleteTherapistProfile:false
       try {
         therapistProfile = await TherapistProfile.create({
           userId: user._id,
-          therapistId, // <-- new
+          therapistId,
           fathersName,
           mobile1,
           mobile2, // optional
           address,
           reference,
-          aadhaarFront: filePaths.aadhaarFront,  // <-- Use uploaded file path
+          aadhaarFront: filePaths.aadhaarFront,
           aadhaarBack: filePaths.aadhaarBack,
           photo: filePaths.photo,
           resume: filePaths.resume,
@@ -248,7 +249,7 @@ incompleteTherapistProfile:false
           remarks, // optional
           specializations,
           experienceYears,
-          isPanelAccessible: false, 
+          isPanelAccessible: false
           // email is NOT stored in TherapistProfile
         });
       } catch (err) {
@@ -259,6 +260,36 @@ incompleteTherapistProfile:false
         throw err;
       }
       console.log("TherapistProfile document created:", therapistProfile);
+
+      // ---- AUDIT LOG: Therapist added ----
+      try {
+        await AuditLogService.addLog({
+          action: "THERAPIST_ONBOARDED",
+          user: req.user?.id,
+          role: "admin",
+          resource: "Therapist",
+          resourceId: therapistProfile._id,
+          details: {
+            therapistId: therapistProfile.therapistId,
+            fullName: fullName,
+            email: email,
+            mobile1: mobile1,
+            message: `Therapist profile created for ${fullName} (${email})`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"]
+        });
+      } catch (logErr) {
+        // If logging fails, clean up everything to maintain parity with patient.controller.js
+        await TherapistProfile.findByIdAndDelete(therapistProfile._id).catch(() => {});
+        await User.findByIdAndDelete(user._id).catch(() => {});
+        deleteUploadedFiles(uploadedFiles);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to write audit log. Therapist creation not saved.",
+          error: logErr.message
+        });
+      }
 
       res.status(201).json({ user, therapistProfile });
     } catch (e) {
@@ -360,14 +391,18 @@ incompleteTherapistProfile:false
     }
   };
 
-  // Edit therapist profile
+  // Edit therapist profile (with mandatory log creation and MongoDB transactions)
   editTherapist = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const { id } = req.params;
       console.log("[editTherapist] Called with id:", id);
 
       if (!mongoose.Types.ObjectId.isValid(id)) {
         console.log("[editTherapist] Invalid therapist profile ID:", id);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
 
@@ -378,82 +413,172 @@ incompleteTherapistProfile:false
         (key) => profileFields[key] === undefined && delete profileFields[key]
       );
 
+      // Get current TherapistProfile for diff
+      const oldTherapist = await TherapistProfile.findById(id).session(session);
+      if (!oldTherapist) {
+        console.log("[editTherapist] Therapist not found for id:", id);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ error: "Therapist not found" });
+      }
+      const oldProfile = oldTherapist.toObject();
+
+      // Update TherapistProfile document
       const updatedTherapist = await TherapistProfile.findByIdAndUpdate(
         id,
         profileFields,
-        { new: true }
+        { new: true, session }
       );
 
-      // Update email, and also phone if provided, in User document
+      // Track which file fields were updated/uploaded
+      const fileFields = [
+        "aadhaarFront",
+        "aadhaarBack",
+        "photo",
+        "resume",
+        "certificate"
+      ];
+
+      // Only record diff for profile fields excluding forbidden fields (but special logic for fileFields)
+      const excludedFields = new Set([
+        "holidays",
+        "earnings"
+      ]);
+      const changedFields = {};
+
+      for (const key of Object.keys(profileFields)) {
+        if (excludedFields.has(key)) continue;
+
+        const fromVal = oldProfile[key];
+        const toVal = updatedTherapist[key];
+
+        if (fileFields.includes(key)) {
+          // Determine if a file was actually uploaded for this key
+          // Log only if there is any real file upload (value changes to something truthy different from before)
+          if (
+            // Case 1: uploading a new file (from null/undefined/empty to some value/string)
+            (
+              (fromVal === null || typeof fromVal === "undefined" || fromVal === "") &&
+              (typeof toVal !== "undefined" && toVal !== null && toVal !== "")
+            )
+            ||
+            // Case 2: changing file (from one value to a different nonempty value)
+            (
+              (typeof fromVal !== "undefined" && fromVal !== null && fromVal !== "") &&
+              (typeof toVal !== "undefined" && toVal !== null && toVal !== "") &&
+              (String(fromVal) !== String(toVal))
+            )
+          ) {
+            changedFields[key] = { from: fromVal, to: toVal };
+          }
+          // else: do not record this file field if not actually uploaded/changed
+          continue;
+        }
+
+        // For non-file fields:
+        if (
+          (fromVal === null || typeof fromVal === "undefined" || fromVal === "") && 
+          (toVal === null || typeof toVal === "undefined" || toVal === "")
+        ) {
+          continue;
+        }
+        if (String(fromVal) !== String(toVal)) {
+          changedFields[key] = { from: fromVal, to: toVal };
+        }
+      }
+
+      // Handle User (email/phone) updates separately; only include them if changed
+      let userChangedFields = {};
       if (email || phone || mobile1) {
-        const therapist = await TherapistProfile.findById(id);
+        const therapist = await TherapistProfile.findById(id).session(session);
         if (therapist && therapist.userId) {
+          const user = await User.findById(therapist.userId).session(session);
           const userUpdate = {};
-          if (email) userUpdate.email = email;
-          // If phone or mobile1 is present in request, update User.phone
-          if (typeof phone !== "undefined") {
+          if (email && email !== user.email) {
+            userUpdate.email = email;
+            userChangedFields.email = { from: user.email, to: email };
+          }
+          if (typeof phone !== "undefined" && phone !== user.phone) {
             userUpdate.phone = phone;
-          } else if (typeof mobile1 !== "undefined") {
+            userChangedFields.phone = { from: user.phone, to: phone };
+          } else if (typeof mobile1 !== "undefined" && mobile1 !== user.phone) {
             userUpdate.phone = mobile1;
+            userChangedFields.phone = { from: user.phone, to: mobile1 };
           }
           if (Object.keys(userUpdate).length > 0) {
             console.log(`[editTherapist] Updating User (userId: ${therapist.userId}) with:`, userUpdate);
-            await User.findByIdAndUpdate(therapist.userId, userUpdate);
+            await User.findByIdAndUpdate(therapist.userId, userUpdate, { session });
           }
         }
       }
 
-      if (!updatedTherapist) {
-        console.log("[editTherapist] Therapist not found for id:", id);
-        return res.status(404).json({ error: "Therapist not found" });
+      // Merge edited fields to be logged
+      const allEditedFields = { ...changedFields, ...userChangedFields };
+
+      // Remove non-file audit-excluded fields if present (but file fields logic already handled above)
+      for (const excluded of [
+        "holidays",
+        "earnings"
+      ]) {
+        if (
+          Object.prototype.hasOwnProperty.call(allEditedFields, excluded)
+        ) {
+          delete allEditedFields[excluded];
+        }
       }
 
       console.log("[editTherapist] Updated therapist profile:", updatedTherapist);
 
+      // === Mandatory Audit Log (must succeed for transaction) ===
+      try {
+      
+        await AuditLogService.addLog(
+          {
+            action: "THERAPIST_PROFILE_EDITED",
+            user: req?.user?.id,
+            role: req?.user?.role,
+            resource: "Therapist",
+            resourceId: id,
+            details: {
+              changedFields: allEditedFields,
+              message: `Therapist profile edited for therapistId=${id} by userId=${req?.user?.id || "SYSTEM"}`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[editTherapist] Error writing audit log (aborting transaction):");
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ error: "Audit log creation failed. Changes not saved." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
       res.json({ therapist: updatedTherapist });
     } catch (e) {
-      console.error("[editTherapist] Error editing therapist:", e);
+      console.error("[editTherapist] Error editing therapist (transaction will be aborted):", e);
+      await session.abortTransaction();
+      session.endSession();
       res.status(400).json({ error: "Error editing therapist", details: e.message });
     }
   };
 
-  // Delete therapist (delete both User and TherapistProfile)
-  deleteTherapist = async (req, res) => {
-    try {
-      const { id } = req.params; // id = TherapistProfile _id
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ error: "Invalid therapist profile ID" });
-      }
-      const therapist = await TherapistProfile.findById(id);
-      if (!therapist) return res.status(404).json({ error: "Therapist not found" });
 
-      // Delete TherapistProfile
-      await TherapistProfile.findByIdAndDelete(id);
-
-      // Delete User document as well
-      if (therapist.userId) {
-        await User.findByIdAndDelete(therapist.userId);
-      }
-
-      res.json({ success: true, message: "Therapist and associated user deleted successfully" });
-    } catch (e) {
-      res.status(400).json({ error: "Failed to delete therapist", details: e.message });
-    }
-  };
-
-  /**
-   * Pay therapist (append to therapist.earnings array)
-   * POST /api/admin/therapists/:id/pay
-   * body: { amount, type, fromDate, toDate, remark, paidOn }
-   * type: "salary" | "contract"
-   */
   payTherapist = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const { id } = req.params; // TherapistProfile _id
       const { amount, type, fromDate, toDate, remark, paidOn } = req.body;
 
       // Validate therapist id
       if (!mongoose.Types.ObjectId.isValid(id)) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
       // Validate amount, type, fromDate, toDate
@@ -464,11 +589,15 @@ incompleteTherapistProfile:false
         !fromDate ||
         !toDate
       ) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "Missing or invalid payment details" });
       }
 
-      const therapist = await TherapistProfile.findById(id);
+      const therapist = await TherapistProfile.findById(id).session(session);
       if (!therapist) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ error: "Therapist not found" });
       }
 
@@ -482,18 +611,11 @@ incompleteTherapistProfile:false
         paidOn: paidOn ? new Date(paidOn) : new Date(),
       };
 
-      // Append to earnings array
+      // Append to earnings array and save within session
       therapist.earnings.push(payment);
-      await therapist.save();
+      await therapist.save({ session });
 
       // ----- Add entry in Finances schema -----
-      // Finances fields: date, description, type, amount, creditDebitStatus
-      // We'll store:
-      // - date: paidOn or now
-      // - description: Salary/Contract payment to therapist <name/therapistId> for period <fromDate> - <toDate> [remark]
-      // - type: 'expense'
-      // - amount
-      // - creditDebitStatus: 'debited'
       const Finances = (await import("../../Schema/finances.schema.js")).default;
 
       let description = `Therapist ${type} payment to ${therapist.name || therapist.therapistId || therapist._id} for ${fromDate} to ${toDate}`;
@@ -501,22 +623,59 @@ incompleteTherapistProfile:false
         description += ` [${remark}]`;
       }
 
-      const financesDoc = await Finances.create({
+      const financesDoc = await Finances.create([{
         date: payment.paidOn,
         description,
         type: "expense",
         amount: payment.amount,
         creditDebitStatus: "debited"
-      });
+      }], { session });
+      const financeDocObj = financesDoc && Array.isArray(financesDoc) ? financesDoc[0] : financesDoc;
+
+      // ====== Audit Log using AuditLogService (must succeed for transaction) ======
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "THERAPIST_PAID",
+            user: req?.user?.id,
+            role: req?.user?.role,
+            resource: "Therapist",
+            resourceId: id,
+            details: {
+              amount,
+              type,
+              fromDate,
+              toDate,
+              remark: remark || "",
+              paidOn: payment.paidOn,
+              financeId: financeDocObj?._id?.toString() || undefined,
+              message: `Therapist paid (amount=${amount}, type=${type}) by userId=${req?.user?.id || "SYSTEM"} for therapistId=${id}`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[payTherapist] Error writing audit log (aborting transaction):", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ error: "Audit log creation failed. Changes not saved." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
 
       res.json({
         success: true,
         message: "Therapist paid and earning added.",
         earnings: therapist.earnings,
         payment,
-        finance: financesDoc
+        finance: financeDocObj
       });
     } catch (e) {
+      await session.abortTransaction();
+      session.endSession();
       res.status(400).json({ error: "Failed to pay therapist", details: e.message });
     }
   }
@@ -526,19 +685,57 @@ incompleteTherapistProfile:false
    * PATCH /api/admin/therapists/:id/disable
    */
   disableTherapist = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const { id } = req.params; // TherapistProfile _id
       if (!mongoose.Types.ObjectId.isValid(id)) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
-      const therapist = await TherapistProfile.findById(id);
+      const therapist = await TherapistProfile.findById(id).session(session);
       if (!therapist || !therapist.userId) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ error: "Therapist not found" });
       }
 
-      await User.findByIdAndUpdate(therapist.userId, { isDisabled: true });
+      await User.findByIdAndUpdate(therapist.userId, { isDisabled: true }, { session });
+
+      // ====== Audit Log (same style as payTherapist, using AuditLogService.addLog) ======
+      try {
+
+        await AuditLogService.addLog(
+          {
+            action: "THERAPIST_DISABLED",
+            user: req?.user?.id,
+            role: req?.user?.role,
+            resource: "Therapist",
+            resourceId: id,
+            details: {
+              userId: therapist.userId?.toString(),
+              therapistProfileId: id,
+              message: `Therapist userId=${therapist.userId} disabled by userId=${req?.user?.id || "SYSTEM"}. TherapistProfile=${id}`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[disableTherapist] Error writing audit log (aborting transaction):", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ error: "Audit log creation failed. Changes not saved." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
       res.json({ success: true, message: "Therapist disabled successfully" });
     } catch (e) {
+      await session.abortTransaction();
+      session.endSession();
       res.status(400).json({ error: "Failed to disable therapist", details: e.message });
     }
   };
@@ -548,19 +745,57 @@ incompleteTherapistProfile:false
    * PATCH /api/admin/therapists/:id/enable
    */
   enableTherapist = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const { id } = req.params; // TherapistProfile _id
       if (!mongoose.Types.ObjectId.isValid(id)) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
-      const therapist = await TherapistProfile.findById(id);
+      const therapist = await TherapistProfile.findById(id).session(session);
       if (!therapist || !therapist.userId) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ error: "Therapist not found" });
       }
 
-      await User.findByIdAndUpdate(therapist.userId, { isDisabled: false });
+      await User.findByIdAndUpdate(therapist.userId, { isDisabled: false }, { session });
+
+      // ====== Audit Log (same style as payTherapist, using AuditLogService.addLog) ======
+      try {
+
+        await AuditLogService.addLog(
+          {
+            action: "THERAPIST_ENABLED",
+            user: req?.user?.id,
+            role: req?.user?.role,
+            resource: "Therapist",
+            resourceId: id,
+            details: {
+              userId: therapist.userId?.toString(),
+              therapistProfileId: id,
+              message: `Therapist userId=${therapist.userId} enabled by userId=${req?.user?.id || "SYSTEM"}. TherapistProfile=${id}`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[enableTherapist] Error writing audit log (aborting transaction):", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ error: "Audit log creation failed. Changes not saved." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
       res.json({ success: true, message: "Therapist enabled successfully" });
     } catch (e) {
+      await session.abortTransaction();
+      session.endSession();
       res.status(400).json({ error: "Failed to enable therapist", details: e.message });
     }
   };
@@ -571,36 +806,68 @@ incompleteTherapistProfile:false
    * body: { isPanelAccessible: true/false }
    */
   setPanelAccessible = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const { id } = req.params; // TherapistProfile _id
       const { isPanelAccessible } = req.body;
 
-      console.log("[setPanelAccessible] Params.id:", id);
-      console.log("[setPanelAccessible] Body.isPanelAccessible:", isPanelAccessible);
-
       if (!mongoose.Types.ObjectId.isValid(id)) {
-        console.log("[setPanelAccessible] Invalid therapist profile ID");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
       if (typeof isPanelAccessible !== "boolean") {
-        console.log("[setPanelAccessible] isPanelAccessible is NOT boolean:", typeof isPanelAccessible);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "isPanelAccessible must be boolean" });
       }
 
       const therapist = await TherapistProfile.findByIdAndUpdate(
         id,
         { isPanelAccessible },
-        { new: true }
+        { new: true, session }
       );
-      console.log("[setPanelAccessible] Therapist after update:", therapist);
 
       if (!therapist) {
-        console.log("[setPanelAccessible] Therapist not found for id:", id);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ error: "Therapist not found" });
       }
+
+      // ====== Audit Log (same style as enableTherapist, using AuditLogService.addLog) ======
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "SET_PANEL_ACCESSIBLE",
+            user: req?.user?.id,
+            role: req?.user?.role,
+            resource: "Therapist",
+            resourceId: id,
+            details: {
+              userId: therapist.userId?.toString?.() || undefined,
+              therapistProfileId: id,
+              isPanelAccessible,
+              message: `Panel accessibility set to isPanelAccessible=${isPanelAccessible} for therapistId=${id} by userId=${req?.user?.id || "SYSTEM"}.`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[setPanelAccessible] Error writing audit log (aborting transaction):", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ error: "Audit log creation failed. Changes not saved." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
       res.json({ success: true, therapist });
     } catch (e) {
-      console.log("[setPanelAccessible] Error:", e);
+      await session.abortTransaction();
+      session.endSession();
       res.status(400).json({ error: "Failed to update panel accessibility", details: e.message });
     }
   };
@@ -614,18 +881,24 @@ incompleteTherapistProfile:false
    *   - Partial day: { date, slots }
    */
   setHolidays = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
     try {
       const { id } = req.params; // TherapistProfile _id
       const { fromDate, toDate, date, slots } = req.body;
 
       // Validate therapist profile ID
       if (!mongoose.Types.ObjectId.isValid(id)) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
 
-      // Fetch therapist
-      const therapist = await TherapistProfile.findById(id);
+      // Fetch therapist with transaction
+      const therapist = await TherapistProfile.findById(id).session(session);
       if (!therapist) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ error: "Therapist not found" });
       }
 
@@ -636,11 +909,10 @@ incompleteTherapistProfile:false
         return match ? match[1] : null;
       }
 
-      // ---- Setup for checking availability ----
-      // Import Booking (do NOT move to toplevel, since AdminController uses ESM and .default needed)
+      // Import Booking (do NOT move to top-level)
       const Booking = (await import("../../Schema/booking.schema.js")).default;
 
-      // Session slot options (for slot label resolution)
+      // Session slot options
       const sessionOptions = [
         { id: '1000-1045', label: '10:00 to 10:45' },
         { id: '1045-1130', label: '10:45 to 11:30' },
@@ -659,7 +931,6 @@ incompleteTherapistProfile:false
         { id: '1930-2015', label: '19:30 to 20:15' }
       ];
 
-      // Utility: session is not cancelled or deleted
       function isActiveSession(sess) {
         return (
           sess &&
@@ -673,6 +944,8 @@ incompleteTherapistProfile:false
         const toStr = extractDateString(toDate);
 
         if (!fromStr || !toStr) {
+          await session.abortTransaction();
+          session.endSession();
           return res.status(400).json({ error: "Invalid fromDate/toDate format" });
         }
 
@@ -680,6 +953,8 @@ incompleteTherapistProfile:false
         const to = new Date(toStr + "T00:00:00Z");
 
         if (from > to) {
+          await session.abortTransaction();
+          session.endSession();
           return res.status(400).json({ error: "fromDate cannot be after toDate" });
         }
 
@@ -715,6 +990,8 @@ incompleteTherapistProfile:false
         }
 
         if (bookedDates.size > 0) {
+          await session.abortTransaction();
+          session.endSession();
           return res.status(400).json({
             error: `Cannot set holiday: Therapist already has session(s) on ${Array.from(bookedDates).join(", ")}.`
           });
@@ -741,7 +1018,40 @@ incompleteTherapistProfile:false
         }
         therapist.holidays.push(...holidaysToAdd);
 
-        await therapist.save();
+        await therapist.save({ session });
+
+        // ====== Audit Log (use AuditLogService.addLog, with transaction) ======
+        try {
+          await AuditLogService.addLog(
+            {
+              action: "SET_HOLIDAYS_FULL",
+              user: req?.user?.id,
+              role: req?.user?.role,
+              resource: "Therapist",
+              resourceId: id,
+              details: {
+                userId: therapist.userId?.toString?.() || undefined,
+                therapistProfileId: id,
+                fromDate: fromDate,
+                toDate: toDate,
+                dateStringsSet: dateStrings,
+                isFullDay: true,
+                message: `Set full-day holidays for dates ${fromDate} to ${toDate}, therapistId=${id} by userId=${req?.user?.id || "SYSTEM"}.`
+              },
+              ipAddress: req.ip,
+              userAgent: req.headers["user-agent"]
+            },
+            { session }
+          );
+        } catch (elog) {
+          console.error("[setHolidays] Error writing audit log, aborting transaction:", elog);
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(500).json({ error: "Audit log creation failed. Changes not saved." });
+        }
+
+        await session.commitTransaction();
+        session.endSession();
         return res.json({
           success: true,
           message: "Holiday(s) set for full day date range",
@@ -753,6 +1063,8 @@ incompleteTherapistProfile:false
       if (date && Array.isArray(slots) && slots.length > 0) {
         const holidayDateStr = extractDateString(date);
         if (!holidayDateStr) {
+          await session.abortTransaction();
+          session.endSession();
           return res.status(400).json({ error: "Invalid date format" });
         }
 
@@ -766,6 +1078,8 @@ incompleteTherapistProfile:false
           .filter(Boolean);
 
         if (slotsToSave.length === 0) {
+          await session.abortTransaction();
+          session.endSession();
           return res.status(400).json({ error: "No valid slots selected" });
         }
 
@@ -775,7 +1089,7 @@ incompleteTherapistProfile:false
           "sessions.date": holidayDateStr,
           "sessions.id": { $in: slots }
         };
-        // We must check all sessions for the requested slot(s) on that date
+
         const bookings = await Booking.find(sessionsQuery, { sessions: 1 }).lean();
         let blockedSlots = new Set();
         for (const bk of bookings) {
@@ -798,6 +1112,8 @@ incompleteTherapistProfile:false
             const found = sessionOptions.find(o => o.id === blockedId);
             return found ? found.label : blockedId;
           });
+          await session.abortTransaction();
+          session.endSession();
           return res.status(400).json({
             error: `Cannot set holiday: Therapist already has session(s) for slot(s): ${blockedLabels.join(", ")} on ${holidayDateStr}.`
           });
@@ -819,7 +1135,39 @@ incompleteTherapistProfile:false
             isFullDay: false
           });
         }
-        await therapist.save();
+        await therapist.save({ session });
+
+        // ====== Audit Log (use AuditLogService.addLog, with transaction) ======
+        try {
+          await AuditLogService.addLog(
+            {
+              action: "SET_HOLIDAYS_PARTIAL",
+              user: req?.user?.id,
+              role: req?.user?.role,
+              resource: "Therapist",
+              resourceId: id,
+              details: {
+                userId: therapist.userId?.toString?.() || undefined,
+                therapistProfileId: id,
+                date: holidayDateStr,
+                slots: slotsToSave,
+                isFullDay: false,
+                message: `Set partial-slot holiday for date ${holidayDateStr}, therapistId=${id} by userId=${req?.user?.id || "SYSTEM"}.`
+              },
+              ipAddress: req.ip,
+              userAgent: req.headers["user-agent"]
+            },
+            { session }
+          );
+        } catch (elog) {
+          console.error("[setHolidays] Error writing audit log, aborting transaction:", elog);
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(500).json({ error: "Audit log creation failed. Changes not saved." });
+        }
+
+        await session.commitTransaction();
+        session.endSession();
         return res.json({
           success: true,
           message: "Partial holiday set for date",
@@ -827,9 +1175,13 @@ incompleteTherapistProfile:false
         });
       }
 
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({ error: "Invalid request. Please provide fromDate/toDate (full), or date and slots (partial)." });
     } catch (e) {
       console.error("[setHolidays] Error:", e);
+      await session.abortTransaction();
+      session.endSession();
       res.status(400).json({ error: "Error setting therapist holidays", details: e.message });
     }
   };

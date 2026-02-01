@@ -6,11 +6,14 @@ import Package from '../../Schema/packages.schema.js';
 import SessionEditRequest from '../../Schema/session-edit-request.schema.js';
 import { TherapyType } from '../../Schema/therapy-type.schema.js';
 import { PatientProfile, TherapistProfile, User } from '../../Schema/user.schema.js';
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+
 
 
 
 
 class ParentController {
+
 
 
   /**
@@ -20,20 +23,28 @@ class ParentController {
    * Parent signup by OTP (role: "parent")
    */
   async parentSignUpSendOTP(req, res) {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
       const { email, name } = req.body;
 
       if (!email || typeof email !== "string") {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "Valid email is required." });
       }
 
       if (!name || typeof name !== "string") {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "Name is required." });
       }
 
       // Only check if a parent user exists with this email
-      const userExists = await User.findOne({ email, role: "patient" });
+      const userExists = await User.findOne({ email, role: "patient" }).session(session);
       if (userExists) {
+        await session.abortTransaction();
+        session.endSession();
         // If a parent user with this email already exists, no new OTP is sent.
         return res.status(409).json({ success: false, message: "A parent with this email already exists." });
       }
@@ -55,17 +66,44 @@ class ParentController {
         signUpOTPLastUsedAt: null,
         status: "active",
         isDisabled: false, // default is enabled
-        manualSignUp:true
+        manualSignUp: true
       });
-      await newUser.save();
+      await newUser.save({ session });
 
       // Do NOT create PatientProfile or patientId yet (done on completeProfile)
 
       // Real: Send OTP via nodemailer/sendgrid here. --- For demo, just log.
       console.log(`[ParentSignup] OTP for ${email}:`, otp);
 
+      // ---- AUDIT LOG: Parent signup OTP sent ----
+      try {
+        await AuditLogService.addLog({
+          action: 'PARENT_SIGNUP_OTP_SENT',
+          user: newUser._id,
+          role: 'parent',
+          resource: 'Parent',
+          resourceId: newUser._id,
+          details: {
+            email,
+            name,
+            message: `Parent signup OTP sent to ${email}`,
+            completeProfileOrigin: 'self-service'
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        // Still commit the transaction, but log the error
+        console.error('Failed to write audit log (PARENT_SIGNUP_OTP_SENT) in parentSignUpSendOTP:', logErr);
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
       return res.json({ success: true, message: "OTP sent to email address." });
     } catch (e) {
+      await session.abortTransaction();
+      session.endSession();
       console.error("Error in parentSignUpSendOTP:", e);
       return res.status(500).json({ success: false, message: "Server error." });
     }
@@ -126,6 +164,27 @@ class ParentController {
       signupUser.isDisabled = false;
 
       await signupUser.save();
+
+      // ---- AUDIT LOG: Parent signup OTP verified ----
+      try {
+        await AuditLogService.addLog({
+          action: 'PARENT_SIGNUP_OTP_VERIFIED',
+          user: signupUser._id,
+          role: 'parent',
+          resource: 'Parent',
+          resourceId: signupUser._id,
+          details: {
+            email,
+            otpVerified: true,
+            message: `Parent OTP verified and account activated for ${email}`,
+            completeProfileOrigin: 'self-service'
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        console.error('Failed to write audit log (PARENT_SIGNUP_OTP_VERIFIED) in parentSignUpVerifyOTP:', logErr);
+      }
 
       // No separate ParentProfile collection -- parent is done upon user creation.
       return res.json({ success: true, message: "Parent account created. You may now login." });
@@ -241,6 +300,33 @@ class ParentController {
           // Add other profile fields here as needed
         });
         await createdProfile.save();
+      }
+
+      // ---- AUDIT LOG: Parent profile completed ----
+      try {
+        await AuditLogService.addLog({
+          action: 'PARENT_PROFILE_COMPLETED',
+          user: user._id,
+          role:  'parent',
+          resource: 'Parent',
+          resourceId: createdProfile?._id || existingProfile?._id,
+          details: {
+            email: user.email,
+            userId: user._id,
+            fieldsSubmitted: {
+              childFullName, gender, childDOB, fatherFullName, motherFullName, parentEmail,
+              mobile1, mobile2, address, areaName, pincode, diagnosisInfo, childReference,
+              parentOccupation, remarks, otherDocument
+            },
+            createdProfile: !!createdProfile,
+            completeProfileOrigin: 'self-service',
+            message: `Parent [${user.email}] completed their profile`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        console.error('Failed to write audit log (PARENT_PROFILE_COMPLETED) in completeParentProfile:', logErr);
       }
 
       return res.status(200).json({
@@ -1067,7 +1153,6 @@ class ParentController {
     try {
       session.startTransaction();
 
-      // Only fields needed by booking-request.schema.js
       const {
         package: packageId,
         patient: patientId,
@@ -1078,7 +1163,7 @@ class ParentController {
       // Log incoming request for audit
       console.log("[CREATE BOOKING REQUEST] Incoming body:", req.body);
 
-      // Validate required fields (per schema: requestId, package, patient, sessions[], therapy)
+      // Validate required fields
       if (
         !packageId ||
         !patientId ||
@@ -1095,7 +1180,6 @@ class ParentController {
         });
       }
 
-      // (Optional: check Package ID valid)
       const pkg = await Package.findById(packageId).lean();
       if (!pkg) {
         return res.status(400).json({
@@ -1110,11 +1194,9 @@ class ParentController {
         { $inc: { seq: 1 } },
         { new: true, upsert: true, session }
       );
-      // Format: REQ-00001
       const requestId = `REQ-${String(counter.seq).padStart(5, '0')}`;
       console.log("[CREATE BOOKING REQUEST] Generated requestId:", requestId);
 
-      // Compose booking request payload with only allowed fields
       const bookingRequestPayload = {
         requestId,
         package: packageId,
@@ -1122,21 +1204,56 @@ class ParentController {
         sessions,
         therapy: therapyId
       };
-
-      // Remove undefined/nulls
       Object.keys(bookingRequestPayload).forEach(
         k => bookingRequestPayload[k] === undefined && delete bookingRequestPayload[k]
       );
 
-      // Save booking request in DB
+      // Save booking request in DB (but commit transaction only after log)
       const bookingRequest = new BookingRequests(bookingRequestPayload);
       await bookingRequest.save({ session });
       console.log("[CREATE BOOKING REQUEST] BookingRequest saved. _id:", bookingRequest._id);
 
+      // --- Audit Log (must succeed for booking to exist) ---
+      
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "CREATE_BOOKING_REQUEST",
+            user: req.user?.id,
+            role: req.user?.role === "patient" ? "parent" : req.user?.role,
+            resource: "BookingRequest",
+            resourceId: bookingRequest._id,
+            details: {
+              bookingRequest: {
+                requestId,
+                packageId,
+                patientId,
+                therapyId,
+                sessionCount: Array.isArray(sessions) ? sessions.length : 0
+              },
+              message: `Booking request created by userId=${req.user?.id || "?"}, patientId=${patientId}, packageId=${packageId}, therapyId=${therapyId}`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (auditErr) {
+        // If log fails, revert booking request (abort transaction)
+        await session.abortTransaction();
+        session.endSession();
+        console.error("[CREATE BOOKING REQUEST] Audit log failed, reverted booking request:", auditErr);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to create booking request. Audit log not created, request reverted.",
+          error: auditErr.message,
+        });
+      }
+
       await session.commitTransaction();
       session.endSession();
 
-      // Populate returned fields (basic for now)
+      // Populate returned fields
       const populatedRequest = await BookingRequests.findById(bookingRequest._id)
         .populate("package")
         .populate({
@@ -1360,9 +1477,10 @@ class ParentController {
   async updateBookingRequest(req, res) {
     const mongoose = (await import('mongoose')).default;
     const session = await mongoose.startSession();
-    session.startTransaction();
 
     try {
+      session.startTransaction();
+
       const { id } = req.params;
       if (!id) {
         await session.abortTransaction();
@@ -1383,6 +1501,19 @@ class ParentController {
         return res.status(400).json({ success: false, message: "No fields provided for update" });
       }
 
+      const bookingRequestBefore = await BookingRequests.findById(id).lean();
+
+           // INSERT_YOUR_CODE
+      // Check if booking request is already approved; if so, do not allow edits
+      if (bookingRequestBefore && bookingRequestBefore.status === 'approved') {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Cannot update booking request: already approved."
+        });
+      }
+
       const bookingRequest = await BookingRequests.findByIdAndUpdate(
         id,
         { $set: updateFields },
@@ -1399,10 +1530,45 @@ class ParentController {
         })
         .populate({ path: "therapy", model: "TherapyType" });
 
+
+
       if (!bookingRequest) {
         await session.abortTransaction();
         session.endSession();
         return res.status(404).json({ success: false, message: "Booking request not found" });
+      }
+
+ 
+      // --- Audit Log (must succeed for booking to be updated) ---
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "UPDATE_BOOKING_REQUEST",
+            user: req.user?.id,
+            role: req.user?.role === "patient" ? "parent" : req.user?.role,
+            resource: "BookingRequest",
+            resourceId: bookingRequest._id,
+            details: {
+              before: bookingRequestBefore,
+              after: bookingRequest,
+              updateFields,
+              message: `Booking request updated by userId=${req.user?.id || "?"}, patientId=${updateFields.patient || (bookingRequestBefore ? bookingRequestBefore.patient : undefined)}`,
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (auditErr) {
+        // If log fails, revert the update (abort transaction)
+        await session.abortTransaction();
+        session.endSession();
+        console.error("[UPDATE BOOKING REQUEST] Audit log failed, reverted update:", auditErr);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update booking request. Audit log not created, update reverted.",
+          error: auditErr.message,
+        });
       }
 
       await session.commitTransaction();
@@ -1410,7 +1576,11 @@ class ParentController {
 
       res.json({ success: true, bookingRequest });
     } catch (error) {
-      await session.abortTransaction();
+      try {
+        await session.abortTransaction();
+      } catch (abortErr) {
+        // Ignore abort errors
+      }
       session.endSession();
       console.error("[UPDATE BOOKING REQUEST]", error);
       res.status(500).json({
@@ -1435,12 +1605,56 @@ class ParentController {
         return res.status(400).json({ success: false, message: "Booking request ID required" });
       }
 
-      const bookingRequest = await BookingRequests.findByIdAndDelete(id, { session });
+      // Find the booking request first
+      const bookingRequest = await BookingRequests.findById(id).session(session);
       if (!bookingRequest) {
         await session.abortTransaction();
         session.endSession();
         return res.status(404).json({ success: false, message: "Booking request not found" });
       }
+
+      // If booking is already approved, don't allow deletion
+      if (bookingRequest.status === "approved") {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          success: false,
+          message: "Cannot delete an approved booking request."
+        });
+      }
+
+      // --- Audit log before deletion ---
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "DELETE_BOOKING_REQUEST",
+            user: req.user?.id,
+            role: req.user?.role === "patient" ? "parent" : req.user?.role,
+            resource: "BookingRequest",
+            resourceId: bookingRequest._id,
+            details: {
+              deletedBookingRequest: bookingRequest.toObject ? bookingRequest.toObject() : bookingRequest,
+              message: `Booking request deleted by userId=${req.user?.id || "?"}, patientId=${bookingRequest.patient}, packageId=${bookingRequest.package}, therapyId=${bookingRequest.therapy}`,
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (auditErr) {
+        // If log fails, revert deletion (abort transaction)
+        await session.abortTransaction();
+        session.endSession();
+        console.error("[DELETE BOOKING REQUEST] Audit log failed, reverted delete:", auditErr);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to delete booking request. Audit log not created, deletion reverted.",
+          error: auditErr.message
+        });
+      }
+
+      // Otherwise, delete it
+      await BookingRequests.findByIdAndDelete(id, { session });
 
       await session.commitTransaction();
       session.endSession();
@@ -1478,7 +1692,10 @@ class ParentController {
 
   // Create a new session edit request (supports bulk sessions for one appointmentId)
   async createSessionEditRequest(req, res) {
+    const mongoose = (await import('mongoose')).default;
+    const session = await mongoose.startSession();
     try {
+      session.startTransaction();
       const { appointmentId, patientId, sessions } = req.body;
 
       if (
@@ -1493,6 +1710,8 @@ class ParentController {
             s.newSlotId
         )
       ) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({
           success: false,
           message:
@@ -1500,15 +1719,15 @@ class ParentController {
         });
       }
 
-      // INSERT_YOUR_CODE
-
       // Check if a pending request for this appointment already exists
       const existingPendingRequest = await SessionEditRequest.findOne({
         appointmentId: appointmentId,
         status: "pending"
-      });
+      }).session(session);
 
       if (existingPendingRequest) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({
           success: false,
           message: "A pending session edit request for this appointment already exists.",
@@ -1516,23 +1735,245 @@ class ParentController {
         });
       }
 
-
       // Generate custom session-edit-request Id
       const requestId = await this.generateSessionEditRequestId();
 
-      const request = await SessionEditRequest.create({
-        // Do not set _id manually, let Mongo generate
+      const requestPayload = {
         appointmentId,
         patientId,
         sessions,
         status: "pending",
-        requestId, // Optional: can store for external reference
-      });
+        requestId
+      };
 
-      res.status(201).json({ success: true, request });
+      const request = await SessionEditRequest.create([requestPayload], { session });
+
+      // INSERT_YOUR_CODE
+      console.log("[CREATE SESSION EDIT REQUEST] request fields:", {
+        appointmentId,
+        patientId,
+        sessions,
+        status: "pending",
+        requestId,
+        requestObject: request[0],
+        user: req.user,
+        userId: req.user?.id,
+        role: req.user?.role === "patient" ? "parent" : req.user?.role,
+        action: "CREATE_SESSION_EDIT_REQUEST",
+        resource: "SessionEditRequest",
+        resourceId: request[0]?._id,
+        details: {
+          requestId,
+          appointmentId,
+          patientId,
+          sessionCount: Array.isArray(sessions) ? sessions.length : 0,
+          message: `Session edit request created by userId=${req.user?.id || "?"}, patientId=${patientId}, appointmentId=${appointmentId}.`
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"]
+      });
+      
+      // AUDIT LOG (must succeed or abort)
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "CREATE_SESSION_EDIT_REQUEST",
+            user: req.user?.id,
+            role: req.user?.role === "patient" ? "parent" : req.user?.role,
+            resource: "SessionEditRequest",
+            resourceId: request[0]._id,
+            details: {
+              requestId,
+              appointmentId,
+              patientId,
+              sessionCount: Array.isArray(sessions) ? sessions.length : 0,
+              message: `Session edit request created by userId=${req.user?.id || "?"}, patientId=${patientId}, appointmentId=${appointmentId}.`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (auditErr) {
+        await session.abortTransaction();
+        session.endSession();
+        console.error("[CREATE SESSION EDIT REQUEST] Audit log failed, reverted creation:", auditErr);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to create session edit request. Audit log not created, request reverted.",
+          error: auditErr.message,
+        });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      res.status(201).json({ success: true, request: request[0] });
     } catch (error) {
+      try {
+        await session.abortTransaction();
+      } catch (abortErr) {
+        // Ignore abort error
+      }
+      session.endSession();
       console.error("[CREATE SESSION EDIT REQUEST]", error);
       res.status(500).json({ success: false, message: "Failed to create session edit request", error: error.message });
+    }
+  }
+
+  // Edit/update a session edit request (only updatable: sessions array, status)
+  async updateSessionEditRequest(req, res) {
+    const mongoose = (await import('mongoose')).default;
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+
+      const { id } = req.params;
+      if (!id) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ success: false, message: "Request ID required" });
+      }
+
+      // Only allow updating sessions and/or status
+      const updates = {};
+      if (req.body.sessions && Array.isArray(req.body.sessions)) {
+        updates.sessions = req.body.sessions;
+      }
+      if (req.body.status !== undefined) {
+        updates.status = req.body.status;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ success: false, message: "No valid fields provided for update" });
+      }
+
+      const beforeUpdate = await SessionEditRequest.findById(id).lean().session(session);
+
+      if (!beforeUpdate) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ success: false, message: "Session edit request not found" });
+      }
+
+      const updated = await SessionEditRequest.findByIdAndUpdate(id, updates, { new: true, session });
+      if (!updated) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ success: false, message: "Session edit request not found" });
+      }
+
+      // AUDIT LOG (must succeed or abort)
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "UPDATE_SESSION_EDIT_REQUEST",
+            user: req.user?.id,
+            role: req.user?.role === "patient" ? "parent" : req.user?.role,
+            resource: "SessionEditRequest",
+            resourceId: updated._id,
+            details: {
+              before: beforeUpdate,
+              after: updated,
+              updateFields: updates,
+              message: `Session edit request updated by userId=${req.user?.id || "?"}, appointmentId=${beforeUpdate.appointmentId}`,
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (auditErr) {
+        await session.abortTransaction();
+        session.endSession();
+        console.error("[UPDATE SESSION EDIT REQUEST] Audit log failed, reverted update:", auditErr);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update session edit request. Audit log not created, update reverted.",
+          error: auditErr.message,
+        });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      res.json({ success: true, request: updated });
+    } catch (error) {
+      try {
+        await session.abortTransaction();
+      } catch (abortErr) {
+        // ignore
+      }
+      session.endSession();
+      console.error("[UPDATE SESSION EDIT REQUEST]", error);
+      res.status(500).json({ success: false, message: "Failed to update session edit request", error: error.message });
+    }
+  }
+
+  // Delete a session edit request
+  async deleteSessionEditRequest(req, res) {
+    const mongoose = (await import('mongoose')).default;
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+      const { id } = req.params;
+      if (!id) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ success: false, message: "Request ID required" });
+      }
+
+      const toDelete = await SessionEditRequest.findById(id).session(session);
+      if (!toDelete) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ success: false, message: "Session edit request not found" });
+      }
+
+      // AUDIT LOG (must succeed or abort)
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "DELETE_SESSION_EDIT_REQUEST",
+            user: req.user?.id,
+            role: req.user?.role === "patient" ? "parent" : req.user?.role,
+            resource: "SessionEditRequest",
+            resourceId: toDelete._id,
+            details: {
+              deleted: toDelete,
+              message: `Session edit request deleted by userId=${req.user?.id || "?"}, appointmentId=${toDelete.appointmentId}`,
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (auditErr) {
+        await session.abortTransaction();
+        session.endSession();
+        console.error("[DELETE SESSION EDIT REQUEST] Audit log failed, reverted delete:", auditErr);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to delete session edit request. Audit log not created, deletion reverted.",
+          error: auditErr.message
+        });
+      }
+
+      await SessionEditRequest.findByIdAndDelete(id, { session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      res.json({ success: true, message: "Session edit request deleted successfully" });
+    } catch (error) {
+      try {
+        await session.abortTransaction();
+      } catch (abortErr) {}
+      session.endSession();
+      console.error("[DELETE SESSION EDIT REQUEST]", error);
+      res.status(500).json({ success: false, message: "Failed to delete session edit request", error: error.message });
     }
   }
 
@@ -1554,58 +1995,7 @@ class ParentController {
     }
   }
 
-  // Edit/update a session edit request (only updatable: sessions array, status)
-  async updateSessionEditRequest(req, res) {
-    try {
-      const { id } = req.params;
-      if (!id) {
-        return res.status(400).json({ success: false, message: "Request ID required" });
-      }
 
-      // Only allow updating sessions and/or status
-      const updates = {};
-      if (req.body.sessions && Array.isArray(req.body.sessions)) {
-        updates.sessions = req.body.sessions;
-      }
-      if (req.body.status !== undefined) {
-        updates.status = req.body.status;
-      }
-
-      if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ success: false, message: "No valid fields provided for update" });
-      }
-
-      const updated = await SessionEditRequest.findByIdAndUpdate(id, updates, { new: true });
-      if (!updated) {
-        return res.status(404).json({ success: false, message: "Session edit request not found" });
-      }
-
-      res.json({ success: true, request: updated });
-    } catch (error) {
-      console.error("[UPDATE SESSION EDIT REQUEST]", error);
-      res.status(500).json({ success: false, message: "Failed to update session edit request", error: error.message });
-    }
-  }
-
-  // Delete a session edit request
-  async deleteSessionEditRequest(req, res) {
-    try {
-      const { id } = req.params;
-      if (!id) {
-        return res.status(400).json({ success: false, message: "Request ID required" });
-      }
-
-      const deleted = await SessionEditRequest.findByIdAndDelete(id);
-      if (!deleted) {
-        return res.status(404).json({ success: false, message: "Session edit request not found" });
-      }
-
-      res.json({ success: true, message: "Session edit request deleted successfully" });
-    } catch (error) {
-      console.error("[DELETE SESSION EDIT REQUEST]", error);
-      res.status(500).json({ success: false, message: "Failed to delete session edit request", error: error.message });
-    }
-  }
 
 
   async allBookings(req, res) {

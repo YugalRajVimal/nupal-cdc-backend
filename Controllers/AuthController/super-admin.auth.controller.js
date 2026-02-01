@@ -2,6 +2,8 @@ import sendMail from "../../config/nodeMailer.config.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { User, SuperAdminProfile } from "../../Schema/user.schema.js";
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+
 
 // Only allow superadmin for these endpoints
 const ALLOWED_ROLES = ["superadmin"];
@@ -39,23 +41,31 @@ class SuperAdminAuthController {
 
   // Superadmin Login: with email and password
   login = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
       const { email, password } = req.body;
       if (!email || !password) {
         console.log("Login failed: email or password missing");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Email and password are required." });
       }
 
-      const user = await User.findOne({ email: email.trim().toLowerCase(), role: "superadmin" });
+      const user = await User.findOne({ email: email.trim().toLowerCase(), role: "superadmin" }).session(session);
       console.log("Login user lookup:", user);
       if (!user) {
         console.log("Login failed: user not found");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ message: "Superadmin not found" });
       }
 
       // Check for passwordHash existence
       if (!user.passwordHash) {
         console.log("Login failed: password hash not present");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(401).json({ message: "Invalid credentials." });
       }
 
@@ -64,9 +74,10 @@ class SuperAdminAuthController {
       console.log("Password match result:", match);
       if (!match) {
         console.log("Login failed: password does not match");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(401).json({ message: "Invalid credentials." });
       }
-
 
       // Generate JWT
       const payload = {
@@ -75,6 +86,33 @@ class SuperAdminAuthController {
         role: user.role
       };
       const token = jwt.sign(payload, process.env.JWT_SECRET);
+
+      // === Mandatory Audit Log (must succeed for transaction) ===
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "SUPERADMIN_LOGIN",
+            user: user._id,
+            role: user.role,
+            resource: "User",
+            resourceId: user._id,
+            details: {
+              message: `Superadmin login for userId=${user._id} (${user.email})`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[superadmin.login] Error writing audit log:", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ message: "Audit log creation failed. Login aborted." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
 
       console.log("SuperAdmin login successful:", user.email);
 
@@ -90,6 +128,8 @@ class SuperAdminAuthController {
         }
       });
     } catch (err) {
+      await session.abortTransaction();
+      session.endSession();
       console.log("Login error:", err);
       return res.status(500).json({ message: "Internal Server Error" });
     }
@@ -97,31 +137,74 @@ class SuperAdminAuthController {
 
   // Forgot Password (superadmin): send OTP (always 000000 for now)
   forgotPassword = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
       const { email } = req.body;
       if (!email) {
         console.log("Forgot password: email missing");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Email is required." });
       }
 
-      const user = await User.findOne({ email: email.trim().toLowerCase(), role: "superadmin" });
+      const user = await User.findOne({ email: email.trim().toLowerCase(), role: "superadmin" }).session(session);
       console.log("Forgot password user lookup:", user);
       if (!user) {
         console.log("Forgot password: superadmin not found");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ message: "Superadmin not found" });
       }
 
       // Save OTP ("000000") and expiry (optionally 10min)
-      await User.findByIdAndUpdate(user._id, {
-        otp: "000000",
-        otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      });
+      await User.findByIdAndUpdate(
+        user._id,
+        {
+          otp: "000000",
+          otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        },
+        { session }
+      );
+
+      // === Mandatory Audit Log (must succeed for transaction) ===
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "SUPERADMIN_FORGOT_PASSWORD_OTP_SENT",
+            user: user._id,
+            role: user.role,
+            resource: "User",
+            resourceId: user._id,
+            details: {
+              changedFields: {
+                otp: { from: undefined, to: "000000" },
+                otpExpiresAt: { from: undefined, to: (new Date(Date.now() + 10 * 60 * 1000)).toISOString() }
+              },
+              message: `Superadmin forgot password OTP sent for userId=${user._id} (${user.email})`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[superadmin.forgotPassword] Error writing audit log:", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ message: "Audit log creation failed. Forgot password OTP not saved." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
 
       // Optionally send email (for dev, just say sent)
       console.log("OTP set for superadmin:", email);
       // await sendMail(email, "Your OTP Code", `Your OTP is: 000000`);
       return res.status(200).json({ message: "OTP sent to your registered email (for demo, OTP is 000000)" });
     } catch (err) {
+      await session.abortTransaction();
+      session.endSession();
       console.log("Forgot password error:", err);
       return res.status(500).json({ message: "Internal Server Error" });
     }
@@ -129,10 +212,14 @@ class SuperAdminAuthController {
 
   // Verify Account - superadmin only, checks OTP (default 000000)
   verifyAccount = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
       let { email, otp } = req.body;
       if (!email || !otp) {
         console.log("Verify account: email or otp missing");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Email and OTP are required" });
       }
       email = email.trim().toLowerCase();
@@ -145,14 +232,43 @@ class SuperAdminAuthController {
           otpExpiresAt: { $gte: new Date() },
         },
         { $unset: { otp: 1, otpExpiresAt: 1 } },
-        { new: true }
+        { new: true, session }
       ).lean();
 
       console.log("Verify account lookup result:", user);
 
       if (!user) {
         console.log("Verify account: invalid email or otp");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(401).json({ message: "Invalid email or OTP." });
+      }
+
+      // === Mandatory Audit Log (must succeed for transaction) ===
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "SUPERADMIN_ACCOUNT_VERIFIED",
+            user: user._id,
+            role: user.role,
+            resource: "User",
+            resourceId: user._id,
+            details: {
+              changedFields: {
+                otp: { from: otp, to: undefined }
+              },
+              message: `Superadmin verified account with OTP for userId=${user._id} (${user.email})`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[superadmin.verifyAccount] Error writing audit log:", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ message: "Audit log creation failed. Account verification not saved." });
       }
 
       // Generate JWT
@@ -162,6 +278,9 @@ class SuperAdminAuthController {
         role: user.role
       };
       const token = jwt.sign(payload, process.env.JWT_SECRET);
+
+      await session.commitTransaction();
+      session.endSession();
 
       console.log("SuperAdmin OTP verified:", user.email);
 
@@ -177,6 +296,8 @@ class SuperAdminAuthController {
         }
       });
     } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
       console.log("Verify account error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
@@ -184,6 +305,8 @@ class SuperAdminAuthController {
 
   // Optional: Reset password after verifying OTP (requires token)
   resetPassword = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
     try {
       const { id, role } = req.user;
       console.log("ResetPassword req.user:", req.user);
@@ -191,30 +314,69 @@ class SuperAdminAuthController {
       // Check if user exists and role is superadmin
       if (!id || role !== "superadmin") {
         console.log("ResetPassword - Unauthorized: id missing or role not superadmin");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(403).json({ message: "Unauthorized. Only superadmin can reset password." });
       }
 
       const { newPassword } = req.body;
       if (!newPassword || newPassword.length < 6) {
         console.log("ResetPassword - Invalid newPassword: missing or too short");
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ message: "Password must be at least 6 characters." });
       }
 
       // Fetch the superadmin user and update their password
+      const newPasswordHash = await bcrypt.hash(newPassword, 10);
       const user = await User.findOneAndUpdate(
         { _id: id, role: "superadmin" },
-        { passwordHash: await bcrypt.hash(newPassword, 10) },
-        { new: true }
+        { passwordHash: newPasswordHash },
+        { new: true, session }
       );
 
       if (!user) {
         console.log("ResetPassword - Superadmin not found:", id);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ message: "Superadmin not found." });
       }
+
+      // === Mandatory Audit Log (must succeed for transaction) ===
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "SUPERADMIN_PASSWORD_RESET",
+            user: user._id,
+            role: user.role,
+            resource: "User",
+            resourceId: user._id,
+            details: {
+              changedFields: {
+                passwordHash: { from: "hidden", to: "hidden" }
+              },
+              message: `Superadmin password was reset for userId=${user._id} (${user.email})`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+      } catch (elog) {
+        console.error("[superadmin.resetPassword] Error writing audit log:", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ message: "Audit log creation failed. Password reset aborted." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
 
       console.log("Superadmin password reset:", user.email || user._id);
       return res.status(200).json({ message: "Password reset successfully." });
     } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
       console.log("ResetPassword error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }

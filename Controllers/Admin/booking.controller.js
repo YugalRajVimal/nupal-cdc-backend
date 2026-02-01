@@ -14,6 +14,9 @@ import SessionEditRequest from "../../Schema/session-edit-request.schema.js";
 import Finances from "../../Schema/finances.schema.js";
 import Lead from "../../Schema/leads.schema.js";
 
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+import mongoose from "mongoose";
+
 // Utility to get next sequence for an allowed counter
 const getNextSequence = async (name) => {
   const counter = await Counter.findOneAndUpdate(
@@ -143,15 +146,14 @@ class BookingAdminController {
 
   // Create a new booking with updated booking schema (1-47)
   async createBooking(req, res) {
-    const mongoose = (await import("mongoose")).default;
-    const session = await mongoose.startSession();
-    session.startTransaction();
 
+    const session = await mongoose.startSession();
     try {
-      // Import Payment model here (avoid circular require at top)
+      // Start transaction (mandatory - ALL steps MUST be in session, revert on any error including logs)
+      await session.startTransaction();
 
       const {
-        coupon, // expects coupon to be an id or object with id (frontend should send this)
+        coupon,
         package: packageId,
         patient: patientId,
         therapist: therapistId,
@@ -170,11 +172,10 @@ class BookingAdminController {
         followupDate,
         isBookingRequest,
         bookingRequestId,
-        remark // <-- added remark in destructure
+        remark
       } = req.body;
 
-      console.log("[CREATE BOOKING CHECK] Incoming body:", req.body);
-
+      // Required fields check
       if (
         !packageId ||
         !patientId ||
@@ -183,9 +184,6 @@ class BookingAdminController {
         !Array.isArray(sessions) ||
         !sessions.length
       ) {
-        console.log("[CREATE BOOKING CHECK] Missing required fields", {
-          packageId, patientId, therapyId, therapistId, sessions
-        });
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
@@ -194,31 +192,14 @@ class BookingAdminController {
         });
       }
 
-      // --- AVAILABILITY CHECK ACROSS ALL SESSIONS' therapistId (not just booking-level therapist) ---
-      // Gather all unique therapistIds from sessions
-      const therapistIdsForSessions = Array.from(
-        new Set((sessions || []).map(sess => sess.therapistId || therapistId))
-      );
-
-      // Fetch all therapist profiles needed for mapping therapistId (ObjectId) to therapistRefId (short id, e.g., "NPL001")
-      const therapistProfiles = await TherapistProfile.find({
-        _id: { $in: therapistIdsForSessions }
-      }).lean();
-
-      // Build map of ObjectId (as string) -> therapistRefId
+      // Step 1: Therapist and slot availability validation (in tx session)
+      const therapistIdsForSessions = Array.from(new Set((sessions || []).map(sess => sess.therapistId || therapistId)));
+      const therapistProfiles = await TherapistProfile.find({ _id: { $in: therapistIdsForSessions } }).lean();
       const therapistIdToRefIdMap = {};
       therapistProfiles.forEach(tp => {
         therapistIdToRefIdMap[tp._id.toString()] = tp.therapistId;
       });
-
-      // Validate all session therapist refs exist
       if (Object.keys(therapistIdToRefIdMap).length !== therapistIdsForSessions.length) {
-        console.log(
-          "[BOOKING AVAILABILITY CHECK] One or more therapistIds in sessions not found:",
-          therapistIdsForSessions,
-          "Known:",
-          Object.keys(therapistIdToRefIdMap)
-        );
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
@@ -226,17 +207,13 @@ class BookingAdminController {
           message: "One or more therapist(s) referenced in sessions do not exist."
         });
       }
-
-      // Prepare requestedSlots for availability check per session therapist
+      // Prepare requestedSlots for availability
       const requestedSlots = (sessions || []).map(sess => ({
         date: sess.date,
         slotId: sess.slotId || sess.id,
-        therapistId: sess.therapistId || therapistId, // fallback to booking-level for API compatibility
+        therapistId: sess.therapistId || therapistId
       }));
-
-      // Validate slot data
       if (requestedSlots.some(s => !s.date || !s.slotId || !s.therapistId)) {
-        console.log("[CREATE BOOKING CHECK] Invalid session data. Each session needs date, slotId/id and therapistId.", requestedSlots);
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
@@ -245,13 +222,10 @@ class BookingAdminController {
         });
       }
 
-      // Sort session dates for range query
       let sessionDates = requestedSlots.map(s => s.date).sort();
       const fromDate = sessionDates[0];
       const toDate = sessionDates[sessionDates.length - 1];
 
-      // For multi-therapist, call getAvailabilitySummary for each unique therapistId
-      // We'll merge all slotAvailabilityData for all therapist refs
       let allSlotAvailabilityData = {};
       for (const uniqueTherapistId of therapistIdsForSessions) {
         try {
@@ -283,11 +257,9 @@ class BookingAdminController {
           ) {
             throw new Error("Invalid response from getAvailabilitySummary");
           }
-          // Compose into allSlotAvailabilityData: structure will be { therapistRefId: { <date keys>: {...} } }
           const therapistRefId = therapistIdToRefIdMap[uniqueTherapistId];
           allSlotAvailabilityData[therapistRefId] = availabilitySummaryResult.data;
         } catch (err) {
-          console.error(`[BOOKING CREATE] Failed availabilitySummary call for therapist ${uniqueTherapistId}:`, err);
           await session.abortTransaction();
           session.endSession();
           return res.status(500).json({
@@ -298,20 +270,14 @@ class BookingAdminController {
         }
       }
 
-      // Log full availability data
-      console.log("[BOOKING AVAILABILITY CHECK] allSlotAvailabilityData:");
-      console.dir(allSlotAvailabilityData, { depth: 10 });
-
-      // Now, for each session, check with its therapistId
+      // Conflict check
       let conflicts = [];
-
       requestedSlots.forEach(sess => {
         const refId = therapistIdToRefIdMap[sess.therapistId];
         const slotAvailabilityData = allSlotAvailabilityData[refId];
-        if (!slotAvailabilityData) return; // Defensive: skip if unavailable
+        if (!slotAvailabilityData) return;
 
         for (const availKey in slotAvailabilityData) {
-          // Try to match YYYY-MM-DD to DD-MM-YYYY
           const [d, m, y] = availKey.split('-');
           const keyAsIso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
           if (
@@ -321,7 +287,6 @@ class BookingAdminController {
             Array.isArray(slotAvailabilityData[availKey].BookedSlots[refId]) &&
             slotAvailabilityData[availKey].BookedSlots[refId].includes(sess.slotId)
           ) {
-            console.log(`[BOOKING AVAILABILITY CHECK] Conflict detected: therapist=${sess.therapistId} (${refId}) on ${sess.date} slotId=${sess.slotId}. BookedSlots[${refId}]=`, slotAvailabilityData[availKey].BookedSlots[refId]);
             conflicts.push({
               date: sess.date,
               slotId: sess.slotId,
@@ -330,9 +295,7 @@ class BookingAdminController {
           }
         }
       });
-
       if (conflicts.length > 0) {
-        console.log("[BOOKING CREATE] Slot conflicts detected. Cannot book. Conflicts:", conflicts);
         await session.abortTransaction();
         session.endSession();
         return res.status(409).json({
@@ -341,43 +304,27 @@ class BookingAdminController {
           conflicts,
           allSlotAvailabilityData
         });
-      } else {
-        console.log("[BOOKING AVAILABILITY CHECK] All requested slots are available, proceeding with booking.");
       }
 
-      // -------------------------------------------------------------------------
-
-      // Save only coupon id and the timestamp (if given); ignore the rest
+      // Step 2: Coupon logic (in tx)
       let discountInfo = undefined;
       if (coupon && coupon.id) {
-        discountInfo = {
-          coupon: coupon.id,
-          time: new Date()
-        };
-        console.log("[CREATE BOOKING CHECK] Coupon is object with id. Set discountInfo:", discountInfo);
+        discountInfo = { coupon: coupon.id, time: new Date() };
       } else if (typeof coupon === "string" && coupon) {
-        discountInfo = {
-          coupon: coupon,
-          time: new Date()
-        };
-        console.log("[CREATE BOOKING CHECK] Coupon is string. Set discountInfo:", discountInfo);
-      } else {
-        console.log("[CREATE BOOKING CHECK] No coupon or invalid coupon info.");
+        discountInfo = { coupon: coupon, time: new Date() };
       }
 
-      // Generate new appointmentId inside transaction
+      // Step 3: Generate new appointmentId & paymentId in tx
       const counter = await Counter.findOneAndUpdate(
         { name: "appointment" },
         { $inc: { seq: 1 } },
         { new: true, upsert: true, session }
       );
       const appointmentId = generateAppointmentId(counter.seq);
-      console.log("[CREATE BOOKING CHECK] Generated appointmentId:", appointmentId);
 
-      // --- Create default payment ---
+      // Step 4: Create payment document in tx
       const pkg = await Package.findById(packageId).lean();
       if (!pkg) {
-        console.log("[CREATE BOOKING CHECK] Invalid packageId:", packageId);
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
@@ -385,8 +332,6 @@ class BookingAdminController {
           message: "Invalid package"
         });
       }
-
-      // Generate Payment ID: INV-YYYY-00001
       const year = new Date().getFullYear();
       const paymentCounter = await Counter.findOneAndUpdate(
         { name: "payment" },
@@ -394,46 +339,36 @@ class BookingAdminController {
         { new: true, upsert: true, session }
       );
       const paymentId = `INV-${year}-${String(paymentCounter.seq).padStart(5, "0")}`;
-      console.log("[CREATE BOOKING CHECK] Generated paymentId:", paymentId);
-
-      // Default payment details (amount: pkg.price, status: 'pending')
       const paymentDoc = new Payment({
         paymentId: paymentId,
         totalAmount: pkg.totalCost,
         amount: pkg.totalCost,
         status: 'pending',
-        paymentMethod: 'cash' // default; update later in payment flow
+        paymentMethod: 'cash'
       });
       await paymentDoc.save({ session });
-      console.log("[CREATE BOOKING CHECK] Saved paymentDoc:", paymentDoc);
 
-      // --- Normalize/structure sessions array per booking.schema.js ---
-      // Each session must be: { date: String, time: String, slotId: String, therapist: ObjectId, therapyTypeId: ObjectId, isCheckedIn: Boolean }
-      // Accept possible legacy/variant keys but ensure correct structure before saving to db
+      // Step 5: Normalize sessions, compose booking
+      const normalizedSessions = (sessions || []).map(sess => ({
+        date: sess.date,
+        time: sess.time || "",
+        slotId: sess.slotId || sess.id,
+        therapist: sess.therapistId || therapistId,
+        therapyTypeId: sess.therapyTypeId || sess.therapyType || null,
+        isCheckedIn: typeof sess.isCheckedIn !== "undefined" ? sess.isCheckedIn : false
+      }));
 
-      const normalizedSessions = (sessions || []).map(sess => {
-        // Accept possible variants, but conform to schema here
-        return {
-          date: sess.date,
-          time: sess.time || "",
-          slotId: sess.slotId || sess.id, // fallback to legacy id
-          therapist: sess.therapistId || therapistId, // always required
-          therapyTypeId: sess.therapyTypeId || sess.therapyType || null,
-          isCheckedIn: typeof sess.isCheckedIn !== "undefined" ? sess.isCheckedIn : false
-        };
-      });
-
-      // Compose booking payload per updated schema (1-68)
+      // Compose booking payload (do NOT write outside tx)
       const bookingPayload = {
         appointmentId,
         status,
         notes,
-        remark, // <-- added remark to bookingPayload
+        remark,
         discountInfo,
         package: packageId,
         patient: patientId,
         therapist: therapistId,
-        sessions: normalizedSessions, // use normalized sessions
+        sessions: normalizedSessions,
         therapy: therapyId,
         payment: paymentDoc._id,
         channel,
@@ -447,65 +382,111 @@ class BookingAdminController {
         followupDate
       };
 
-      // Add logging for bookingPayload
-      console.log("[CREATE BOOKING CHECK] bookingPayload before cleanup:", bookingPayload);
-
       Object.keys(bookingPayload).forEach(
         k => bookingPayload[k] === undefined && delete bookingPayload[k]
       );
-
-      console.log("[CREATE BOOKING CHECK] bookingPayload after cleanup:", bookingPayload);
-
       const booking = new Booking(bookingPayload);
 
+      // Step 6: Save booking in tx
       await booking.save({ session });
-      console.log("[CREATE BOOKING CHECK] Booking saved. _id:", booking._id);
 
-      // If this booking is for a booking request, update its status to approved
+      // Step 7: If booking request, update request status in tx
       if (isBookingRequest && bookingRequestId) {
-        // Import BookingRequests model here (to avoid circular require)
-        console.log("449", bookingRequestId);
-
-        // Dynamically import the BookingRequests model (to avoid circular dependencies)
         const bookingRequestDoc = await BookingRequests.findById(bookingRequestId).session(session);
         if (bookingRequestDoc) {
+          const previousBookingRequest = bookingRequestDoc.toObject();
           bookingRequestDoc.status = "approved";
           bookingRequestDoc.appointmentId = booking._id;
           await bookingRequestDoc.save({ session });
-          console.log("458", bookingRequestDoc);
 
-          console.log(`[CREATE BOOKING CHECK] BookingRequest ${bookingRequestId} updated to approved and linked to booking ${booking._id}`);
-        } else {
-          console.warn(`[CREATE BOOKING CHECK] bookingRequestId ${bookingRequestId} not found for approval update.`);
+          // Log approval of booking request, and association with booking
+          try {
+            await AuditLogService.addLog(
+              {
+                action: "BOOKING_REQUEST_APPROVED",
+                user: req.user?.id,
+                role: "admin",
+                resource: "BookingRequest",
+                resourceId: bookingRequestDoc._id,
+                details: {
+                  previous: previousBookingRequest,
+                  updated: bookingRequestDoc,
+                  approvedBy: req.user?.id,
+                  appointmentId: booking._id,
+                  message: `Booking request approved and linked to booking ${booking._id} by admin ${req.user?.id}`,
+                },
+                ipAddress: req.ip,
+                userAgent: req.headers['user-agent']
+              },
+              session
+            );
+          } catch (logError) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(500).json({
+              success: false,
+              message: "Failed to approve booking request (audit log failure).",
+              error: logError?.message || "Audit logging failed.",
+            });
+          }
         }
       }
 
+      // Step 8: Audit log in tx (MANDATORY: if fails, ROLLBACK everything)
+      try {
+        await AuditLogService.addLog({
+          action: "BOOKING_CREATED",
+          user: req.user?.id,
+          role: "admin",
+          resource: "Booking",
+          resourceId: booking._id,
+          details: {
+            patientId,
+            therapistId,
+            appointmentId: booking.appointmentId,
+            packageId,
+            therapyId,
+            channel,
+            sessions: normalizedSessions.length,
+            invoiceNumber,
+            remark,
+            status,
+            message: `Booking created for patient ${patientId} with therapist ${therapistId}, package ${packageId}, therapy ${therapyId}`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        }, session); // pass session if AuditLog supports it!
+      } catch (logError) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          success: false,
+          message: "Failed to create booking (audit log failure).",
+          error: logError?.message || "Audit logging failed.",
+        });
+      }
+
+      // Commit transaction ONLY IF ALL steps succeed including log
       await session.commitTransaction();
       session.endSession();
 
-      // Populate all booking fields for return
+      // Step 9: Populate and return booking (not in tx, not rollbackable but data is safe now)
       const populatedBooking = await Booking.findById(booking._id)
         .populate("package")
         .populate({
           path: "patient",
           model: "PatientProfile",
-          populate: {
-            path: "userId",
-            model: "User"
-          }
+          populate: { path: "userId", model: "User" }
         })
         .populate({ path: "therapy", model: "TherapyType" })
         .populate({ path: "therapist", model: "TherapistProfile" })
         .populate({ path: "payment", model: "Payment" });
-
-      console.log("[CREATE BOOKING CHECK] Final populatedBooking:", populatedBooking);
 
       res.status(201).json({
         success: true,
         booking: populatedBooking,
       });
     } catch (error) {
-      console.log("[CREATE BOOKING CHECK] Error encountered:", error);
       await session.abortTransaction();
       session.endSession();
       res.status(500).json({
@@ -708,10 +689,8 @@ class BookingAdminController {
         followupRequired,
         followupDate,
         therapist: bodyTherapist,
-        remark, // <-- added remark
+        remark,
       } = req.body;
-
-      console.log(sessions);
 
       // Validate required fields
       if (
@@ -747,7 +726,6 @@ class BookingAdminController {
           sess.therapistId ||
           bodyTherapist ||
           prevBooking.therapist;
-        // Extract _id if populated object
         if (therapistValue && typeof therapistValue === "object" && therapistValue._id) {
           therapistValue = therapistValue._id;
         }
@@ -785,7 +763,7 @@ class BookingAdminController {
 
       const therapistIdMap = {};
       therapistDocs.forEach(tDoc => {
-        therapistIdMap[String(tDoc._id)] = tDoc.therapistId; // may be undefined but that's ok
+        therapistIdMap[String(tDoc._id)] = tDoc.therapistId;
       });
 
       // --- Check slot availability for all sessions ---
@@ -799,7 +777,6 @@ class BookingAdminController {
         const fromDate = sortedDates[0];
         const toDate = sortedDates[sortedDates.length - 1];
 
-        // Call getAvailabilitySummary of slots controller for this therapist
         let slotAvailabilityResult;
         let therapistRefId = therapistIdMap[therapistObjId];
         try {
@@ -847,7 +824,6 @@ class BookingAdminController {
         const refId = therapistRefId;
         const slotAvailabilityData = slotAvailabilityResult.data;
 
-        // Only consider new sessions (not ones present in the previous booking with same therapist, date, slotId)
         requestedSlots
           .filter(s => String(s.therapist) === String(therapistObjId))
           .forEach(sess => {
@@ -902,30 +878,20 @@ class BookingAdminController {
             if (therapistValue && typeof therapistValue === "object" && therapistValue._id) {
               therapistValue = therapistValue._id;
             }
-            // Also populate therapistId (ref code) if available, fallback to empty string if not found
             let therapistIdField = therapistIdMap[String(therapistValue)] || "";
-
-            // For therapyTypeId: populate per-session as required by schema
-            // Per @booking.schema.js, this should be "therapyTypeId"
-            // - Use: s.therapyTypeId || s.therapyType || therapyId
-
-            let therapyTypeIdValue = s.therapyTypeId || s.therapyType || therapyId; // fallback to global therapy
-
+            let therapyTypeIdValue = s.therapyTypeId || s.therapyType || therapyId;
             return {
               date: s.date,
               slotId: s.slotId || s.id,
               therapist: therapistValue,
-              therapistId: therapistIdField, // extra, safe
-              therapyTypeId: therapyTypeIdValue, // correct per schema
+              therapistId: therapistIdField,
+              therapyTypeId: therapyTypeIdValue,
               ...(s.time && { time: s.time }),
               ...(s.isCheckedIn !== undefined && { isCheckedIn: s.isCheckedIn }),
             };
           })
         : [];
 
-      console.log("--",updatedSessions);
-
-      // Build sets (date|slotId|therapist) for accurate therapist-based slot management
       const sessionKey = (s) =>
         `${s.date}|${s.slotId}|${String(
           typeof s.therapist === "object" && s.therapist?._id
@@ -951,21 +917,16 @@ class BookingAdminController {
 
       const prevKeys = new Set(prevSessions.map(sessionKey));
       const nextKeys = new Set(nextSessions.map(sessionKey));
-
-      // To decrement: sessions in prev, but not in next
       const sessionsToDecrement = prevSessions.filter(
         s => !nextKeys.has(sessionKey(s))
       );
-      // To increment: sessions in next, but not in prev
       const sessionsToIncrement = nextSessions.filter(
         s => !prevKeys.has(sessionKey(s))
       );
-
       // Optionally update availability
       // if (sessionsToDecrement.length > 0) await this.adjustAvailabilityCounts(sessionsToDecrement, -1);
       // if (sessionsToIncrement.length > 0) await this.adjustAvailabilityCounts(sessionsToIncrement, 1);
 
-      // Save only coupon id and the timestamp (if given); ignore the rest
       let discountInfo = undefined;
       if (coupon) {
         discountInfo = {
@@ -974,7 +935,6 @@ class BookingAdminController {
         };
       }
 
-      // Updated booking fields as per schema (make sure sessions have the required therapist and therapyTypeId)
       const updatePayload = {
         discountInfo,
         package: packageId,
@@ -993,44 +953,114 @@ class BookingAdminController {
         invoiceNumber,
         followupRequired,
         followupDate,
-        remark // <-- added remark to updatePayload
+        remark
       };
       Object.keys(updatePayload).forEach(
         k => updatePayload[k] === undefined && delete updatePayload[k]
       );
 
-      const booking = await Booking.findByIdAndUpdate(id, updatePayload, { new: true })
-        .populate("package")
-        .populate({
-          path: "patient",
-          model: "PatientProfile",
-          populate: {
-            path: "userId",
-            model: "User"
-          }
-        })
-        .populate({
-          path: "therapy",
-          model: "TherapyType"
-        })
-        .populate({
-          path: "therapist",
-          model: "TherapistProfile"
-        })
-        .populate({
-          path: "payment",
-          model: "Payment"
-        });
+      // Do not commit the booking until audit log creation is successful
+      let booking = null;
+      let bookingUpdated = false;
+      let auditLogCreated = false;
+      let bookingUpdateError = null;
 
-      if (!booking) {
+      try {
+        booking = await Booking.findByIdAndUpdate(id, updatePayload, { new: true })
+          .populate("package")
+          .populate({
+            path: "patient",
+            model: "PatientProfile",
+            populate: {
+              path: "userId",
+              model: "User"
+            }
+          })
+          .populate({
+            path: "therapy",
+            model: "TherapyType"
+          })
+          .populate({
+            path: "therapist",
+            model: "TherapistProfile"
+          })
+          .populate({
+            path: "payment",
+            model: "Payment"
+          });
+
+        if (!booking) {
+          bookingUpdateError = {
+            status: 404,
+            msg: "Booking not found.",
+            response: {
+              success: false,
+              message: "Booking not found.",
+            }
+          };
+        } else {
+          bookingUpdated = true;
+        }
+      } catch (err) {
+        bookingUpdateError = {
+          status: 500,
+          msg: "Failed to update booking.",
+          response: {
+            success: false,
+            message: "Failed to update booking.",
+            error: err.message,
+          }
+        };
+      }
+
+      if (!bookingUpdated || !booking) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(404).json({
+        return res.status(bookingUpdateError?.status || 500).json(bookingUpdateError?.response || {
           success: false,
-          message: "Booking not found.",
+          message: "Failed to update booking."
         });
       }
 
+      // Audit log for booking update is mandatory: if log is not created, revert everything!
+      try {
+        await AuditLogService.addLog({
+          action: "BOOKING_UPDATED",
+          user: req.user?.id,
+          role: "admin",
+          resource: "Booking",
+          resourceId: booking._id,
+          details: {
+            patientId,
+            therapistId: booking.therapist?._id || booking.therapist,
+            appointmentId: booking.appointmentId,
+            packageId,
+            therapyId,
+            channel,
+            sessions: updatedSessions.length,
+            invoiceNumber,
+            remark,
+            status,
+            message: `Booking updated for patient ${patientId} with therapist ${booking.therapist?._id || booking.therapist}, package ${packageId}, therapy ${therapyId}`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+        auditLogCreated = true;
+      } catch (err) {
+        console.error("[AUDIT LOG] Failed to record booking_updated log:", err);
+        // If audit log creation fails, revert booking update and respond as failure
+        await session.abortTransaction();
+        session.endSession();
+        // It's possible the booking doc was updated above but the transaction will be rolled back if transactions are supported
+        return res.status(500).json({
+          success: false,
+          message: "Failed to update booking. Audit log is mandatory; changes reverted.",
+          error: err?.message || "Audit logging failed.",
+        });
+      }
+
+      // All succeeded: commit final transaction
       await session.commitTransaction();
       session.endSession();
 
@@ -1038,6 +1068,7 @@ class BookingAdminController {
         success: true,
         booking,
       });
+
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
@@ -1051,43 +1082,43 @@ class BookingAdminController {
   }
 
   // Delete booking and return result
-  async deleteBooking(req, res) {
-    try {
-      const { id } = req.params;
-      const booking = await Booking.findById(id);
-      if (!booking) {
-        return res.status(404).json({
-          success: false,
-          message: "Booking not found.",
-        });
-      }
+  // async deleteBooking(req, res) {
+  //   try {
+  //     const { id } = req.params;
+  //     const booking = await Booking.findById(id);
+  //     if (!booking) {
+  //       return res.status(404).json({
+  //         success: false,
+  //         message: "Booking not found.",
+  //       });
+  //     }
 
-      if (Array.isArray(booking.sessions)) {
-        const validSessions = booking.sessions.filter(
-          s => s && typeof s.slotId === "string" && s.slotId.trim().length > 0 && typeof s.date === "string"
-        );
-        if (validSessions.length > 0) {
-          await this.adjustAvailabilityCounts(validSessions, -1);
-        } else {
-          console.warn("[deleteBooking] No valid sessions with slotId found for decrement!", booking.sessions);
-        }
-      }
+  //     if (Array.isArray(booking.sessions)) {
+  //       const validSessions = booking.sessions.filter(
+  //         s => s && typeof s.slotId === "string" && s.slotId.trim().length > 0 && typeof s.date === "string"
+  //       );
+  //       if (validSessions.length > 0) {
+  //         await this.adjustAvailabilityCounts(validSessions, -1);
+  //       } else {
+  //         console.warn("[deleteBooking] No valid sessions with slotId found for decrement!", booking.sessions);
+  //       }
+  //     }
 
-      await Booking.findByIdAndDelete(id);
+  //     await Booking.findByIdAndDelete(id);
 
-      res.json({
-        success: true,
-        message: "Booking deleted successfully.",
-      });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to delete booking.",
-        error: error.message,
-      });
-    }
-  }
+  //     res.json({
+  //       success: true,
+  //       message: "Booking deleted successfully.",
+  //     });
+  //   } catch (error) {
+  //     console.error(error);
+  //     res.status(500).json({
+  //       success: false,
+  //       message: "Failed to delete booking.",
+  //       error: error.message,
+  //     });
+  //   }
+  // }
 
   // Get all booking requests (admin) from BookingRequests schema/model, now including appointmentId population
   /**
@@ -1216,30 +1247,81 @@ class BookingAdminController {
 
   // Reject a booking request (admin action)
   async rejectBookingRequest(req, res) {
+    let session;
     try {
       const { id } = req.params;
       if (!id) {
         return res.status(400).json({ success: false, message: "Booking request ID required." });
       }
 
-      // Optionally: only allow rejection if not already rejected/handled
-      const bookingRequest = await BookingRequests.findById(id);
+      // Start a session for transaction safety (similar to approval logic)
+      session = await BookingRequests.startSession();
+      await session.startTransaction();
+
+      // Find booking request
+      const bookingRequest = await BookingRequests.findById(id).session(session);
       if (!bookingRequest) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ success: false, message: "Booking request not found." });
       }
 
       if (bookingRequest.status === "rejected") {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "Booking request already rejected." });
       }
       if (bookingRequest.status === "approved") {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "Booking request already approved. Cannot reject." });
       }
 
+      const previousBookingRequest = bookingRequest.toObject();
+
       bookingRequest.status = "rejected";
-      await bookingRequest.save();
+      await bookingRequest.save({ session });
+
+      // --- AUDIT LOG ---
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "BOOKING_REQUEST_REJECTED",
+            user: req.user?.id,
+            role: "admin",
+            resource: "BookingRequest",
+            resourceId: bookingRequest._id,
+            details: {
+              previous: previousBookingRequest,
+              updated: bookingRequest,
+              rejectedBy: req.user?.id,
+              appointmentId: bookingRequest.appointmentId || null,
+              message: `Booking request rejected by admin ${req.user?.id}`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent']
+          },
+          session
+        );
+      } catch (logError) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          success: false,
+          message: "Failed to reject booking request (audit log failure).",
+          error: logError?.message || "Audit logging failed.",
+        });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
 
       res.json({ success: true, message: "Booking request rejected successfully." });
     } catch (error) {
+      if (session) {
+        await session.abortTransaction();
+        session.endSession();
+      }
       console.error("[rejectBookingRequest] Error:", error);
       res.status(500).json({
         success: false,
@@ -1379,16 +1461,13 @@ async getAllSessionEditRequests(req, res) {
 async collectPayment(req, res) {
   const session = await Booking.startSession();
   session.startTransaction();
+  let auditLogFailed = false;
+  let auditLogError = null;
   try {
     const { id } = req.params;
-    // paymentType: "full" | "partial"
-    // partialAmount: number (if partial payment)
     const { paymentType = "full", partialAmount } = req.body;
 
-    console.log(`[collectPayment] Called with id=${id}, paymentType=${paymentType}, partialAmount=${partialAmount}`);
-
     if (!id) {
-      console.log("[collectPayment] Missing Booking ID.");
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -1397,10 +1476,8 @@ async collectPayment(req, res) {
       });
     }
 
-    // Find and update the booking's payment info and mark as paid
     const booking = await Booking.findById(id).session(session);
     if (!booking) {
-      console.log(`[collectPayment] Booking not found for id=${id}.`);
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
@@ -1411,7 +1488,6 @@ async collectPayment(req, res) {
 
     const paymentId = booking.payment;
     if (!paymentId) {
-      console.log(`[collectPayment] No associated paymentId for booking id=${id}.`);
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -1420,11 +1496,9 @@ async collectPayment(req, res) {
       });
     }
 
-    // Fetch the payment by paymentId field (may be ObjectId or string)
     const payment = await Payment.findOne({ _id: paymentId }).session(session);
 
     if (!payment) {
-      console.log(`[collectPayment] Payment record not found for paymentId=${paymentId}.`);
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
@@ -1434,20 +1508,18 @@ async collectPayment(req, res) {
     }
 
     let financeRecord = null;
+    let auditLogMessage = "";
+    let paymentStatusChanged = false;
 
     if (paymentType === "partial") {
-      // Partial payment requested
       const { amountPaid = 0, amount } = payment;
       const remaining = amount - amountPaid;
-      console.log(`[collectPayment] Partial payment requested. Paid: ${amountPaid}, Amount: ${amount}, Remaining: ${remaining}, partialAmount: ${partialAmount}`);
 
-      // Validate partialAmount
       if (
         typeof partialAmount !== "number" ||
         partialAmount <= 0 ||
         partialAmount > remaining
       ) {
-        console.log(`[collectPayment] Invalid partialAmount: ${partialAmount}. Remaining: ${remaining}`);
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
@@ -1456,25 +1528,24 @@ async collectPayment(req, res) {
         });
       }
 
-      // Update amountPaid and status
       payment.amountPaid = (payment.amountPaid || 0) + partialAmount;
 
       if (payment.amountPaid < payment.amount) {
         payment.status = "partiallypaid";
         payment.paymentTime = new Date();
         booking.paymentStatus = "partiallypaid";
-        console.log("[collectPayment] Marking as partiallypaid.");
+        auditLogMessage = `[collectPayment] Marking as partiallypaid. Partial payment of Rs.${partialAmount} received for Booking #${booking.appointmentId}. Remaining: Rs.${payment.amount - payment.amountPaid}`;
+        paymentStatusChanged = true;
       } else {
         payment.status = "paid";
         payment.paymentTime = new Date();
         booking.paymentStatus = "paid";
-        console.log("[collectPayment] Marking as fully paid after partial payment.");
+        auditLogMessage = `[collectPayment] Marking as fully paid after partial payment. Final partial payment of Rs.${partialAmount} received. Booking #${booking.appointmentId} fully paid.`;
+        paymentStatusChanged = true;
       }
       await payment.save({ session });
       await booking.save({ session });
 
-      // Record this (partial) payment as an income in the finances table
-      // Only record *new* income for this partial payment (not for total)
       financeRecord = await Finances.create([
         {
           date: payment.paymentTime || new Date(),
@@ -1485,20 +1556,18 @@ async collectPayment(req, res) {
         }
       ], { session });
 
-      console.log(`[collectPayment] Finance record created for partial payment: Booking #${booking.appointmentId}, Amount: ${partialAmount}`);
-
     } else {
-      // Full payment
       payment.status = "paid";
       payment.paymentTime = new Date();
       payment.amountPaid = payment.amount;
       await payment.save({ session });
 
-      // Optionally update booking status as well (and link the payment)
       booking.paymentStatus = "paid";
       await booking.save({ session });
 
-      // Avoid duplicate finance records for the same payment by checking for it
+      auditLogMessage = `[collectPayment] Full payment of Rs.${payment.amount} received for Booking #${booking.appointmentId}.`;
+      paymentStatusChanged = true;
+
       const financeExists = await Finances.findOne({
         description: { $regex: `Payment for Booking #${booking.appointmentId}`, $options: "i" }
       }).session(session);
@@ -1511,11 +1580,56 @@ async collectPayment(req, res) {
           amount: payment.amount,
           creditDebitStatus: "credited",
         }], { session });
-        console.log(`[collectPayment] Finance record created for full payment: Booking #${booking.appointmentId}, Amount: ${payment.amount}`);
       } else {
         financeRecord = financeExists;
-        console.log(`[collectPayment] Existing finance record found for Booking #${booking.appointmentId}`);
       }
+    }
+
+    // Add audit log for payment collection if payment status changed
+    if (paymentStatusChanged) {
+      // Compose audit log payload according to schema (@logs.schema.js) and audit log method contract (@audit-logs.controller.js)
+      const auditLogPayload = {
+        action: "BOOKING_PAYMENT_UPDATE",
+        user: req.user?.id,
+        role: "admin",
+        resource: "Booking",
+        resourceId: booking._id,
+        details: {
+          patientId: booking.patient?._id || booking.patient,
+          therapistId: booking.therapist?._id || booking.therapist,
+          appointmentId: booking.appointmentId,
+          packageId: booking.package?._id || booking.package,
+          therapyId: booking.therapy?._id || booking.therapy,
+          channel: booking.channel,
+          sessions: Array.isArray(booking.sessions) ? booking.sessions.length : 0,
+          invoiceNumber: booking.invoiceNumber,
+          remark: booking.remark,
+          status: booking.paymentStatus,
+          message: auditLogMessage
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"]
+      };
+      try {
+        // According to @audit-logs.controller.js, addLog is fire-and-forget (does not block/throw), so no need to check its return value
+        await AuditLogService.addLog(auditLogPayload);
+      } catch (err) {
+        auditLogFailed = true;
+        auditLogError = err;
+        // Logging here is just for our debugging
+        console.error("[collectPayment] Error creating audit log:", err);
+      }
+    }
+
+    // If audit log creation failed with an error (should never throw, but if so)
+    if (paymentStatusChanged && auditLogFailed) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(500).json({
+        success: false,
+        message: "Failed to record payment due to audit log failure. No changes made.",
+        error: auditLogError ? auditLogError.message : "Unknown log error"
+      });
     }
 
     await session.commitTransaction();
@@ -1550,19 +1664,27 @@ async collectPayment(req, res) {
 
 // Check-in a patient for a booking
 async checkIn(req, res) {
+  const session = await Booking.startSession();
+  session.startTransaction();
+  let auditLogFailed = false;
+  let auditLogError = null;
   try {
     const { bookingId, sessionId } = req.body;
 
     if (!bookingId || !sessionId) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({
         success: false,
         message: "bookingId and sessionId are required."
       });
     }
 
-    // Find the booking
-    const booking = await Booking.findById(bookingId);
+    // Find the booking (attach the session/tx)
+    const booking = await Booking.findById(bookingId).session(session);
     if (!booking) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({
         success: false,
         message: "Booking not found."
@@ -1575,6 +1697,8 @@ async checkIn(req, res) {
     );
 
     if (sessionIndex === -1) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(404).json({
         success: false,
         message: "Session not found in this booking."
@@ -1583,6 +1707,8 @@ async checkIn(req, res) {
 
     // If already checked in for this session, return idempotent response
     if (booking.sessions[sessionIndex].isCheckedIn) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(200).json({
         success: true,
         message: "Patient already checked in for this session.",
@@ -1592,7 +1718,43 @@ async checkIn(req, res) {
 
     // Mark this session as checked in
     booking.sessions[sessionIndex].isCheckedIn = true;
-    await booking.save();
+    await booking.save({ session });
+
+    // --- AUDIT LOG ---
+    try {
+      await AuditLogService.addLog({
+        action: "PATIENT_CHECKIN",
+        user: req.user.id ,
+        role:"admin",
+        resource: "Booking",
+        resourceId: booking._id,
+        details: {
+          bookingId: booking._id,
+          sessionId: sessionId,
+          checkedInBy: req.user && req.user._id ? req.user._id : null,
+          checkInAt: new Date(),
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] || null,
+      });
+    } catch (err) {
+      auditLogFailed = true;
+      auditLogError = err;
+      console.error("[checkIn] Error creating audit log:", err);
+    }
+
+    if (auditLogFailed) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(500).json({
+        success: false,
+        message: "Check-in was NOT logged in the audit system. No changes made.",
+        error: auditLogError ? auditLogError.message : "Unknown log error"
+      });
+    }
+
+    await session.commitTransaction();
+    session.endSession();
 
     res.json({
       success: true,
@@ -1600,6 +1762,8 @@ async checkIn(req, res) {
       booking
     });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("[checkIn] Error:", error);
     res.status(500).json({
       success: false,
@@ -1619,15 +1783,15 @@ async getReceptionDeskDetails(req, res) {
     const todayStr = `${year}-${month}-${day}`;
 
     // Get Today's Bookings: those with at least one session whose date == today
-    const todaysBookings = await Booking.find({
+    // Find *all* bookings that have at least one session scheduled for today, not just one per patient
+    // Each booking may contain multiple sessions, possibly for the same or different patients, but we return all bookings matching the session-date
+    // Instead of returning raw bookings that may have multiple sessions on the same date,
+    // flatten out all sessions for today as separate entries, each with session + booking info
+    const rawBookings = await Booking.find({
       "sessions.date": todayStr
     })
       .populate({ path: "patient", model: "PatientProfile", select: "name patientId mobile gender" })
-      .populate({ path: "therapist", model: "TherapistProfile", select: "name therapistId" })
-      .populate({ path: "package", model: "Package" })
       .populate({ path: "therapy", model: "TherapyType" })
-      .populate({ path: "payment", model: "Payment" })
-      // Populate each session's therapist with userId and name
       .populate({
         path: "sessions.therapist",
         model: "TherapistProfile",
@@ -1639,6 +1803,27 @@ async getReceptionDeskDetails(req, res) {
         }
       })
       .lean();
+
+    // For each session today, create a booking object where sessions contains only that session.
+    const todaysBookings = [];
+    rawBookings.forEach(booking => {
+      if (Array.isArray(booking.sessions)) {
+        booking.sessions.forEach(session => {
+          if (session.date === todayStr) {
+            // Make a shallow copy of the booking object
+            const bookingCopy = { ...booking };
+
+            // Remove the sessions property entirely
+            delete bookingCopy.sessions;
+
+            // Also expose the session directly as per current UI needs
+            bookingCopy.session = session;
+
+            todaysBookings.push(bookingCopy);
+          }
+        });
+      }
+    });
 
     // Get Pending Payment Bookings: those with no payment or incomplete payment
     const pendingPaymentBookings = await Booking.find({})

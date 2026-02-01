@@ -1,6 +1,6 @@
 import express from "express";
-import ParentController from "../Controllers/Parent/parent.controller.js";
-import jwtAuth from "../middlewares/Auth/auth.middleware.js";
+import ParentController from "../../Controllers/Parent/parent.controller.js";
+import jwtAuth from "../../middlewares/Auth/auth.middleware.js";
 
 
 const parentRouter = express.Router();
@@ -40,11 +40,11 @@ parentRouter.get('/all-bookings', (req, res) =>
   parentController.allBookings(req, res)
 );
 
-parentRouter.post('/create-booking-request', (req, res) => parentController.createBookingRequest(req, res));
-parentRouter.put('/booking-request/:id', (req, res) => parentController.updateBookingRequest(req, res));
+parentRouter.post('/create-booking-request',jwtAuth, (req, res) => parentController.createBookingRequest(req, res));
+parentRouter.put('/booking-request/:id',jwtAuth, (req, res) => parentController.updateBookingRequest(req, res));
 
 parentRouter.get('/booking-requests',jwtAuth, (req, res) => parentController.getAllBookingRequests(req, res));
-parentRouter.delete('/booking-request/:id', (req, res) => parentController.deleteBookingRequest(req, res));
+parentRouter.delete('/booking-request/:id',jwtAuth, (req, res) => parentController.deleteBookingRequest(req, res));
 
 parentRouter.get('/booking-requests/:id', (req, res) => parentController.getBookingRequestById(req, res));
 
@@ -53,10 +53,10 @@ parentRouter.get('/booking-requests/:id', (req, res) => parentController.getBook
 // INSERT_YOUR_CODE
 
 // Session Edit Request CRUD routes
-parentRouter.post('/session-edit-request-bulk', (req, res) => parentController.createSessionEditRequest(req, res));
+parentRouter.post('/session-edit-request-bulk',jwtAuth, (req, res) => parentController.createSessionEditRequest(req, res));
 parentRouter.get('/session-edit-request', (req, res) => parentController.getSessionEditRequests(req, res));
-parentRouter.put('/session-edit-request/:id', (req, res) => parentController.updateSessionEditRequest(req, res));
-parentRouter.delete('/session-edit-request/:id', (req, res) => parentController.deleteSessionEditRequest(req, res));
+parentRouter.put('/session-edit-request/:id',jwtAuth, (req, res) => parentController.updateSessionEditRequest(req, res));
+parentRouter.delete('/session-edit-request/:id',jwtAuth, (req, res) => parentController.deleteSessionEditRequest(req, res));
 
 
 

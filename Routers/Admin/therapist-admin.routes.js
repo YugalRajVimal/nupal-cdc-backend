@@ -1,6 +1,7 @@
 import express from "express";
 import TherapistAdminController from "../../Controllers/Admin/therapist.controller.js";
 import { upload } from "../../middlewares/fileUpload.middleware.js";
+import jwtAuth from "../../middlewares/Auth/auth.middleware.js";
 
 const therapistAdminRouter = express.Router();
 const therapistAdminController = new TherapistAdminController();
@@ -8,7 +9,7 @@ const therapistAdminController = new TherapistAdminController();
 // Set panel accessibility (set TherapistProfile.isPanelAccessible)
 therapistAdminRouter.patch(
   "/:id/panel-access",
-  // jwtAuth, 
+jwtAuth,
   // authorize("admin.write"),
   (req, res) => {
     therapistAdminController.setPanelAccessible(req, res);
@@ -18,7 +19,7 @@ therapistAdminRouter.patch(
 // Add a new therapist
 therapistAdminRouter.post(
   "/",
-  // jwtAuth, 
+  jwtAuth, 
   // authorize("admin.write"),
   upload.fields([
     { name: "aadhaarFront", maxCount: 1 },
@@ -58,22 +59,21 @@ therapistAdminRouter.get(
 // Edit therapist by ID
 therapistAdminRouter.put(
   "/:id",
-  // jwtAuth, 
-  // authorize("admin.write"),
+  jwtAuth, 
   (req, res) => {
     therapistAdminController.editTherapist(req, res);
   }
 );
 
 // Delete therapist (by TherapistProfile _id)
-therapistAdminRouter.delete(
-  "/:id",
-  // jwtAuth, 
-  // authorize("admin.write"),
-  (req, res) => {
-    therapistAdminController.deleteTherapist(req, res);
-  }
-);
+// therapistAdminRouter.delete(
+//   "/:id",
+//   jwtAuth, 
+//   // authorize("admin.write"),
+//   (req, res) => {
+//     therapistAdminController.deleteTherapist(req, res);
+//   }
+// );
 
 
 
@@ -81,7 +81,7 @@ therapistAdminRouter.delete(
 // Disable therapist (set User.isDisabled = true)
 therapistAdminRouter.patch(
   "/:id/disable",
-  // jwtAuth, 
+  jwtAuth, 
   // authorize("admin.write"),
   (req, res) => {
     therapistAdminController.disableTherapist(req, res);
@@ -91,7 +91,7 @@ therapistAdminRouter.patch(
 // Enable therapist (set User.isDisabled = false)
 therapistAdminRouter.patch(
   "/:id/enable",
-  // jwtAuth, 
+  jwtAuth, 
   // authorize("admin.write"),
   (req, res) => {
     therapistAdminController.enableTherapist(req, res);
@@ -104,7 +104,7 @@ therapistAdminRouter.patch(
 // Pay therapist (add entry to earnings array)
 therapistAdminRouter.post(
   "/:id/pay",
-  // jwtAuth, 
+  jwtAuth, 
   // authorize("admin.write"),
   (req, res) => {
     therapistAdminController.payTherapist(req, res);
@@ -116,7 +116,7 @@ therapistAdminRouter.post(
 // Set holidays for therapist (POST /:id/holidays)
 therapistAdminRouter.post(
   "/:id/holidays",
-  // jwtAuth, 
+  jwtAuth, 
   // authorize("admin.write"),
   (req, res) => {
     therapistAdminController.setHolidays(req, res);

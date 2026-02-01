@@ -1,6 +1,5 @@
 import express from "express";
 
-
 import jwtAuth from "../middlewares/Auth/auth.middleware.js";
 import therapyAdminRouter from "./SuperAdmin/therapy-super-admin.routes.js";
 import therapistAdminRouter from "./Admin/therapist-admin.routes.js";
@@ -12,8 +11,6 @@ import availabilitySlotsRouter from "./Admin/availability-slots.routes.js";
 import discountCouponRouter from "./SuperAdmin/discount-coupons.super-admin.routes.js";
 import financeAdminRouter from "./Admin/finance.routes.js";
 import { User } from "../Schema/user.schema.js";
-
-
 
 const adminRouter = express.Router();
 

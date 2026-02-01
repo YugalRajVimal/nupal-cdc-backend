@@ -2,6 +2,7 @@
 import express from "express";
 import PatientAdminController from "../../Controllers/Admin/patient.controller.js";
 import { upload } from "../../middlewares/fileUpload.middleware.js";
+import jwtAuth from "../../middlewares/Auth/auth.middleware.js";
 
 const patientAdminRouter = express.Router();
 const patientAdminController = new PatientAdminController();
@@ -14,6 +15,7 @@ const patientAdminController = new PatientAdminController();
 
 patientAdminRouter.post(
   "/",
+jwtAuth,
   upload.single("otherDocument"),
   (req, res) => patientAdminController.addPatient(req, res)
 );
@@ -34,13 +36,16 @@ patientAdminRouter.get("/:id", (req, res) => patientAdminController.getPatientBy
  * @route PUT /admin/patients/:id
  * @desc Edit a patient profile
  */
-patientAdminRouter.put("/:id", (req, res) => patientAdminController.editPatient(req, res));
+patientAdminRouter.put("/:id",
+jwtAuth, 
+  (req, res) => patientAdminController.editPatient(req, res));
+
 
 /**
  * @route DELETE /admin/patients/:id
  * @desc Delete a patient by id (removes both User and PatientProfile)
  */
-patientAdminRouter.delete("/:id", (req, res) => patientAdminController.deletePatient(req, res));
+// patientAdminRouter.delete("/:id", (req, res) => patientAdminController.deletePatient(req, res));
 
 export default patientAdminRouter;
 

@@ -2,6 +2,8 @@ import { deleteUploadedFiles } from '../../middlewares/fileDelete.middleware.js'
 import Booking from '../../Schema/booking.schema.js';
 import counterSchema from '../../Schema/counter.schema.js';
 import { TherapistProfile, User } from '../../Schema/user.schema.js';
+import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+
 
 // Optionally import Therapist schema if you have one
 // import { TherapistProfile } from '../../Schema/therapist.schema.js';
@@ -37,20 +39,29 @@ class TherapistController {
    * Now: therapistId is not created here; it will be set only in completeProfile stage.
    */
   async therapistSignUpSendOTP(req, res) {
+    const session = await User.startSession();
     try {
+      session.startTransaction();
+
       const { email, name } = req.body;
 
       if (!email || typeof email !== "string") {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "Valid email is required." });
       }
 
       if (!name || typeof name !== "string") {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "Name is required." });
       }
 
       // Check if a therapist or user with this email already exists
-      const userExists = await User.findOne({ email, role: "therapist" });
+      const userExists = await User.findOne({ email, role: "therapist" }).session(session);
       if (userExists) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(409).json({ success: false, message: "A therapist with this email already exists." });
       }
 
@@ -73,24 +84,49 @@ class TherapistController {
         incompleteTherapistProfile: true,
         manualSignUp: true
       });
-      await newUser.save();
+      await newUser.save({ session });
 
       // Create TherapistProfile WITHOUT therapistId (it'll be set on completeProfile)
       const therapistProfile = new TherapistProfile({
-        userId: newUser._id
-        // therapistId: omitted for now
+        userId: newUser._id,
+        therapistId: newUser._id
       });
-      await therapistProfile.save();
+      await therapistProfile.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
 
       // Real: Send OTP via nodemailer/sendgrid here. --- For demo, just log.
       console.log(`[TherapistSignup] OTP for ${email}:`, otp);
 
+      // ---- AUDIT LOG: OTP sent ----
+      try {
+        await AuditLogService.addLog({
+          action: 'OTP_SENT',
+          user: newUser._id,
+          role: 'therapist',
+          resource: 'Therapist',
+          resourceId: newUser._id,
+          details: {
+            email,
+            name,
+            context: 'Therapist self-signup OTP requested and sent'
+          },
+            ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        console.error('Failed to write audit log (OTP_SENT) in therapistSignUpSendOTP:', logErr);
+      }
+
       return res.json({ success: true, message: "OTP sent to email address." });
     } catch (e) {
-      console.error("Error in therapistSignUpSendOTP:", e);
+      await session.abortTransaction();
+      session.endSession();
       return res.status(500).json({ success: false, message: "Server error." });
     }
   }
+
   /**
    * POST /therapist/verify-otp
    * Body: { email: string, otp: string }
@@ -99,17 +135,24 @@ class TherapistController {
    * Now: therapistId is not created here; it's created only in completeProfile.
    */
   async therapistSignUpVerifyOTP(req, res) {
+    const session = await User.startSession();
     try {
+      session.startTransaction();
+
       const { email, otp } = req.body;
 
       if (!email || !otp) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "Email and OTP are required." });
       }
 
       // Find the user-in-signup (either existing with pending signUpOTP, or never started)
-      const signupUser = await User.findOne({ email });
+      const signupUser = await User.findOne({ email }).session(session);
 
       if (!signupUser || (!signupUser.signUpOTP || !signupUser.signUpOTPExpiresAt)) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "No OTP request found or OTP expired." });
       }
 
@@ -121,15 +164,19 @@ class TherapistController {
         signupUser.signUpOTPSentAt = null;
         signupUser.signUpOTPAttempts = 0;
         signupUser.signUpOTPLastUsedAt = null;
-        await signupUser.save();
+        await signupUser.save({ session });
+        await session.commitTransaction();
+        session.endSession();
         return res.status(400).json({ success: false, message: "OTP has expired. Please request a new one." });
       }
 
       // Increment attempts
       signupUser.signUpOTPAttempts = (signupUser.signUpOTPAttempts || 0) + 1;
-      await signupUser.save();
+      await signupUser.save({ session });
 
       if (signupUser.signUpOTP !== otp) {
+        await session.commitTransaction();
+        session.endSession();
         return res.status(401).json({ success: false, message: "Invalid OTP." });
       }
 
@@ -147,20 +194,44 @@ class TherapistController {
       signupUser.status = "active";
       signupUser.incompleteTherapistProfile = true;
 
-      await signupUser.save();
+      await signupUser.save({ session });
 
       // Create TherapistProfile if not already present for this user, but do NOT create therapistId here
-      let therapistProfile = await TherapistProfile.findOne({ userId: signupUser._id });
+      let therapistProfile = await TherapistProfile.findOne({ userId: signupUser._id }).session(session);
       if (!therapistProfile) {
         therapistProfile = new TherapistProfile({
           userId: signupUser._id
           // therapistId to be created at completeProfile only
         });
-        await therapistProfile.save();
+        await therapistProfile.save({ session });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // ---- AUDIT LOG: OTP verified ----
+      try {
+        await AuditLogService.addLog({
+          action: 'OTP_VERIFIED',
+          user: signupUser._id,
+          role: signupUser.role || 'therapist',
+          resource: 'Therapist',
+          resourceId: signupUser._id,
+          details: {
+            email,
+            context: 'Therapist verified OTP for account creation'
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        console.error('Failed to write audit log (OTP_VERIFIED) in therapistSignUpVerifyOTP:', logErr);
       }
 
       return res.json({ success: true, message: "Therapist account created. You may now login." });
     } catch (e) {
+      await session.abortTransaction();
+      session.endSession();
       console.error("Error in therapistSignUpVerifyOTP:", e);
       return res.status(500).json({ success: false, message: "Server error." });
     }
@@ -171,13 +242,13 @@ class TherapistController {
   // Expects multipart/form-data with same fields as addTherapist EXCEPT fullName and email (already filled)
   async completeProfile(req, res) {
     const uploadedFiles = req.files;
-
+    const session = await User.startSession();
     // Helper: Therapist ID generation logic
-    const getNextSequence = async (name) => {
+    const getNextSequence = async (name, sessionOverride) => {
       const counter = await counterSchema.findOneAndUpdate(
         { name },
         { $inc: { seq: 1 } },
-        { new: true, upsert: true }
+        { new: true, upsert: true, session: sessionOverride }
       );
       return counter.seq;
     };
@@ -187,23 +258,31 @@ class TherapistController {
     }
 
     try {
+      session.startTransaction();
+
       // Expect therapist user is authenticated (from JWT) and userId is req.user.id
       const therapistUserId = req.user?.id;
       if (!therapistUserId) {
         if (uploadedFiles) deleteUploadedFiles(uploadedFiles);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(401).json({ error: "Unauthorized: No user ID found." });
       }
 
       // Find user
-      const user = await User.findById(therapistUserId);
+      const user = await User.findById(therapistUserId).session(session);
       if (!user || user.role !== "therapist") {
         if (uploadedFiles) deleteUploadedFiles(uploadedFiles);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(404).json({ error: "No therapist user found." });
       }
 
       // Only allow completion if incomplete
       if (!user.incompleteTherapistProfile) {
         if (uploadedFiles) deleteUploadedFiles(uploadedFiles);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ error: "Therapist profile is already complete." });
       }
 
@@ -246,6 +325,8 @@ class TherapistController {
 
       if (missingFields.length > 0) {
         if (uploadedFiles) deleteUploadedFiles(uploadedFiles);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({
           error: `Missing required fields: ${missingFields.join(", ")}`
         });
@@ -275,27 +356,29 @@ class TherapistController {
       const existingProfileByMobile = await TherapistProfile.findOne({
         mobile1: mobile1Trimmed,
         userId: { $ne: therapistUserId }
-      });
+      }).session(session);
       let mobileAssociatedEmail = null;
       if (existingProfileByMobile) {
-        const userForMobile = await User.findById(existingProfileByMobile.userId);
+        const userForMobile = await User.findById(existingProfileByMobile.userId).session(session);
         if (userForMobile) {
           mobileAssociatedEmail = userForMobile.email || null;
         }
         if (uploadedFiles) deleteUploadedFiles(uploadedFiles);
+        await session.abortTransaction();
+        session.endSession();
         return res.status(409).json({
           error: `This phone number is already used for another therapist (Email: ${mobileAssociatedEmail || "[none]"})`
         });
       }
 
       // Find therapistProfile for this user
-      let therapistProfile = await TherapistProfile.findOne({ userId: therapistUserId });
+      let therapistProfile = await TherapistProfile.findOne({ userId: therapistUserId }).session(session);
 
       let therapistId;
       // If not present, create and assign therapistId now
       if (!therapistProfile) {
         // Therapist ID auto-generate (like addTherapist, from sequence)
-        const nextSeq = await getNextSequence("therapist");
+        const nextSeq = await getNextSequence("therapist", session);
         therapistId = generateTherapistId(nextSeq);
         therapistProfile = new TherapistProfile({
           userId: therapistUserId,
@@ -306,7 +389,7 @@ class TherapistController {
         therapistId = therapistProfile.therapistId;
         // Only assign therapistId if it doesn't exist; otherwise leave it alone
         if (!therapistId) {
-          const nextSeq = await getNextSequence("therapist");
+          const nextSeq = await getNextSequence("therapist", session);
           therapistId = generateTherapistId(nextSeq);
           therapistProfile.therapistId = therapistId;
         }
@@ -341,12 +424,43 @@ class TherapistController {
       for (const field of fileFields) {
         if (filePaths[field]) therapistProfile[field] = filePaths[field];
       }
-      await therapistProfile.save();
+      await therapistProfile.save({ session });
 
       // Patch phone on User if changed; fullName/email is already set and must NOT be updated
       user.phone = mobile1;
       user.incompleteTherapistProfile = false;
-      await user.save();
+      await user.save({ session });
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // ---- AUDIT LOG: Therapist profile completed ----
+      try {
+        await AuditLogService.addLog({
+          action: 'THERAPIST_PROFILE_COMPLETED',
+          user: user._id,
+          role: user.role || 'therapist',
+          resource: 'Therapist',
+          resourceId: therapistProfile._id,
+          details: {
+            email: user.email,
+            therapistId: therapistProfile.therapistId,
+            fieldsSubmitted: {
+              fathersName, mobile1, mobile2, address, reference,
+              accountHolder, bankName, ifsc, accountNumber,
+              upi, linkedin, twitter, facebook, instagram, youtube,
+              website, portfolio, blog, specializations, experienceYears
+            },
+            fileFields: fileFields.filter(field => !!filePaths[field]),
+            completeProfileOrigin: 'self-service', // could be used to distinguish admin/other flows
+            message: `Therapist [${therapistProfile.therapistId}] completed their profile`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        console.error('Failed to write audit log (THERAPIST_PROFILE_COMPLETED) in completeProfile:', logErr);
+      }
 
       return res.status(200).json({
         success: true,
@@ -355,6 +469,8 @@ class TherapistController {
       });
     } catch (e) {
       if (req.files) deleteUploadedFiles(req.files);
+      await session.abortTransaction();
+      session.endSession();
       console.error("Error in completeProfile:", e);
       res.status(400).json({ error: "Failed to complete therapist profile", details: e.message });
     }

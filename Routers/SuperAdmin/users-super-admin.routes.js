@@ -1,5 +1,6 @@
 import express from "express";
 import UsersSuperAdminController from "../../Controllers/SuperAdmin/users.controller.js";
+import jwtAuth from "../../middlewares/Auth/auth.middleware.js";
 
 
 
@@ -13,7 +14,7 @@ usersSuperAdminRouter.get("/", (req, res) => {
 });
 
 // POST route for super-admin "login as user"
-usersSuperAdminRouter.post("/login-as-user", (req, res) => {
+usersSuperAdminRouter.post("/login-as-user",jwtAuth, (req, res) => {
     usersSuperAdminController.loginAsUser(req, res);
 });
 
