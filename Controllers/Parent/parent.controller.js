@@ -639,6 +639,7 @@ class ParentController {
         );
         // For session date and session slotId
         orConditions.push(
+
           { "sessions.date": { $regex: search, $options: "i" } },
           { "sessions.slotId": { $regex: search, $options: "i" } }
         );
@@ -755,7 +756,16 @@ class ParentController {
 
         // Fetch and attach edit requests
         const appointmentIds = appointments.map(a => a._id);
-        const sessionEditRequests = await SessionEditRequest.find({ appointmentId: { $in: appointmentIds } }).lean();
+        // Since sessions is an array, we need to populate each session's sessionId in the sessions array
+        // The mongoose population syntax will still work as written, as it goes inside the array
+        const sessionEditRequests = await SessionEditRequest.find({ appointmentId: { $in: appointmentIds } })
+          .populate({
+            path: 'sessions.sessionId',
+            model: 'Session' // If your sessions array contains session objects with { sessionId }, this works
+          })
+          .lean();
+        // Note: If your sessions array has sessionId fields as references, this is correct.
+        // If you need to map or process further, do so after the query.
         const editRequestsByAppointment = {};
         sessionEditRequests.forEach(er => {
           const apptId = er.appointmentId?.toString?.() || er.appointmentId;

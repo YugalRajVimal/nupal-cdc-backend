@@ -3,6 +3,7 @@ import Lead from "../../Schema/leads.schema.js";
 import mongoose from "mongoose";
 import Counter from "../../Schema/counter.schema.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+import LeadsFormConfig from "../../Schema/leads-page.schema.js";
 
 
 // Utility: Get next lead sequence for LeadID generation
@@ -21,6 +22,42 @@ const generateLeadId = (seq) => {
 };
 
 class LeadsAdminController {
+
+  // Get dropdown options for the lead form
+async getLeadFormFields(req, res) {
+  try {
+    // Dynamically import to avoid circular dependencies if any
+    const LeadsFormConfig = (await import("../../Schema/leads-page.schema.js")).default;
+
+    // Always fetch the latest config (if multiple, take the most recent one)
+    const config = await LeadsFormConfig.findOne().sort({ updatedAt: -1 });
+
+    if (!config) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead form config not found. Please configure dropdown fields."
+      });
+    }
+
+    // Only send relevant fields
+    const fields = {
+      staffMembers: config.staffMembers,
+      findUsOptions: config.findUsOptions,
+      relationships: config.relationships,
+      pincodes: config.pincodes
+      // Add more dropdowns as you add them to the schema/config
+    };
+
+    return res.json({ success: true, fields });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch lead form fields.",
+      error: error.message
+    });
+  }
+}
+
   // Add a new lead
   async addLead(req, res) {
     try {
@@ -79,6 +116,70 @@ class LeadsAdminController {
       });
 
       await lead.save();
+
+      // === Add dropdown data if not present in LeadsFormConfig ===
+      // Do *not* block lead creation if this fails, but log errors.
+      (async () => {
+        try {
+          // Always update the most recent config
+          let config = await LeadsFormConfig.findOne().sort({ updatedAt: -1 });
+
+          // If no config exists, create one
+          if (!config) {
+            config = new LeadsFormConfig({});
+          }
+
+          let updated = false;
+
+          // Add staff to staffMembers (if not present, not null, not empty)
+          if (
+            staff &&
+            typeof staff === "string" &&
+            staff.trim() !== "" &&
+            !config.staffMembers.includes(staff)
+          ) {
+            config.staffMembers.push(staff);
+            updated = true;
+          }
+
+          // Add referralSource to findUsOptions (if not present, not null, not empty)
+          if (
+            referralSource &&
+            typeof referralSource === "string" &&
+            !config.findUsOptions.includes(referralSource)
+          ) {
+            config.findUsOptions.push(referralSource);
+            updated = true;
+          }
+
+          // Add parentRelationship to relationships (if not present, not null, not empty)
+          if (
+            parentRelationship &&
+            typeof parentRelationship === "string" &&
+            !config.relationships.includes(parentRelationship)
+          ) {
+            config.relationships.push(parentRelationship);
+            updated = true;
+          }
+
+          // Add parentArea (used as pin code here) to pincodes (if not present, not null, not empty)
+          if (
+            parentArea &&
+            typeof parentArea === "string" &&
+            !config.pincodes.includes(parentArea)
+          ) {
+            config.pincodes.push(parentArea);
+            updated = true;
+          }
+
+          // Only save if something new was added
+          if (updated) {
+            await config.save();
+          }
+        } catch (dropdownErr) {
+          console.error("Dropdown config update failed [LeadsFormConfig]:", dropdownErr.message);
+        }
+      })();
 
       // --- Audit log ---
       try {
@@ -349,6 +450,11 @@ class LeadsAdminController {
       return res.status(500).json({ success: false, message: "Error fetching lead.", error: error.message });
     }
   }
+
+
+
+
+
 
 }
 

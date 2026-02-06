@@ -27,14 +27,264 @@ const getNextSequence = async (name) => {
   return counter.seq;
 };
 
-// Given appointment sequence number, format appointmentId as APT000001 etc.
+// Given appointment sequence number, format appointmentId as B000001 etc.
 function generateAppointmentId(seq) {
-  return 'APT' + seq.toString().padStart(6, '0');
+  return 'B' + seq.toString().padStart(6, '0');
 }
 
 const aavailabilitySlotsAdminController = new AavailabilitySlotsAdminController();
 
 class BookingAdminController {
+
+  async getOverview(req, res) {
+    try {
+      // 1. Fetch all required data in parallel
+      const [
+        activePatients,
+        activeTherapists,
+        allBookings,
+        todayBookings,
+        allPendingPaymentsBookings,
+        pendingTasks,
+        pendingBookingRequests,
+        pendingSessionEditRequests,
+        perDayStats,
+        // TherapistManualSignUp count for pending enable/panel access
+        pendingTherapistManualSignUpCount
+      ] = await Promise.all([
+        // Active Children
+        (async () => {
+          const activePatientUsers = await User.find({ role: "patient", status: "active" }, { _id: 1 });
+          const activePatientUserIds = activePatientUsers.map(u => u._id);
+          return PatientProfile.countDocuments({ userId: { $in: activePatientUserIds } });
+        })(),
+        // Active Therapists
+        User.countDocuments({ role: "therapist", status: "active", isDisabled: { $ne: true } }),
+        // All bookings (for all-time stats, pending appointments, payments, etc)
+        Booking.find({})
+          .populate({ path: "patient", model: "PatientProfile", select: "name patientId mobile gender" })
+          .populate({ path: "therapist", model: "TherapistProfile", select: "name" })
+          .populate({ path: "package", model: "Package" })
+          .populate({ path: "therapy", model: "TherapyType" })
+          .populate({ path: "sessions.therapist", model: "TherapistProfile", select: "userId therapistId", populate: { path: "userId", model: "User", select: "name" } })
+          .populate({ path: "payment", model: "Payment" })
+          .lean(),
+        // Bookings with at least one session for today
+        (async () => {
+          const today = new Date();
+          const yyyy = today.getFullYear();
+          const mm = String(today.getMonth() + 1).padStart(2, '0');
+          const dd = String(today.getDate()).padStart(2, '0');
+          const todayISO = `${yyyy}-${mm}-${dd}`;
+          const bookings = await Booking.find({
+            "sessions.date": todayISO
+          })
+            .populate({ path: "patient", model: "PatientProfile", select: "name patientId mobile gender" })
+            .populate({ path: "therapist", model: "TherapistProfile", select: "name" })
+            .populate({ path: "package", model: "Package" })
+            .populate({ path: "therapy", model: "TherapyType" })
+            .populate({ path: "sessions.therapist", model: "TherapistProfile", select: "userId therapistId", populate: { path: "userId", model: "User", select: "name" } })
+            .populate({ path: "payment", model: "Payment" })
+            .lean();
+          return bookings;
+        })(),
+        // All bookings with pending payments
+        (async () => {
+          const bookings = await Booking.find({})
+            .populate({ path: "payment", model: "Payment" })
+            .lean();
+          return bookings.filter(b => {
+            if (!b.payment) return true;
+            if (b.payment && b.payment.status && b.payment.status !== "paid") return true;
+            if (b.payment && !b.payment.status) return true;
+            return false;
+          });
+        })(),
+        // Pending Tasks
+        (typeof Lead !== "undefined"
+          ? Lead.countDocuments({ status: "pending", $or: [{ visitFinalized: { $ne: "yes" } }, { status: { $ne: "converted" } }] })
+          : Promise.resolve(0)
+        ),
+        // Pending Booking Requests
+        (typeof BookingRequests !== "undefined"
+          ? BookingRequests.countDocuments({ status: "pending" })
+          : Promise.resolve(0)
+        ),
+        // Pending Session Edit Requests
+        (typeof SessionEditRequest !== "undefined"
+          ? SessionEditRequest.countDocuments({ status: "pending" })
+          : Promise.resolve(0)
+        ),
+        // ===== PER DAY SESSIONS AND BOOKINGS =====
+        (async () => {
+          // Sessions completed each day (sessions.isCheckedIn = true, group by sessions.date)
+          const completedSessions = await Booking.aggregate([
+            { $unwind: "$sessions" },
+            { $match: { "sessions.isCheckedIn": true } },
+            {
+              $group: {
+                _id: "$sessions.date",
+                sessionsCompleted: { $sum: 1 }
+              }
+            },
+            { $sort: { _id: 1 } }
+          ]);
+          // Bookings created each day (group by createdAt (date only))
+          const bookingsCreated = await Booking.aggregate([
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+                },
+                bookingsCreated: { $sum: 1 }
+              }
+            },
+            { $sort: { _id: 1 } }
+          ]);
+          // Merge both by date for UI reporting 
+          // (if a date is only in one, still report), but keep as two arrays for clarity
+          return {
+            sessionsCompletedPerDay: completedSessions.map(cs => ({
+              date: cs._id,
+              sessionsCompleted: cs.sessionsCompleted
+            })),
+            bookingsCreatedPerDay: bookingsCreated.map(bc => ({
+              date: bc._id,
+              bookingsCreated: bc.bookingsCreated
+            }))
+          }
+        })(),
+        // TherapistManualSignUp: count of therapists who are not enabled and do not have pannel access
+        (async () => {
+          // Adjust the model/fields as per your actual therapist schema.
+          // We'll assume "isManualSignUp" (or similar flag), "status" not enabled, and "isDisabled/pannelAccess" fields.
+          return User.countDocuments({
+            role: "therapist",
+            manualSignUp: true,
+            $or: [
+              { status: { $ne: "active" } },
+              { isDisabled: true },
+              { panelAccess: { $ne: true } }
+            ]
+          });
+        })()
+      ]);
+
+      // Set up date helpers
+      const now = new Date();
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      const todayISO = `${yyyy}-${mm}-${dd}`;
+      const monthStartISO = `${yyyy}-${mm}-01`;
+
+      // Helper: session is pending and not started
+      function sessionIsPending(sess) {
+        return (sess.status === "pending" || !sess.status)
+          && sess.date &&
+          (new Date(sess.date) >= now);
+      }
+
+      // ----- Today's Pending Bookings & Completed Bookings -----
+      let todaysPendingBooking = 0;
+      let todaysCompletedBookings = 0;
+
+      // For bookings with any session on today, count the pending or completed state
+      todayBookings.forEach(bk => {
+        let hasPending = false;
+        let hasCompleted = false;
+        if (Array.isArray(bk.sessions)) {
+          bk.sessions.forEach(sess => {
+            if (sess.date === todayISO) {
+              if (sess.isCheckedIn === true || sess.status === "done" || sess.status === "completed") {
+                hasCompleted = true;
+              } else if (sess.status === "pending" || sess.status === "approved" || !sess.status) {
+                hasPending = true;
+              }
+            }
+          });
+        }
+        if (hasPending) todaysPendingBooking++;
+        if (hasCompleted) todaysCompletedBookings++;
+      });
+
+      // ---- All-Time Pending Payments ----
+      const allTimePendingPayments = allPendingPaymentsBookings.length;
+
+      // ---- This Month's Pending Payments ----
+      let thisMonthsPendingPayments = 0;
+      allPendingPaymentsBookings.forEach(bk => {
+        // If the booking has any session in the current month, and payment pending, count it
+        if (Array.isArray(bk.sessions)) {
+          if (bk.sessions.some(sess => typeof sess.date === "string" && sess.date >= monthStartISO && sess.date <= todayISO)) {
+            thisMonthsPendingPayments++;
+          }
+        }
+      });
+
+      // --------- (other unchanged stats for dashboard) ----------
+      // Count all sessions on all bookings for aggregate stats
+      let totalBookedAppointments = 0;
+      let totalAppointments = allBookings.length;
+      let totalPendingAppointments = 0;
+      allBookings.forEach(bk => {
+        if (Array.isArray(bk.sessions)) {
+          totalBookedAppointments += bk.sessions.length;
+          if (bk.sessions.some(sessionIsPending)) {
+            totalPendingAppointments++;
+          }
+        }
+      });
+
+      // For previous "today's" counts in use
+      let todaysTotalAppointments = 0;
+      let todaysPendingAppointments = 0;
+      let todaysDoneAppointments = 0;
+      todayBookings.forEach(bk => {
+        if (!Array.isArray(bk.sessions)) return;
+        bk.sessions.forEach(sess => {
+          if (sess.date === todayISO) {
+            todaysTotalAppointments++;
+            if (sess.isCheckedIn === true || sess.status === "done" || sess.status === "completed") {
+              todaysDoneAppointments++;
+            } else {
+              todaysPendingAppointments++;
+            }
+          }
+        });
+      });
+
+      res.json({
+        success: true,
+        data: {
+          activeChildren: activePatients,
+          activeTherapists: activeTherapists,
+          totalSessions: totalBookedAppointments,
+          todaysTotalSessions: todaysTotalAppointments,
+          todaysPendingSessions: todaysPendingBooking,
+          todaysCompletedSessions: todaysCompletedBookings,
+          allTimePendingPayments,
+          thisMonthsPendingPayments,
+          pendingTasks,
+          pendingBookingRequests,
+          pendingSessionEditRequests,
+          pendingTherapistManualSignUp: pendingTherapistManualSignUpCount,
+          // NEW SECTION for per-day stats
+          sessionsCompletedPerDay: perDayStats.sessionsCompletedPerDay,
+          bookingsCreatedPerDay: perDayStats.bookingsCreatedPerDay
+        }
+      });
+    } catch (error) {
+      console.error("[getOverview] Error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to get overview",
+        error: error.message
+      });
+    }
+  }
+  
   // Provides booking page dropdown/reference details
   async getBookingHomePageDetails(req, res) {
     try {
@@ -146,7 +396,6 @@ class BookingAdminController {
 
   // Create a new booking with updated booking schema (1-47)
   async createBooking(req, res) {
-
     const session = await mongoose.startSession();
     try {
       // Start transaction (mandatory - ALL steps MUST be in session, revert on any error including logs)
@@ -348,8 +597,23 @@ class BookingAdminController {
       });
       await paymentDoc.save({ session });
 
-      // Step 5: Normalize sessions, compose booking
-      const normalizedSessions = (sessions || []).map(sess => ({
+      // Step 5: Normalize sessions, WITH sessionId per session (S00001...)
+      // 1. Generate as many 'session' counters as needed, in bulk increment, for atomicity
+      const sessionCount = Array.isArray(sessions) ? sessions.length : 0;
+      let sessionCounterStart = 1;
+      if (sessionCount > 0) {
+        // Attempt to atomically reserve sequence for all sessions
+        const sessionCounterDoc = await Counter.findOneAndUpdate(
+          { name: "session" },
+          { $inc: { seq: sessionCount } },
+          { new: true, upsert: true, session }
+        );
+        // The first session sequence in this batch:
+        sessionCounterStart = sessionCounterDoc.seq - sessionCount + 1;
+      }
+      // Map: assign sessionId from counter
+      const normalizedSessions = (sessions || []).map((sess, idx) => ({
+        sessionId: `S${String(sessionCounterStart + idx).padStart(5, "0")}`,
         date: sess.date,
         time: sess.time || "",
         slotId: sess.slotId || sess.id,
@@ -451,7 +715,7 @@ class BookingAdminController {
             invoiceNumber,
             remark,
             status,
-            message: `Booking created for patient ${patientId} with therapist ${therapistId}, package ${packageId}, therapy ${therapyId}`
+            message: `Booking created for children ${patientId} with therapist ${therapistId}, package ${packageId}, therapy ${therapyId}`
           },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
@@ -866,32 +1130,12 @@ class BookingAdminController {
         });
       }
 
-      // If all slots clear, proceed with update.
-      // Properly build updatedSessions with therapist and therapyType (like createBooking body)
-      let updatedSessions = Array.isArray(sessions)
-        ? sessions.map(s => {
-            let therapistValue =
-              s.therapist ||
-              s.therapistId ||
-              bodyTherapist ||
-              prevBooking.therapist;
-            if (therapistValue && typeof therapistValue === "object" && therapistValue._id) {
-              therapistValue = therapistValue._id;
-            }
-            let therapistIdField = therapistIdMap[String(therapistValue)] || "";
-            let therapyTypeIdValue = s.therapyTypeId || s.therapyType || therapyId;
-            return {
-              date: s.date,
-              slotId: s.slotId || s.id,
-              therapist: therapistValue,
-              therapistId: therapistIdField,
-              therapyTypeId: therapyTypeIdValue,
-              ...(s.time && { time: s.time }),
-              ...(s.isCheckedIn !== undefined && { isCheckedIn: s.isCheckedIn }),
-            };
-          })
-        : [];
+      // For sessionId format: pad with leading zeros as S00001 etc.
+      function generateSessionId(index) {
+        return `S${String(index + 1).padStart(5, "0")}`;
+      }
 
+      // Build a map of previous session keys to sessionId if present (to preserve sessionId during update)
       const sessionKey = (s) =>
         `${s.date}|${s.slotId}|${String(
           typeof s.therapist === "object" && s.therapist?._id
@@ -907,6 +1151,52 @@ class BookingAdminController {
               typeof s.date === "string"
           )
         : [];
+      const prevSessionIdMap = {};
+      prevSessions.forEach((sess) => {
+        if (sess.sessionId) {
+          prevSessionIdMap[sessionKey(sess)] = sess.sessionId;
+        }
+      });
+
+      // If all slots clear, proceed with update.
+      // Properly build updatedSessions with therapist and therapyType (like createBooking body)
+      let updatedSessions = Array.isArray(sessions)
+        ? sessions.map((s, idx) => {
+            let therapistValue =
+              s.therapist ||
+              s.therapistId ||
+              bodyTherapist ||
+              prevBooking.therapist;
+            if (therapistValue && typeof therapistValue === "object" && therapistValue._id) {
+              therapistValue = therapistValue._id;
+            }
+            let therapistIdField = therapistIdMap[String(therapistValue)] || "";
+            let therapyTypeIdValue = s.therapyTypeId || s.therapyType || therapyId;
+            const keyForSession = sessionKey({
+              date: s.date,
+              slotId: s.slotId || s.id,
+              therapist: therapistValue
+            });
+
+            // Preserve existing sessionId or generate new if not present
+            let sessionIdValue =
+              prevSessionIdMap[keyForSession] ||
+              s.sessionId ||
+              generateSessionId(idx);
+
+            return {
+              date: s.date,
+              slotId: s.slotId || s.id,
+              therapist: therapistValue,
+              therapistId: therapistIdField,
+              therapyTypeId: therapyTypeIdValue,
+              sessionId: sessionIdValue,
+              ...(s.time && { time: s.time }),
+              ...(s.isCheckedIn !== undefined && { isCheckedIn: s.isCheckedIn }),
+            };
+          })
+        : [];
+
       const nextSessions = updatedSessions.filter(
         s =>
           s &&
@@ -1716,23 +2006,25 @@ async checkIn(req, res) {
       });
     }
 
-    // Mark this session as checked in
+    const date =  new Date()
+    // Mark this session as checked in and set checkInTime
     booking.sessions[sessionIndex].isCheckedIn = true;
+    booking.sessions[sessionIndex].checkInTime = date;
     await booking.save({ session });
 
     // --- AUDIT LOG ---
     try {
       await AuditLogService.addLog({
         action: "PATIENT_CHECKIN",
-        user: req.user.id ,
-        role:"admin",
+        user: req.user.id,
+        role: "admin",
         resource: "Booking",
         resourceId: booking._id,
         details: {
           bookingId: booking._id,
           sessionId: sessionId,
           checkedInBy: req.user && req.user._id ? req.user._id : null,
-          checkInAt: new Date(),
+          checkInAt: date ,
         },
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"] || null,
@@ -1772,6 +2064,120 @@ async checkIn(req, res) {
     });
   }
 }
+
+// Check-in a patient for a booking
+// async checkIn(req, res) {
+//   const session = await Booking.startSession();
+//   session.startTransaction();
+//   let auditLogFailed = false;
+//   let auditLogError = null;
+//   try {
+//     const { bookingId, sessionId } = req.body;
+
+//     console.log(bookingId, sessionId );
+
+//     if (!bookingId || !sessionId) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(400).json({
+//         success: false,
+//         message: "bookingId and sessionId are required."
+//       });
+//     }
+
+//     // Find the booking (attach the session/tx)
+//     const booking = await Booking.findById(bookingId).session(session);
+//     if (!booking) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(404).json({
+//         success: false,
+//         message: "Booking not found."
+//       });
+//     }
+
+//     // Find session index in the booking sessions array
+//     const sessionIndex = booking.sessions.findIndex(
+//       (sess) => String(sess._id) === String(sessionId)
+//     );
+
+//     if (sessionIndex === -1) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(404).json({
+//         success: false,
+//         message: "Session not found in this booking."
+//       });
+//     }
+
+//     // If already checked in for this session, return idempotent response
+//     if (booking.sessions[sessionIndex].isCheckedIn) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return res.status(200).json({
+//         success: true,
+//         message: "Patient already checked in for this session.",
+//         booking
+//       });
+//     }
+
+//     // Mark this session as checked in
+//     booking.sessions[sessionIndex].isCheckedIn = true;
+//     // booking.sessions[sessionIndex].checkInTime = new Date();
+//     await booking.save({ session});
+
+//     // --- AUDIT LOG ---
+//     // try {
+//     //   await AuditLogService.addLog({
+//     //     action: "PATIENT_CHECKIN",
+//     //     user: req.user.id ,
+//     //     role:"admin",
+//     //     resource: "Booking",
+//     //     resourceId: booking._id,
+//     //     details: {
+//     //       bookingId: booking._id,
+//     //       sessionId: sessionId,
+//     //       checkedInBy: req.user && req.user._id ? req.user._id : null,
+//     //       checkInAt: new Date(),
+//     //     },
+//     //     ipAddress: req.ip,
+//     //     userAgent: req.headers["user-agent"] || null,
+//     //   });
+//     // } catch (err) {
+//     //   auditLogFailed = true;
+//     //   auditLogError = err;
+//     //   console.error("[checkIn] Error creating audit log:", err);
+//     // }
+
+//     // if (auditLogFailed) {
+//     //   await session.abortTransaction();
+//     //   session.endSession();
+//     //   return res.status(500).json({
+//     //     success: false,
+//     //     message: "Check-in was NOT logged in the audit system. No changes made.",
+//     //     error: auditLogError ? auditLogError.message : "Unknown log error"
+//     //   });
+//     // }
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     res.json({
+//       success: true,
+//       message: "Patient checked in successfully for this session.",
+//       booking
+//     });
+//   } catch (error) {
+//     await session.abortTransaction();
+//     session.endSession();
+//     console.error("[checkIn] Error:", error);
+//     res.status(500).json({
+//       success: false,
+//       message: "Failed to check in patient.",
+//       error: error.message
+//     });
+//   }
+// }
 
 async getReceptionDeskDetails(req, res) {
   try {
@@ -1863,169 +2269,121 @@ async getReceptionDeskDetails(req, res) {
   }
 }
 
+/**
+ * Returns all sessions (across all bookings), optionally filtered by today's date.
+ * Output: Flattened array of sessions, each with booking info, for the frontend "All Sessions" view.
+ * Query params supported: date (YYYY-MM-DD), therapistId, patientId, therapyTypeId, isCheckedIn
+ */
+/**
+ * Returns all sessions (across all bookings), optionally filtered by today's date, therapist, patient, therapy type, and checked-in status.
+ * Supports: ?date=YYYY-MM-DD&therapistId=xxx&patientId=xxx&therapyTypeId=xxx&isCheckedIn=false/true
+ * If isCheckedIn not provided, returns all sessions.
+ * If isCheckedIn=false, returns only sessions that are NOT checked in.
+ */
+async getAllSessions(req, res) {
+  try {
+    const {
+      date,             // YYYY-MM-DD (string)
+      therapistId,      // therapist._id as string
+      patientId,        // patient._id as string
+      therapyTypeId,    // therapyTypeId as string
+      isCheckedIn,      // 'true', 'false', or undefined
+    } = req.query;
+
+    // We need: 
+    // - Booking populated with patient ("PatientProfile"), package, therapy ("TherapyType"), therapist ("TherapistProfile")
+    // - Each session in booking.sessions with therapist, therapyTypeId populated
+    // - Flatten to array: [{ session, booking }]
+
+    // Build booking query level filters
+    const bookingQuery = {};
+    if (patientId) bookingQuery.patient = patientId;
+    if (therapistId) bookingQuery.therapist = therapistId; // legacy: top-level therapist
+
+    // Fetch bookings
+    const bookings = await Booking.find(bookingQuery)
+      .populate({
+        path: "patient",
+        model: "PatientProfile",
+        select: "_id userId name patientId gender mobile"
+      })
+      .populate({
+        path: "therapist",
+        model: "TherapistProfile",
+        select: "_id name therapistId userId"
+      })
+      .populate({
+        path: "therapy",
+        model: "TherapyType",
+        select: "_id name"
+      })
+      .populate({
+        path: "sessions.therapist",
+        model: "TherapistProfile",
+        select: "_id name therapistId userId",
+        populate: {
+          path: "userId",
+          select: "name"
+        }
+      })
+      .populate({
+        path: "sessions.therapyTypeId",
+        model: "TherapyType",
+        select: "_id name"
+      })
+      .lean();
+
+    // Flatten all sessions, annotate with booking info
+    let sessions = [];
+    for(const booking of bookings) {
+      if (Array.isArray(booking.sessions)) {
+        for(const session of booking.sessions) {
+          // Apply session filters
+          if (date && session.date !== date) continue;
+          if (therapistId && session.therapist && session.therapist._id?.toString() !== therapistId) continue;
+          if (therapyTypeId && session.therapyTypeId && session.therapyTypeId._id?.toString() !== therapyTypeId) continue;
+          if (typeof isCheckedIn !== "undefined") {
+            if (isCheckedIn === "false" && session.isCheckedIn === true) continue;
+            if (isCheckedIn === "true" && session.isCheckedIn !== true) continue;
+          }
+          // Compose item
+          sessions.push({
+            bookingId: booking._id,
+            appointmentId: booking.appointmentId,
+            package: booking.package,
+            patient: booking.patient,
+            therapist: booking.therapist,
+            therapy: booking.therapy,
+            session: session,
+            // You can add more fields here as necessary for frontend
+          });
+        }
+      }
+    }
+
+    // If isCheckedIn param not provided, return all; if "false", only unchecked; if "true", only checked-in
+    // Return currentDate for reference if date is provided
+    return res.json({
+      success: true,
+      date: date || null,
+      sessions: sessions
+    });
+  } catch (error) {
+    console.error("[getAllSessions] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get sessions",
+      error: error.message
+    });
+  }
+}
+
 // getOverview - Admin dashboard summary endpoint
 
 // Assumes necessary mongoose models: User, TherapistProfile, PatientProfile, Booking, BookingRequest, SessionEditRequest, Task, etc.
 // Imports are to be placed at top-level, but omitted here as per instructions.
 
-async getOverview(req, res) {
-  try {
-    // 1. Active Children (patients)
-    // - User: role = "patient", status = "active"
-    // - PatientProfile: not deleted, not suspended (assuming possible status fields)
-    const [activePatients, activeTherapists, allBookings, todayBookings, pendingPayments, pendingTasks, pendingBookingRequests, pendingSessionEditRequests] =
-      await Promise.all([
-        // Active Children
-        (async () => {
-          // Find all active patient users
-          const activePatientUsers = await User.find({ role: "patient", status: "active" }, { _id: 1 });
-          const activePatientUserIds = activePatientUsers.map(u => u._id);
-          // Count PatientProfiles where userId in these active ids
-          return PatientProfile.countDocuments({ userId: { $in: activePatientUserIds } });
-        })(),
-        // Active Therapists
-        User.countDocuments({ role: "therapist", status: "active", isDisabled: { $ne: true } }),
-        // All Bookings (for total/pending appointments)
-        Booking.find({})
-          .populate({ path: "patient", model: "PatientProfile", select: "name patientId mobile gender" })
-          .populate({ path: "therapist", model: "TherapistProfile", select: "name" })
-          .populate({ path: "package", model: "Package" })
-          .populate({ path: "therapy", model: "TherapyType" })
-          .populate({ path: "payment", model: "Payment" })  // to check payment status
-          .lean(),
-        // Bookings for Today
-        (async () => {
-          // Filter bookings with at least one session for today
-          const today = new Date();
-          const yyyy = today.getFullYear();
-          const mm = String(today.getMonth() + 1).padStart(2, '0');
-          const dd = String(today.getDate()).padStart(2, '0');
-          const todayISO = `${yyyy}-${mm}-${dd}`;
-          const bookings = await Booking.find({
-            "sessions.date": todayISO
-          })
-            .populate({ path: "patient", model: "PatientProfile", select: "name patientId mobile gender" })
-            .populate({ path: "therapist", model: "TherapistProfile", select: "name" })
-            .populate({ path: "package", model: "Package" })
-            .populate({ path: "therapy", model: "TherapyType" })
-            .populate({ path: "sessions.therapist", model: "TherapistProfile", select: "userId therapistId", populate: { path: "userId", model: "User", select: "name" } })
-            .lean();
-          return bookings;
-        })(),
-        // Pending Payments
-        (async () => {
-          const bookings = await Booking.find({})
-            .populate({ path: "payment", model: "Payment" })
-            .lean();
-          return bookings.filter(b => {
-            if (!b.payment) return true;
-            if (b.payment && b.payment.status && b.payment.status !== "paid") return true;
-            if (b.payment && !b.payment.status) return true;
-            return false;
-          });
-        })(),
-        // Pending Tasks (if Task schema exists and has "pending" status)
-        // Correct lead count: Only count "pending" leads that are not "converted" or "visitFinalized" is not "yes"
-        (typeof Lead !== "undefined"
-          ? Lead.countDocuments({ status: "pending", $or: [ { visitFinalized: { $ne: "yes" } }, { status: { $ne: "converted" } } ] })
-          : Promise.resolve(0)
-        ),
-        // Pending Booking Requests
-        (typeof BookingRequests !== "undefined"
-          ? BookingRequests.countDocuments({ status: "pending" })
-          : Promise.resolve(0)
-        ),
-        // Pending Session Edit Requests
-        (typeof SessionEditRequest !== "undefined"
-          ? SessionEditRequest.countDocuments({ status: "pending" })
-          : Promise.resolve(0)
-        ),
-      ]);
 
-    // 2. Appointments: Pending, Done, etc.
-
-    // Total Pending Appointments: Bookings with at least one session in future and session.status = "pending"
-    const now = new Date();
-    function sessionIsPending(sess) {
-      return (sess.status === "pending" || !sess.status)
-        && sess.date && new Date(sess.date) >= now;
-    }
-    let totalPendingAppointments = 0;
-    let totalBookedAppointments = 0;
-    let totalAppointments = allBookings.length;
-
-    allBookings.forEach(bk => {
-      if (Array.isArray(bk.sessions) && bk.sessions.some(sessionIsPending)) {
-        totalPendingAppointments++;
-      }
-      if (Array.isArray(bk.sessions)) {
-        totalBookedAppointments += bk.sessions.length;
-      }
-    });
-
-    // Today's Appointments
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    const todayISO = `${yyyy}-${mm}-${dd}`;
-    let todaysTotalAppointments = 0;
-    let todaysPendingAppointments = 0;
-    let todaysDoneAppointments = 0;
-    todayBookings.forEach(bk => {
-      if (!Array.isArray(bk.sessions)) return;
-      // Only sessions for today
-      bk.sessions.forEach(sess => {
-        if (sess.date === todayISO) {
-          todaysTotalAppointments++;
-          // Treat isCheckedIs true as done
-          if (sess.isCheckedIn === true || sess.status === "done" || sess.status === "completed") {
-            todaysDoneAppointments++;
-          } else {
-            // Count not done as pending (including "pending"/"approved"/""/missing)
-            todaysPendingAppointments++;
-          }
-        }
-      });
-    });
-
-    // 3. Pending Payments count
-    const pendingPaymentsCount = pendingPayments.length;
-
-    // 4. Pending Tasks count
-    // Already resolved as pendingTasks
-
-    // 5. Pending Booking Requests count
-    // Already resolved as pendingBookingRequests
-
-    // 6. Pending Session Edit Requests count
-    // Already resolved as pendingSessionEditRequests
-
-    res.json({
-      success: true,
-      data: {
-        activeChildren: activePatients,
-        activeTherapists: activeTherapists,
-        totalPendingAppointments,
-        todaysTotalAppointments,
-        todaysPendingAppointments,
-        todaysDoneAppointments,
-        pendingPayments: pendingPaymentsCount,
-        pendingTasks,
-        pendingBookingRequests,
-        pendingSessionEditRequests
-      }
-    });
-
-  } catch (error) {
-    console.error("[getOverview] Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to get overview",
-      error: error.message
-    });
-  }
-}
 
   // Fetch all bookings with populated therapist and therapyType, with support for search/filter on patient, therapist, therapyType, date, and session status
   async getFullCalendar(req, res) {

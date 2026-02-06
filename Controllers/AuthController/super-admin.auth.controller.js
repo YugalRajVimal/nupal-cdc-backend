@@ -13,7 +13,6 @@ class SuperAdminAuthController {
   checkAuth = async (req, res) => {
     try {
       const { id, role } = req.user || {};
-      console.log(req);
       console.log("[SuperAdmin checkAuth] User id from req.user:", id);
       console.log("[SuperAdmin checkAuth] User role from req.user:", role);
 

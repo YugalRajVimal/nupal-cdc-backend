@@ -98,6 +98,7 @@ adminRouter.get("/profile", async (req, res) => {
 
 
 
+
 // adminRouter.get("/get-profile-details", jwtAuth, (req, res) => {
 //   adminController.getProfileDetails(req, res);
 // });

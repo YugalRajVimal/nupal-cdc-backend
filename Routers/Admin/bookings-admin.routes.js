@@ -90,6 +90,15 @@ bookingsAdminRouter.get("/reception-desk", (req, res) =>
 );
 
 /**
+ * @route GET /api/admin/bookings/sessions
+ * @desc Get all sessions for all bookings, filterable by date, therapist, patient, etc.
+ */
+bookingsAdminRouter.get("/sessions", (req, res) =>
+  bookingAdminController.getAllSessions(req, res)
+);
+
+
+/**
  * @route GET /api/admin/bookings/overview
  * @desc Get admin bookings overview (dashboard summary)
  */

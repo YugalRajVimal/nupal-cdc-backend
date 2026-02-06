@@ -419,6 +419,7 @@ class TherapistController {
       therapistProfile.specializations = specializations;
       therapistProfile.experienceYears = experienceYears;
       therapistProfile.isPanelAccessible = false; // ensure always set (redundant but explicit)
+      therapistProfile.isDisabled=true
 
       // Patch file fields if file was uploaded; preserve any prior value if not replaced
       for (const field of fileFields) {
@@ -535,20 +536,31 @@ class TherapistController {
         if (Array.isArray(booking.sessions)) {
           for (const session of booking.sessions) {
             // Ensure the session is for this therapist
-            if (session && (String(session.therapist) === String(therapistProfile._id) || String(session.therapist) === String(therapistProfile._id) )) {
+            if (
+              session &&
+              (String(session.therapist) === String(therapistProfile._id) ||
+                String(session.therapist) === String(therapistProfile._id))
+            ) {
               hasTherapistSession = true;
 
               // Count session as part of this therapist's tally
               sessionCountForTherapist++;
 
               // Only count non-cancelled sessions for relevant stats
-              if (session && session.date && (!session.status || session.status !== "Cancelled")) {
+              if (
+                session &&
+                session.date &&
+                (!session.status || session.status !== "Cancelled")
+              ) {
                 const sessionDateObj = new Date(session.date);
-                const sessionDateStr = session.date.length >= 10 ? session.date.slice(0, 10) : session.date;
+                const sessionDateStr =
+                  session.date.length >= 10
+                    ? session.date.slice(0, 10)
+                    : session.date;
 
                 // Count as upcoming session if session date is in the future OR is today
                 if (
-                  sessionDateObj > now || 
+                  sessionDateObj > now ||
                   sessionDateStr === todayStr
                 ) {
                   upcomingSessions++;
@@ -556,7 +568,7 @@ class TherapistController {
                   let slotTime = "";
                   if (session.slotId) {
                     const slotObj = SESSION_TIME_OPTIONS.find(
-                      option => option.id === session.slotId
+                      (option) => option.id === session.slotId
                     );
                     slotTime = slotObj ? slotObj.label : session.slotId;
                   } else if (session.time) {
@@ -565,14 +577,22 @@ class TherapistController {
 
                   let patientName = "";
                   let patientId = "";
-                  if (booking.patient && typeof booking.patient === "object") {
+                  if (
+                    booking.patient &&
+                    typeof booking.patient === "object"
+                  ) {
                     patientName = booking.patient.name || "";
-                    patientId = booking.patient.patientId ? booking.patient.patientId.toString() : "";
+                    patientId = booking.patient.patientId
+                      ? booking.patient.patientId.toString()
+                      : "";
                   } else if (typeof booking.patient === "string") {
                     patientId = booking.patient;
                   }
                   let therapyTypeName = "";
-                  if (booking.therapy && typeof booking.therapy === "object") {
+                  if (
+                    booking.therapy &&
+                    typeof booking.therapy === "object"
+                  ) {
                     therapyTypeName = booking.therapy.name || "";
                   }
                   upcomingSessionDetails.push({
@@ -581,7 +601,10 @@ class TherapistController {
                     patientName,
                     patientId,
                     therapyTypeName,
-                    appointmentId: booking.appointmentId ? booking.appointmentId.toString() : undefined
+                    appointmentId: booking.appointmentId
+                      ? booking.appointmentId.toString()
+                      : undefined,
+                    sessionId: session.sessionId ? session.sessionId.toString() : undefined, // <-- add sessionId
                   });
                 }
 
@@ -818,11 +841,17 @@ class TherapistController {
         if (Array.isArray(booking.sessions)) {
           booking.sessions.forEach(session => {
             if (session.therapist && String(session.therapist) === String(therapistProfile._id)) {
+              // sessionId should prefer session.sessionId if present, otherwise fall back to session._id
+              const sessionId = session.sessionId ? session.sessionId : session._id;
+              // Clone session object and enforce sessionId field, remove _id if present
+              const sessionCopy = { ...session, sessionId };
+              // Remove _id field if present
+              if ('_id' in sessionCopy) delete sessionCopy._id;
               therapistSessions.push({
                 appointmentId: booking.appointmentId || booking._id,
                 patient: booking.patient,
                 therapyType: booking.therapy,
-                session: session
+                session: sessionCopy,
               });
             }
           });
@@ -857,6 +886,7 @@ class TherapistController {
 
       // Pagination
       const paginatedSessions = filteredSessions.slice(skip, skip + limit);
+      console.log(paginatedSessions);
 
       res.json({
         success: true,

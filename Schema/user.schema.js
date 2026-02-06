@@ -87,6 +87,7 @@ const PatientProfileSchema = new mongoose.Schema({
   parentOccupation: { type: String, default: "" },
   remarks: { type: String, default: "" },
   otherDocument: { type: mongoose.Schema.Types.Mixed, default: undefined },
+  usedCouponCodes: [{ type: String }],
 });
 
 

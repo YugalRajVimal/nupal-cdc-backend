@@ -3,6 +3,7 @@ const { Schema } = mongoose;
 
 const SessionSchema = new Schema({
   date: { type: String, required: true },
+  sessionId:{type: String},
   time: { type: String, required: false },
   slotId: { type: String, required: true },
   therapist: { 
@@ -17,7 +18,8 @@ const SessionSchema = new Schema({
   isCheckedIn: { 
     type: Boolean, 
     default: false 
-  }
+  },
+ 
   // add more fields as needed
 });
 

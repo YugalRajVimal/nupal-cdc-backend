@@ -1186,6 +1186,272 @@ class TherapistAdminController {
     }
   };
 
+/**
+ * For every therapist, for each entry in earnings[]:
+ *   - Compare with all sessions that (a) belong to therapist, (b) session.date within earning.fromDate/toDate, (c) is checked-in/confirmed/completed
+ *   - Response: List of per-therapist, per-earning reports, each containing earning info and all eligible sessions with their prices.
+ *
+ * Route: GET /api/admin/therapist/salary-session-comparison
+ */
+getAllTherapistsSalarySessionComparison = async (req, res) => {
+  /**
+   * GOAL:
+   * For each therapist:
+   *   For each earning:
+   *     - Find all sessions (from Booking) delivered by therapist in earning.fromDate-toDate and which are checked-in
+   *     - Find price of each session (from package at booking)
+   *     - Return: 
+   *         therapist info,
+   *         earning info,
+   *         sessions: [date, sessionId, slotId, price, patient, booking, package],
+   *         sumOfSessionPrices,
+   *         earning.amount,
+   *         diff (earning.amount - sumOfSessionPrices)
+   */
+
+  let Types;
+  try {
+    Types = (await import('mongoose')).Types;
+  } catch (e) {
+    return res.status(500).json({ error: "Error importing mongoose.Types in getAllTherapistsSalarySessionComparison" });
+  }
+
+  let therapists;
+  try {
+    therapists = await TherapistProfile.find({}).lean();
+    if (!Array.isArray(therapists)) {
+      return res.status(500).json({ error: "Could not fetch therapist profiles in getAllTherapistsSalarySessionComparison." });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: "Error fetching therapists in getAllTherapistsSalarySessionComparison" });
+  }
+
+  let bookings;
+  try {
+    const BookingModel = (await import("../../Schema/booking.schema.js")).default;
+    const PackageModel = (await import("../../Schema/packages.schema.js")).default;
+    bookings = await BookingModel.find({})
+      .populate({ path: "package", model: PackageModel })
+      .populate({ path: "therapist", model: "TherapistProfile" })
+      .populate({ path: "patient", model: "PatientProfile", select: "name patientId" })
+      .lean();
+  } catch (e) {
+    return res.status(500).json({ error: "Error fetching bookings in getAllTherapistsSalarySessionComparison" });
+  }
+
+  // Helper: index all bookings by therapistId for quick access
+  let therapistBookingsMap = {};
+  try {
+    bookings.forEach(b => {
+      if (b.therapist) {
+        let tid;
+        if (b.therapist._id) {
+          tid = b.therapist._id.toString();
+        } else if (typeof b.therapist === "string" || typeof b.therapist === "object") {
+          tid = b.therapist.toString();
+        }
+        if (!Types.ObjectId.isValid(tid)) {
+          // Do not print, just annotate (could log lightly)
+          b.invalidTherapistId = tid;
+          return;
+        }
+        if (!therapistBookingsMap[tid]) therapistBookingsMap[tid] = [];
+        therapistBookingsMap[tid].push(b);
+      }
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "Error indexing bookings by therapist in getAllTherapistsSalarySessionComparison" });
+  }
+
+  // 3. Build result
+  const result = [];
+
+  try {
+    for (const therapist of therapists) {
+      let therapistIdStr;
+      try {
+        therapistIdStr = therapist._id.toString();
+      } catch (e) {
+        result.push({
+          therapist: {
+            _id: therapist._id,
+            therapistId: therapist.therapistId,
+            name: therapist.name,
+            userId: therapist.userId,
+            experienceYears: therapist.experienceYears
+          },
+          warning: `Error extracting therapistId, therapist skipped in getAllTherapistsSalarySessionComparison`,
+          error: true,
+        });
+        continue;
+      }
+
+      if (!Types.ObjectId.isValid(therapistIdStr)) {
+        result.push({
+          therapist: {
+            _id: therapist._id,
+            therapistId: therapist.therapistId,
+            name: therapist.name,
+            userId: therapist.userId,
+            experienceYears: therapist.experienceYears
+          },
+          warning: `Invalid therapistId for therapist: ${therapistIdStr} in getAllTherapistsSalarySessionComparison`,
+          error: true,
+        });
+        continue;
+      }
+
+      // Skip if no earnings array at all
+      if (!Array.isArray(therapist.earnings)) continue;
+
+      const bookingsOfTherapist = therapistBookingsMap[therapistIdStr] || [];
+
+      for (const earning of therapist.earnings) {
+        if (!earning.fromDate || !earning.toDate) continue;
+
+        const sessionsMatched = [];
+        let sumOfSessionPrices = 0;
+
+        let earningFrom, earningTo;
+
+        try {
+          earningFrom = new Date(earning.fromDate);
+          earningTo = new Date(earning.toDate);
+        } catch (e) {
+          sessionsMatched.push({
+            warning: "Error parsing earning date range in getAllTherapistsSalarySessionComparison",
+            earning,
+          });
+          continue;
+        }
+
+        for (const booking of bookingsOfTherapist) {
+          if (!Array.isArray(booking.sessions)) continue;
+
+          let sessionPrice = undefined;
+          if (booking.package && booking.package.costPerSession) {
+            sessionPrice = booking.package.costPerSession;
+          }
+
+          for (const session of booking.sessions) {
+            try {
+              if (!session.therapist) continue;
+
+              let sessionTherapistId;
+              if (typeof session.therapist === "object" && session.therapist.toString) {
+                sessionTherapistId = session.therapist.toString();
+              } else if (typeof session.therapist === "string") {
+                sessionTherapistId = session.therapist;
+              }
+
+              if (!Types.ObjectId.isValid(sessionTherapistId)) {
+                sessionsMatched.push({
+                  invalidTherapistId: sessionTherapistId,
+                  warning: `Invalid therapistId in session (getAllTherapistsSalarySessionComparison)`,
+                  sessionId: session.sessionId || undefined,
+                  bookingId: booking._id,
+                });
+                continue;
+              }
+
+              if (sessionTherapistId !== therapistIdStr) continue;
+
+              if (!session.isCheckedIn) continue;
+
+              if (!session.date) continue;
+              let sessionDateObj;
+              try {
+                sessionDateObj = new Date(session.date);
+              } catch (e) {
+                sessionsMatched.push({
+                  warning: "Error parsing session.date in getAllTherapistsSalarySessionComparison",
+                  sessionId: session.sessionId || undefined,
+                  bookingId: booking._id,
+                });
+                continue;
+              }
+
+              if (sessionDateObj < earningFrom || sessionDateObj > earningTo) {
+                continue;
+              }
+
+              let price = typeof session.price === "number" ? session.price : sessionPrice;
+              if (typeof price !== "number") price = 0;
+
+              sumOfSessionPrices += price;
+
+              sessionsMatched.push({
+                date: session.date,
+                sessionId: session.sessionId || undefined,
+                slotId: session.slotId,
+                isCheckedIn: session.isCheckedIn,
+                price,
+                bookingId: booking._id,
+                package: booking.package
+                  ? {
+                      _id: booking.package._id,
+                      name: booking.package.name,
+                      costPerSession: booking.package.costPerSession,
+                      totalCost: booking.package.totalCost,
+                      sessionCount: booking.package.sessionCount,
+                    }
+                  : undefined,
+                patient: booking.patient
+                  ? {
+                      _id: booking.patient._id,
+                      name: booking.patient.name,
+                      patientId: booking.patient.patientId,
+                    }
+                  : undefined,
+              });
+            } catch (e) {
+              sessionsMatched.push({
+                warning: "Error inside session processing in getAllTherapistsSalarySessionComparison",
+                session: session.sessionId || null,
+                error: true,
+              });
+              continue;
+            }
+          }
+        }
+
+        result.push({
+          therapist: {
+            _id: therapist._id,
+            therapistId: therapist.therapistId,
+            name: therapist.name,
+            userId: therapist.userId,
+            experienceYears: therapist.experienceYears,
+          },
+          earning,
+          sessions: sessionsMatched,
+          sessionDeliveredSumCost: sumOfSessionPrices,
+          earningAmount: earning.amount,
+          difference: earning.amount - sumOfSessionPrices,
+        });
+      }
+    }
+
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({
+      error: "Error building result in getAllTherapistsSalarySessionComparison",
+    });
+  }
+};
+
+/**
+ * Route: GET /api/admin/therapist/salary-session-comparison
+ * Response: [
+ *   {
+ *     therapist: <TherapistProfile>,
+ *     earning: { amount, type, fromDate, toDate, remark, paidOn },
+ *     sessions: [ { date, price, checkInStatus, status, child, therapist } ]
+ *   },
+ *   ...
+ * ]
+ */
+
   
 }
 
