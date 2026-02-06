@@ -123,13 +123,6 @@ therapistAdminRouter.post(
   }
 );
 
-// Route for GET /salary-session-comparison: get all therapists, their earnings, and sessions within each earning window
-therapistAdminRouter.get(
-  "/salary-session-comparison",
-  (req, res) => {
-    therapistAdminController.getAllTherapistsSalarySessionComparison(req, res);
-  }
-);
 
 
 
