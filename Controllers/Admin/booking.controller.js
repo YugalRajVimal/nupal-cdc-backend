@@ -129,6 +129,17 @@ class BookingAdminController {
             },
             { $sort: { _id: 1 } }
           ]);
+          // Sessions scheduled each day (all sessions, group by sessions.date)
+          const scheduledSessions = await Booking.aggregate([
+            { $unwind: "$sessions" },
+            {
+              $group: {
+                _id: "$sessions.date",
+                sessionsScheduled: { $sum: 1 }
+              }
+            },
+            { $sort: { _id: 1 } }
+          ]);
           // Bookings created each day (group by createdAt (date only))
           const bookingsCreated = await Booking.aggregate([
             {
@@ -141,13 +152,28 @@ class BookingAdminController {
             },
             { $sort: { _id: 1 } }
           ]);
-          // Merge both by date for UI reporting 
-          // (if a date is only in one, still report), but keep as two arrays for clarity
+          // Build sessionScheduledPerDay array
+          const sessionScheduledMap = {};
+          scheduledSessions.forEach(ss => {
+            sessionScheduledMap[ss._id] = ss.sessionsScheduled;
+          });
+          // For max date coverage, use union of dates from completedSessions and scheduledSessions
+          const allSessionDatesSet = new Set([
+            ...completedSessions.map(s => s._id),
+            ...scheduledSessions.map(s => s._id),
+          ]);
+          const sessionScheduledPerDay = Array.from(allSessionDatesSet).sort().map(date => ({
+            date,
+            sessionsScheduled: sessionScheduledMap[date] || 0
+          }));
+
+          // Return structure
           return {
             sessionsCompletedPerDay: completedSessions.map(cs => ({
               date: cs._id,
               sessionsCompleted: cs.sessionsCompleted
             })),
+            sessionScheduledPerDay,
             bookingsCreatedPerDay: bookingsCreated.map(bc => ({
               date: bc._id,
               bookingsCreated: bc.bookingsCreated
@@ -272,6 +298,7 @@ class BookingAdminController {
           pendingTherapistManualSignUp: pendingTherapistManualSignUpCount,
           // NEW SECTION for per-day stats
           sessionsCompletedPerDay: perDayStats.sessionsCompletedPerDay,
+          sessionScheduledPerDay: perDayStats.sessionScheduledPerDay,
           bookingsCreatedPerDay: perDayStats.bookingsCreatedPerDay
         }
       });
