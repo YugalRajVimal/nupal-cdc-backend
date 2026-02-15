@@ -15,8 +15,22 @@ const patientAdminController = new PatientAdminController();
 
 patientAdminRouter.post(
   "/",
-jwtAuth,
-  upload.single("otherDocument"),
+  jwtAuth,
+  (req,res,next)=>{
+
+    console.log("FILES:", JSON.stringify(req.files, null, 2));
+
+
+
+
+
+    next();
+  }
+  ,
+  upload.fields([
+    { name: "otherDocument", maxCount: 1 },
+    { name: "profilePhoto", maxCount: 1 }
+  ]),
   (req, res) => patientAdminController.addPatient(req, res)
 );
 

@@ -86,6 +86,7 @@ const PatientProfileSchema = new mongoose.Schema({
   childReference: { type: String, default: "" },
   parentOccupation: { type: String, default: "" },
   remarks: { type: String, default: "" },
+  profilePhoto: { type: mongoose.Schema.Types.Mixed, default: undefined },
   otherDocument: { type: mongoose.Schema.Types.Mixed, default: undefined },
   usedCouponCodes: [{ type: String }],
 });

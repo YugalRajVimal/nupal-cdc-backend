@@ -9,6 +9,11 @@ const leadsAdminController = new LeadsAdminController();
 
 leadsAdminRouter.get("/form-fields", jwtAuth, (req, res) => leadsAdminController.getLeadFormFields(req, res));
 
+leadsAdminRouter.get("/future-followup-leads-count", jwtAuth, (req, res) => 
+  leadsAdminController.getFutureFollowUpLeadsCount(req, res)
+);
+
+
 leadsAdminRouter.post("/",jwtAuth, (req, res) => leadsAdminController.addLead(req, res));
 
 leadsAdminRouter.get("/", (req, res) => leadsAdminController.getAllLeads(req, res));

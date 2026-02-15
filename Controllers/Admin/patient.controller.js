@@ -2,6 +2,7 @@ import { User, PatientProfile } from "../../Schema/user.schema.js";
 import mongoose from "mongoose";
 import Counter from "../../Schema/counter.schema.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+import { deleteUploadedFiles } from "../../middlewares/fileDelete.middleware.js";
 
 
 // Utility: Get next patient sequence for PatientID generation
@@ -22,7 +23,20 @@ const generatePatientId = (seq) => {
 class PatientAdminController {
   // Add new patient (user + patient profile)
   async addPatient(req, res) {
-    // Open a transaction for all database operations
+    // Import unlinkSync and resolve if not already done at the top!
+    // import { unlinkSync } from "fs";
+    // import { resolve } from "path";
+
+    // Log file paths if files were uploaded
+    if (req.files) {
+      if (req.files.otherDocument && req.files.otherDocument[0]?.path) {
+        console.log("Uploaded otherDocument path:", req.files.otherDocument[0].path);
+      }
+      if (req.files.profilePhoto && req.files.profilePhoto[0]?.path) {
+        console.log("Uploaded profilePhoto path:", req.files.profilePhoto[0].path);
+      }
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -48,13 +62,18 @@ class PatientAdminController {
       } = req.body;
 
       let otherDocumentPath = "";
-      if (req.file && req.file.path) {
-        otherDocumentPath = req.file.path;
-      } else if (req.body.otherDocument && typeof req.body.otherDocument === "string") {
-        otherDocumentPath = req.body.otherDocument;
+      let profilePhotoPath = "";
+
+      if (req.files?.otherDocument?.[0]?.path) {
+        otherDocumentPath = req.files.otherDocument[0].path;
       }
 
-      // Required fields array (all except: mobile2, plannedSessionsPerMonth, package, remarks)
+      if (req.files?.profilePhoto?.[0]?.path) {
+        profilePhotoPath = req.files.profilePhoto[0].path;
+      }
+
+      console.log(req.files);
+      // Required fields array (all except: mobile2, plannedSessionsPerMonth, package, remarks, profilePhoto)
       const requiredFields = [
         { key: "email", value: email },
         { key: "childFullName", value: childFullName },
@@ -81,6 +100,8 @@ class PatientAdminController {
         await session.abortTransaction();
         session.endSession();
         console.log("Required fields missing:", missingRequired);
+        // Clean up uploaded files
+        deleteUploadedFiles(req.files);
         return res.status(400).json({
           message: `Missing required fields: ${missingRequired.join(", ")}.`
         });
@@ -162,6 +183,8 @@ class PatientAdminController {
         } catch (logErr) {
           console.error('Failed to write audit log (PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_EMAIL_MOBILE_MISMATCH):', logErr);
         }
+        // Clean up uploaded files
+        deleteUploadedFiles(req.files);
         return res.status(409).json({
           success: false,
           message: `This email is already registered with a different phone number (ending ${(emailAssociatedMobile)}).`,
@@ -203,6 +226,8 @@ class PatientAdminController {
         } catch (logErr) {
           console.error('Failed to write audit log (PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_MOBILE_EMAIL_MISMATCH):', logErr);
         }
+        // Clean up uploaded files
+        deleteUploadedFiles(req.files);
         return res.status(409).json({
           success: false,
           message: `This phone number (${(mobile1Trimmed)}) is already registered with a different email.`,
@@ -249,32 +274,33 @@ class PatientAdminController {
           phoneVerified: false,
           emailVerified: false,
           status: "active",
-          phone: mobile1Trimmed // <--- Save mobile1 to User.phone
+          phone: mobile1Trimmed // Save mobile1 to User.phone
         });
         await user.save({ session });
 
         // Create PatientProfile below using generated patientId
         patientProfile = new PatientProfile({
           userId: user._id,
-          patientId, // <-- Add generated patientId
-          name: childFullName, // <-- Store child's name here
+          patientId,
+          name: childFullName,
           gender,
           childDOB,
           fatherFullName,
-          plannedSessionsPerMonth, // optional
-          package: packageName,    // optional
+          plannedSessionsPerMonth,
+          package: packageName,
           motherFullName,
           parentEmail,
           mobile1: mobile1Trimmed,
-          mobile2,                 // optional
+          mobile2,
           address,
           areaName,
-          pincode: pincodeValue,   // mandatory, set from trimmed input
+          pincode: pincodeValue,
           diagnosisInfo,
           childReference,
           parentOccupation,
-          remarks,                 // optional
+          remarks,
           otherDocument: otherDocumentPath,
+          profilePhoto: profilePhotoPath,
         });
         await patientProfile.save({ session });
 
@@ -322,25 +348,26 @@ class PatientAdminController {
 
       patientProfile = new PatientProfile({
         userId: user._id,
-        patientId, // <-- Add generated patientId
-        name: childFullName, // <-- Store child's name here
+        patientId,
+        name: childFullName,
         gender,
         childDOB,
         fatherFullName,
-        plannedSessionsPerMonth, // optional
-        package: packageName,    // optional
+        plannedSessionsPerMonth,
+        package: packageName,
         motherFullName,
         parentEmail,
         mobile1: mobile1Trimmed,
-        mobile2,                 // optional
+        mobile2,
         address,
         areaName,
-        pincode: pincodeValue,   // mandatory, set from trimmed input
+        pincode: pincodeValue,
         diagnosisInfo,
         childReference,
         parentOccupation,
-        remarks,                 // optional
+        remarks,
         otherDocument: otherDocumentPath,
+        profilePhoto: profilePhotoPath,
       });
       await patientProfile.save({ session });
 
@@ -386,6 +413,8 @@ class PatientAdminController {
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
+      // Clean up uploaded files (if any error occurs)
+      deleteUploadedFiles(req.files);
       // Mandatory logging even in error!
       try {
         await AuditLogService.addLog({

@@ -22,6 +22,9 @@ const LeadSchema = new mongoose.Schema(
     appointmentTime: { type: String, required: false },
     status: { type: String, default: "pending" }, // e.g., "pending", "converted"
     remarks: { type: String, required: false }, // Added remarks field
+    followUpDate: { type: Date, required: false }, // Date when follow-up is scheduled
+    followed: { type: Boolean, default: false },   // Has the follow-up happened?
+    followedOn: { type: Date, required: false },   // Date when follow-up was actually made
   },
   { timestamps: true }
 );

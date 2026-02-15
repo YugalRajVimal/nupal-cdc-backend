@@ -36,6 +36,8 @@ const aavailabilitySlotsAdminController = new AavailabilitySlotsAdminController(
 
 class BookingAdminController {
 
+  
+
   async getOverview(req, res) {
     try {
       // 1. Fetch all required data in parallel

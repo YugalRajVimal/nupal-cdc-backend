@@ -23,6 +23,30 @@ const generateLeadId = (seq) => {
 
 class LeadsAdminController {
 
+  /**
+   * Get count of leads with followUpDate set in the future (and not followed)
+   * Used to show a count of "Follow Up Pending"
+   * Returns: { success: true, count }
+   */
+  async getFutureFollowUpLeadsCount(req, res) {
+    try {
+      // Find leads with a followUpDate in the future and not already followed
+      const now = new Date();
+      const count = await Lead.countDocuments({
+        followUpDate: { $gt: now },
+        followed: { $ne: true }
+      });
+
+      return res.json({ success: true, count });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch follow up leads count.",
+        error: error.message,
+      });
+    }
+  }
+
   // Get dropdown options for the lead form
 async getLeadFormFields(req, res) {
   try {
@@ -81,6 +105,7 @@ async getLeadFormFields(req, res) {
         appointmentTime,
         status,
         remarks,
+        followUpDate, // <--- Added followUpDate
       } = req.body;
 
       // Required validations
@@ -113,6 +138,7 @@ async getLeadFormFields(req, res) {
         appointmentTime,
         remarks,
         status: status || "pending",
+        followUpDate, // <--- Added followUpDate
       });
 
       await lead.save();
@@ -211,6 +237,7 @@ async getLeadFormFields(req, res) {
               appointmentTime,
               status,
               remarks,
+              followUpDate, // <--- Added followUpDate
             }
           },
           ipAddress: req.ip,
@@ -229,6 +256,7 @@ async getLeadFormFields(req, res) {
   }
 
   // Edit/update a lead
+  // Edit/update a lead (now handles followUpDate)
   async editLead(req, res) {
     try {
       const { id } = req.params;
@@ -251,7 +279,7 @@ async getLeadFormFields(req, res) {
         return res.status(404).json({ message: "Lead not found." });
       }
 
-      // Only update allowed fields (match schema)
+      // Only update the allowed fields
       const allowedKeys = [
         "callDate",
         "staff",
@@ -272,13 +300,14 @@ async getLeadFormFields(req, res) {
         "appointmentTime",
         "remarks",
         "status",
+        "followUpDate", // Make sure followUpDate can be updated!
       ];
 
-      // Collect old values for audit (if needed)
+      // Collect previous and new values for auditing
       const prevValues = {};
       const newValues = {};
       for (const key of allowedKeys) {
-        if (update[key] !== undefined) {
+        if (Object.prototype.hasOwnProperty.call(update, key)) {
           prevValues[key] = lead[key];
           lead[key] = update[key];
           newValues[key] = update[key];
@@ -287,7 +316,7 @@ async getLeadFormFields(req, res) {
 
       await lead.save();
 
-      // Log all fields relevant to the update for debugging purposes
+      // Console log for debugging updates (including followUpDate now)
       console.log("UPDATE_LEAD: AuditLog payload:");
       console.log({
         action: "UPDATE_LEAD",
@@ -304,7 +333,8 @@ async getLeadFormFields(req, res) {
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"]
       });
-      // --- Audit log ---
+
+      // Audit log
       try {
         await AuditLogService.addLog({
           action: "UPDATE_LEAD",
