@@ -42,7 +42,8 @@ class BookingAdminController {
     try {
       // 1. Fetch all required data in parallel
       const [
-        activePatients,
+        activeChildrens,
+        activeParents, // NEW: will be filled below
         activeTherapists,
         allBookings,
         todayBookings,
@@ -59,6 +60,11 @@ class BookingAdminController {
           const activePatientUsers = await User.find({ role: "patient", status: "active" }, { _id: 1 });
           const activePatientUserIds = activePatientUsers.map(u => u._id);
           return PatientProfile.countDocuments({ userId: { $in: activePatientUserIds } });
+        })(),
+        // Active Parents (NEW)
+        (async () => {
+          // Find active parents by role in User collection
+          return User.countDocuments({ role: "patient", status: "active" });
         })(),
         // Active Therapists
         User.countDocuments({ role: "therapist", status: "active", isDisabled: { $ne: true } }),
@@ -286,7 +292,8 @@ class BookingAdminController {
       res.json({
         success: true,
         data: {
-          activeChildren: activePatients,
+          activeChildren: activeChildrens,
+          activeParents: activeParents, // NEW FIELD ADDED
           activeTherapists: activeTherapists,
           totalSessions: totalBookedAppointments,
           todaysTotalSessions: todaysTotalAppointments,
