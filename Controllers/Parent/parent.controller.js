@@ -1,10 +1,12 @@
 import BookingRequests from '../../Schema/booking-request.schema.js';
 import Booking from '../../Schema/booking.schema.js';
+import ConsultationBooking from '../../Schema/consultation-booking.schema.js';
 import counterSchema from '../../Schema/counter.schema.js';
 import DiscountModel from '../../Schema/discount.schema.js';
 import Package from '../../Schema/packages.schema.js';
 import SessionEditRequest from '../../Schema/session-edit-request.schema.js';
 import { TherapyType } from '../../Schema/therapy-type.schema.js';
+import TicketModel from '../../Schema/ticket.schema.js';
 import { PatientProfile, TherapistProfile, User } from '../../Schema/user.schema.js';
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 
@@ -385,7 +387,7 @@ class ParentController {
       const children = await PatientProfile.find({ userId: user._id }).lean();
       const childIds = children.map(child => child._id);
 
-      // 4. Find all bookings where patient is one of these children
+      // 4. Find all Therapy Bookings (Booking collection, i.e. therapy appointments)
       const appointments = await Booking.find({ patient: { $in: childIds } })
         .populate({
           path: "patient",
@@ -409,19 +411,40 @@ class ParentController {
         })
         .lean();
 
-      // 5. Count total appointments
+      // 5. Find all Consultation Bookings (consultation-booking collection, i.e. nupal-cdc-software-backend/Schema/consultation-booking.schema.js)
+      // Consultations are stored by "client" field which refers to PatientProfile
+      // (consultation-booking.schema.js: client: { type: ObjectId, ref: 'PatientProfile', required: true })
+
+      const consultationBookings = await ConsultationBooking.find({ client: { $in: childIds } })
+        .populate({
+          path: "client",
+          model: "PatientProfile",
+          select: "patientId name",
+          populate: {
+            path: "userId",
+            model: "User",
+            select: "name",
+          }
+        })
+        .populate({
+          path: "therapy",
+          model: "TherapyType",
+          select: "name"
+        })
+        .lean();
+
+      // 6. Count total appointments
       const totalAppointments = appointments.length;
 
-      // 6. Count all sessions which are not checked-in and store details
+      // 7. Build unchecked sessions (from therapy appointments)
       const uncheckedSessions = [];
       appointments.forEach(booking => {
         if (Array.isArray(booking.sessions)) {
           for (const session of booking.sessions) {
-            // A session is "not checked in" if session.checkedIn is falsy (undefined, null, false)
             if (!session.isCheckedIn) {
               uncheckedSessions.push({
                 patientId: booking.patient.patientId,
-                name: booking.patient.name, // adjust based on actual patient name field
+                name: booking.patient.name,
                 notCheckedInSession: session
               });
             }
@@ -429,10 +452,7 @@ class ParentController {
         }
       });
 
-      // Now the uncheckedSessions array holds objects: { patientId, name, notCheckedInSession }
-
-      // 7. Fetch payments for these bookings (populate payment field)
-      // Use lean(false) so that payment is populated as Mongoose docs
+      // 8. Fetch payments for therapy bookings (populate payment field)
       const populatedBookings = await Booking.find({ patient: { $in: childIds } })
         .populate({
           path: "patient",
@@ -448,9 +468,8 @@ class ParentController {
         })
         .lean({ virtuals: true });
 
-      // 8. Process and collect pending payment details
+      // 9. Process and collect pending payment details
       const pendingPayments = [];
-      // Each booking may have .payment as a single object or array (support both)
       for (const booking of populatedBookings) {
         let payments = [];
         if (Array.isArray(booking.payment)) {
@@ -462,7 +481,6 @@ class ParentController {
           if (!pay) continue;
           const status = pay.status || "Unknown";
           if (status.toLowerCase() === "pending") {
-            // Fetch patientName and patientId as in getInvoiceAndPayment
             let patientName = "";
             if (
               booking.patient &&
@@ -487,14 +505,13 @@ class ParentController {
         }
       }
 
-      
-
-      // 9. Compose dashboard data (add pendingPayments as requested)
+      // 10. Compose dashboard data (now including consultationBookings)
       const dashboardData = {
         childrenCount: children.length,
         totalAppointments,
-        pendingPayments, // <-- list of pending payments
-        uncheckedSessions
+        pendingPayments,
+        uncheckedSessions,
+        consultationBookings // <-- all their children's consultation bookings
       };
 
       res.json({ success: true, data: dashboardData });
@@ -2237,6 +2254,394 @@ class ParentController {
       });
     }
   }
+  
+
+  /**
+   * POST /parent/tickets/raise
+   * Allows a parent to raise a support ticket
+   * Body: { subject, description, priority, tags }
+   * Raises a ticket as the logged-in parent user.
+   */
+  /**
+   * POST /parent/tickets/raise
+   * Allows a parent to raise a support ticket
+   * Body: { subject, description, priority, tags }
+   * Raises a ticket as the logged-in parent user.
+   */
+  async raiseTicket(req, res) {
+    try {
+      // Ensure the user is authenticated and has the correct role
+      const id = req.user.id;
+
+      // INSERT_YOUR_CODE
+      // Fetch the parent (patient) user from DB to ensure it's up-to-date
+      const user = await User.findById(id);
+
+      // Accept both 'patient' and 'parent', since frontend refers as parent, backend as patient
+      if (!user || user.role !== "patient") {
+        return res.status(401).json({
+          success: false,
+          message: "Unauthorized. Only parents can raise tickets.",
+        });
+      }
+
+      const { subject, description, priority, tags } = req.body;
+
+      // Validate required fields
+      if (!subject || typeof subject !== "string" || subject.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Subject is required.",
+        });
+      }
+      if (!description || typeof description !== "string" || description.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Description is required.",
+        });
+      }
+
+      // Attempt to use both _id (default for Mongo) and patientId (if available from JWT)
+      // Use _id always, but fallback/alias if needed
+      const raisedById = user._id || user.patientId;
+      if (!raisedById) {
+        // This can happen if JWT is misconfigured for parent objects
+        return res.status(400).json({
+          success: false,
+          message: "Parent user ID not found in authentication. Please log in again.",
+        });
+      }
+
+      // Build ticket data to match ticket.schema.js: raisedByRole: "parent", raisedById
+      const ticketData = {
+        raisedByRole: "parent",
+        raisedById,
+        subject: subject.trim(),
+        description: description.trim(),
+        priority: ["low", "medium", "high"].includes(priority) ? priority : "medium",
+        tags: Array.isArray(tags)
+          ? tags.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean)
+          : [],
+      };
+
+      // Status and other default fields (like createdAt) handled by schema
+
+      const ticket = new TicketModel(ticketData);
+      await ticket.save();
+
+      res.json({
+        success: true,
+        ticket,
+        message: "Ticket raised successfully.",
+      });
+    } catch (error) {
+      // Mongoose validation errors reported nicely
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed when creating ticket.",
+          error: error.message,
+        });
+      }
+      console.error("[RAISE TICKET]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to raise ticket.",
+        error: error.message,
+      });
+    }
+  }
+
+// INSERT_YOUR_CODE
+  /**
+   * GET /parent/tickets
+   * Retrieves all tickets raised by the authenticated parent.
+   * Can support pagination with query params ?page=1&limit=20
+   */
+  async getAllPatientTickets(req, res) {
+    try {
+      const id = req.user.id;
+
+      // INSERT_YOUR_CODE
+      // Fetch the user (parent) from the database to ensure user exists and get full doc
+      const user = await User.findById(id);
+
+      if (!user || user.role !== "patient") {
+        return res.status(401).json({
+          success: false,
+          message: "Unauthorized. Parent authentication required.",
+        });
+      }
+
+      const page = parseInt(req.query.page) > 0 ? parseInt(req.query.page) : 1;
+      const limit = parseInt(req.query.limit) > 0 ? parseInt(req.query.limit) : 20;
+      const skip = (page - 1) * limit;
+
+      const query = {
+        raisedByRole: "parent",
+        raisedById: user._id,
+      };
+
+      const [tickets, total] = await Promise.all([
+        TicketModel.find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        TicketModel.countDocuments(query),
+      ]);
+
+      res.json({
+        success: true,
+        tickets,
+        page,
+        limit,
+        total,
+      });
+
+    } catch (error) {
+      console.error("[GET ALL PARENT TICKETS]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch parent tickets.",
+        error: error.message,
+      });
+    }
+  }
+// INSERT_YOUR_CODE
+
+  /**
+   * POST /parent/consultation-booking
+   * Allows a parent to create a new consultation booking (the authenticated parent is the client).
+   * Required body: {
+   *   consultant: ObjectId (therapist id),
+   *   therapy: ObjectId (therapyType id),
+   *   scheduledAt: Date,
+   *   durationMinutes: Number (optional, defaults to 60),
+   *   sessionType: 'online'|'in-person',
+   *   remark: String (optional)
+   * }
+   * Protected: requires authentication (parent)
+   */
+  async createConsultationBooking(req, res) {
+    try {
+      const clientId = req.user.id;
+      const {
+        patient,
+        therapyType,
+        scheduledAt,
+        time, // extract time as part of booking
+        sessionType,
+        reason
+      } = req.body;
+
+      console.log(req.body)
+
+      const durationMinutes = 15;
+
+      // Validate required fields
+      if (!therapyType || !scheduledAt || !sessionType) {
+        return res.status(400).json({
+          success: false,
+          message: "therapyType, scheduledAt, and sessionType are required."
+        });
+      }
+
+      // Use Counter model to generate a unique consultationAppointmentId
+      // Import Counter at the top if not already: import Counter from '../../Schema/counter.schema.js';
+      let seqDoc = await counterSchema.findOneAndUpdate(
+        { name: "consultationAppointmentId" },
+        { $inc: { seq: 1 } },
+        { new: true, upsert: true }
+      );
+      // Format: CONSULT-yyyy-00001
+      const year = new Date().getFullYear();
+      const seqStr = String(seqDoc.seq).padStart(5, '0');
+      const consultationAppointmentId = `C-${year}-${seqStr}`;
+
+      const booking = await ConsultationBooking.create({
+        consultationAppointmentId,
+        client: patient,
+        therapy:therapyType,
+        scheduledAt,
+        time: time || undefined, // set if present; could validate "HH:mm"
+        durationMinutes: durationMinutes ? +durationMinutes : 15, // default to 15 minutes
+        sessionType,
+        status: "pending",
+        remark:reason
+      });
+
+      return res.status(201).json({
+        success: true,
+        booking
+      });
+    } catch (error) {
+      console.error("[CREATE CONSULTATION BOOKING]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to create consultation booking.",
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * GET /parent/consultation-bookings
+   * Fetch consultation bookings for the authenticated parent (optionally by client, but here client is always the authenticated parent).
+   * Query params: ?page=<number>&limit=<number>
+   * Protected: requires authentication (parent)
+   */
+  async getConsultationBookings(req, res) {
+    try {
+      // Fetch the authenticated parent's children (PatientProfiles)
+      const parentId = req.user.id;
+      if (!parentId) {
+        return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
+      }
+
+      // Find children profiles for this parent
+      const children = await PatientProfile.find({ userId: parentId }).lean();
+      const childIds = children.map(child => child._id);
+
+      // Pagination
+      const page = parseInt(req.query.page) > 0 ? parseInt(req.query.page) : 1;
+      const limit = parseInt(req.query.limit) > 0 ? parseInt(req.query.limit) : 20;
+      const skip = (page - 1) * limit;
+
+      // Query for consultation bookings where "client" is any of the parent's children
+      const query = { client: { $in: childIds } };
+
+      // Populate: 
+      // - client: (PatientProfile) patientId, name, AND their 'userId' (User) name
+      // - consultant: (TherapistProfile) therapistId, AND their 'userId' (User) name
+      // - therapy: (TherapyType) name
+      const [bookings, total] = await Promise.all([
+        ConsultationBooking.find(query)
+          .sort({ scheduledAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .populate({
+            path: "client",
+            model: "PatientProfile",
+            select: "patientId name",
+            populate: {
+              path: "userId",
+              model: "User",
+              select: "name"
+            }
+          })
+          .populate({
+            path: "consultant",
+            model: "TherapistProfile",
+            select: "therapistId",
+            populate: {
+              path: "userId",
+              model: "User",
+              select: "name"
+            }
+          })
+          .populate({
+            path: "therapy",
+            model: "TherapyType",
+            select: "name"
+          })
+          .lean(),
+        ConsultationBooking.countDocuments(query)
+      ]);
+
+      res.json({
+        success: true,
+        bookings,
+        total,
+        page,
+        limit
+      });
+    } catch (error) {
+      console.error("[GET CONSULTATION BOOKINGS]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to retrieve consultation bookings.",
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * PUT /parent/consultation-bookings/:id
+   * Allows parent to update a consultation booking (cancel or reschedule).
+   * Body: { status: 'cancelled' | ..., scheduledAt?: Date, time?: string, remark?: string }
+   * Protected: requires authentication (parent)
+   */
+  async updateConsultationBooking(req, res) {
+    try {
+      const parentId = req.user.id; // Use parentId to match terminology and usage in rest of controller
+      const bookingId = req.params.id;
+      const { status, scheduledAt, time, reason, therapyType, sessionType } = req.body;
+
+      // Validate bookingId
+      if (!bookingId) {
+        return res.status(400).json({ success: false, message: "Booking ID is required." });
+      }
+
+      // Ensure only allowed status values can be set
+      if (status && !['pending', 'confirmed', 'completed', 'cancelled'].includes(status)) {
+        return res.status(400).json({ success: false, message: "Invalid status value." });
+      }
+
+      // Find the parent's patients
+      const parentUser = await User.findById(parentId).lean();
+      if (!parentUser) {
+        return res.status(401).json({ success: false, message: "Unauthorized: parent not found." });
+      }
+      const children = await PatientProfile.find({ userId: parentUser._id }).lean();
+      const childIds = children.map(child => child._id);
+
+      // Find consultation booking ONLY if it is for parent's child
+      const booking = await ConsultationBooking.findOne({ _id: bookingId, client: { $in: childIds } });
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          message: "Consultation booking not found or access denied."
+        });
+      }
+
+      // Patch only allowed fields
+      if (typeof status !== "undefined") {
+        booking.status = status;
+      }
+      if (typeof scheduledAt !== "undefined" && scheduledAt) {
+        booking.scheduledAt = scheduledAt;
+      }
+      if (typeof time !== "undefined") {
+        booking.time = time;
+      }
+      if (typeof reason !== "undefined") {
+        booking.remark = reason;
+      }
+      if (typeof therapyType !== "undefined" && therapyType) {
+        booking.therapy = therapyType;
+      }
+      if (typeof sessionType !== "undefined" && sessionType) {
+        booking.sessionType = sessionType;
+      }
+
+      await booking.save();
+
+      res.json({
+        success: true,
+        booking
+      });
+    } catch (error) {
+      console.error("[UPDATE CONSULTATION BOOKING]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to update consultation booking.",
+        error: error?.message || error
+      });
+    }
+  }
+
+
   
 
 

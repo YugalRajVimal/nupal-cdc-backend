@@ -11,6 +11,8 @@ import availabilitySlotsRouter from "./Admin/availability-slots.routes.js";
 import discountCouponRouter from "./SuperAdmin/discount-coupons.super-admin.routes.js";
 import financeAdminRouter from "./Admin/finance.routes.js";
 import { User } from "../Schema/user.schema.js";
+import ticketsRouter from "./Admin/tickets.routes.js";
+import ConsultationBookingRouter from "./Admin/consultation-booking.routes.js";
 
 const adminRouter = express.Router();
 
@@ -54,6 +56,21 @@ adminRouter.use("/discount-coupons", discountCouponRouter);
 
 
 adminRouter.use("/finance", financeAdminRouter);
+
+
+// INSERT_YOUR_CODE
+
+
+
+adminRouter.use("/tickets", ticketsRouter);
+
+adminRouter.use(
+  "/consultation-bookings",
+  ConsultationBookingRouter
+);
+
+
+
 
 adminRouter.get("/profile", async (req, res) => {
   try {

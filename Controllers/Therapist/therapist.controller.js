@@ -1,6 +1,7 @@
 import { deleteUploadedFiles } from '../../middlewares/fileDelete.middleware.js';
 import Booking from '../../Schema/booking.schema.js';
 import counterSchema from '../../Schema/counter.schema.js';
+import TicketModel from '../../Schema/ticket.schema.js';
 import { TherapistProfile, User } from '../../Schema/user.schema.js';
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 
@@ -1207,6 +1208,146 @@ class TherapistController {
   //     res.status(500).json({ success: false, error: err.message || String(err) });
   //   }
   // }
+
+  /**
+   * POST /therapist/tickets/raise
+   * Allows a therapist to raise a support ticket
+   * Body: { subject, description, priority, tags }
+   * Raises a ticket as the logged-in therapist user.
+   */
+  async raiseTicket(req, res) {
+    try {
+      // Ensure the user is authenticated and is a therapist
+      const id = req.user.id;
+
+      // Fetch the therapist user from DB to ensure it's up-to-date
+      const user = await User.findById(id);
+
+      if (!user || user.role !== "therapist") {
+        return res.status(401).json({
+          success: false,
+          message: "Unauthorized. Only therapists can raise tickets.",
+        });
+      }
+
+      const { subject, description, priority, tags } = req.body;
+
+      // Validate required fields
+      if (!subject || typeof subject !== "string" || subject.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Subject is required.",
+        });
+      }
+      if (!description || typeof description !== "string" || description.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Description is required.",
+        });
+      }
+
+      // Use _id always, with fallback to therapistId if necessary
+      const raisedById = user._id || user.therapistId;
+      if (!raisedById) {
+        return res.status(400).json({
+          success: false,
+          message: "Therapist user ID not found in authentication. Please log in again.",
+        });
+      }
+
+      // Build ticket data to match ticket.schema.js: raisedByRole: "therapist", raisedById
+      const ticketData = {
+        raisedByRole: "therapist",
+        raisedById,
+        subject: subject.trim(),
+        description: description.trim(),
+        priority: ["low", "medium", "high"].includes(priority) ? priority : "medium",
+        tags: Array.isArray(tags)
+          ? tags.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean)
+          : [],
+      };
+
+      // Status and other default fields (like createdAt) handled by schema
+
+      const ticket = new TicketModel(ticketData);
+      await ticket.save();
+
+      res.json({
+        success: true,
+        ticket,
+        message: "Ticket raised successfully.",
+      });
+    } catch (error) {
+      if (error.name === "ValidationError") {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed when creating ticket.",
+          error: error.message,
+        });
+      }
+      console.error("[RAISE TICKET]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to raise ticket.",
+        error: error.message,
+      });
+    }
+  }
+
+  /**
+   * GET /therapist/tickets
+   * Retrieves all tickets raised by the authenticated therapist.
+   * Can support pagination with query params ?page=1&limit=20
+   */
+  async getAllTherapistTickets(req, res) {
+    try {
+      const id = req.user.id;
+
+      // Fetch the user (therapist) from the database to ensure user exists and get full doc
+      const user = await User.findById(id);
+
+      if (!user || user.role !== "therapist") {
+        return res.status(401).json({
+          success: false,
+          message: "Unauthorized. Therapist authentication required.",
+        });
+      }
+
+      const page = parseInt(req.query.page) > 0 ? parseInt(req.query.page) : 1;
+      const limit = parseInt(req.query.limit) > 0 ? parseInt(req.query.limit) : 20;
+      const skip = (page - 1) * limit;
+
+      const query = {
+        raisedByRole: "therapist",
+        raisedById: user._id,
+      };
+
+      const [tickets, total] = await Promise.all([
+        TicketModel.find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        TicketModel.countDocuments(query),
+      ]);
+
+      res.json({
+        success: true,
+        tickets,
+        page,
+        limit,
+        total,
+      });
+
+    } catch (error) {
+      console.error("[GET ALL THERAPIST TICKETS]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch therapist tickets.",
+        error: error.message,
+      });
+    }
+  }
 }
 
 export default TherapistController;

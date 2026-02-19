@@ -66,6 +66,46 @@ parentRouter.get('/invoice-and-payment',jwtAuth, (req, res) => parentController.
 
 
 
+// INSERT_YOUR_CODE
+
+/**
+ * Route to allow parents to raise a support ticket.
+ * POST /parent/tickets/raise
+ * Body: { subject, description, priority, tags }
+ * Protected: requires authentication as a parent
+ */
+parentRouter.post('/tickets/raise', jwtAuth, (req, res) => parentController.raiseTicket(req, res));
+
+
+// INSERT_YOUR_CODE
+
+/**
+ * Route to allow parents to view all tickets they have raised.
+ * GET /parent/tickets
+ * Query params: ?page=<number>&limit=<number>
+ * Protected: requires authentication as a parent
+ */
+parentRouter.get('/tickets', jwtAuth, (req, res) => parentController.getAllPatientTickets(req, res));
+
+
+
+// INSERT_YOUR_CODE
+
+/**
+ * ConsultationBooking endpoints for parents
+ */
+
+// Create a consultation booking request
+parentRouter.post('/consultation-booking', jwtAuth, (req, res) => parentController.createConsultationBooking(req, res));
+
+// Get all consultation bookings for the authenticated parent (with pagination/filter support)
+parentRouter.get('/consultation-bookings', jwtAuth, (req, res) => parentController.getConsultationBookings(req, res));
+
+// Update a consultation booking (e.g. cancel or reschedule, according to implementation)
+parentRouter.put('/consultation-bookings/:id', jwtAuth, (req, res) => parentController.updateConsultationBooking(req, res));
+
+
+
 
 
 

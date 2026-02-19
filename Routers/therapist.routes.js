@@ -75,5 +75,24 @@ therapistRouter.get('/earnings', jwtAuth, (req, res) => therapistController.getE
   : res.status(501).json({ success: false, message: "Not implemented" })
 );
 
+// INSERT_YOUR_CODE
+
+/**
+ * Route to allow therapists to raise a support ticket.
+ * POST /therapist/ticket/raise
+ * Body: { subject, description, priority, tags }
+ * Protected: requires authentication as a therapist
+ */
+therapistRouter.post('/ticket/raise', jwtAuth, (req, res) => therapistController.raiseTicket(req, res));
+
+/**
+ * Route to get all tickets raised by the authenticated therapist (with pagination).
+ * GET /therapist/tickets?page=1&limit=20
+ * Protected: requires authentication as a therapist
+ */
+therapistRouter.get('/tickets', jwtAuth, (req, res) => therapistController.getAllTherapistTickets(req, res));
+
+
+
 
 export default therapistRouter;
