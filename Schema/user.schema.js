@@ -168,7 +168,6 @@ const TherapistProfileSchema = new mongoose.Schema({
 const AdminProfileSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   phoneNo: { type: String, default: "" },
-
   department: String,
 });
 

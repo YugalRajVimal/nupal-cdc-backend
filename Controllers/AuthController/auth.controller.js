@@ -5,6 +5,7 @@ import {
 } from "../../Schema/user.schema.js";
 import ExpiredTokenModel from "../../Schema/expired-token.schema.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+import sendMail from "../../config/nodeMailer.config.js";
 
 // Allowed roles from user.schema.js (see enum in file_context_2 line 8)
 const ALLOWED_ROLES = ["patient", "therapist", "admin"];
@@ -224,15 +225,17 @@ class AuthController {
       }
 
       // Generate 6-digit OTP (here, hardcoded for demo; use random in production)
-      // const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
       // Save OTP with expiry (10 min)
-      user.otp = "000000";
+      // user.otp = "000000";
+      user.otp=otp;
       user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min expiry
       await user.save({ session });
 
       // Send OTP via mail
-      // sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
+
+      sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
 
       // === Mandatory Audit Log (must succeed for transaction) ===
       try {
@@ -245,7 +248,7 @@ class AuthController {
             resourceId: user._id,
             details: {
               changedFields: {
-                otp: { from: null, to: "000000" },
+                otp,
                 otpExpiresAt: { from: null, to: (user.otpExpiresAt).toISOString() }
               },
               message: `Signin OTP sent to userId=${user._id} (${user.email})`

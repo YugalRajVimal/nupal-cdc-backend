@@ -12,6 +12,7 @@ import appointmentSuperAdminRouter from "./SuperAdmin/appointments-super-admin.r
 import financeSuperAdminRouter from "./SuperAdmin/finance.routes.js";
 import { User } from "../Schema/user.schema.js";
 import logsSuperAdminRouter from "./SuperAdmin/logs.routes.js";
+import jwtAuth from "../middlewares/Auth/auth.middleware.js";
 
 
 
@@ -28,15 +29,21 @@ superAdminRouter.get("/", (req, res) => {
   res.send("Welcome to Nupal CDC Super Admin APIs");
 });
 
-superAdminRouter.get("/profile", async (req, res) => {
+
+
+superAdminRouter.get("/profile", jwtAuth, async (req, res) => {
   try {
-    // Assume you have a super admin model
-    // You might want to use the authenticated super-admin's ID in a real setup
-    // Here we'll fetch the "main" admin, assuming singleton
-    // Find from User model by role 'superadmin'
+    // req.user should be set by jwtAuth middleware
+    if (!req.user || !req.user.id || req.user.role !== "superadmin") {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or missing super admin token.",
+      });
+    }
+
     const admin = await User.findOne(
-      { role: "superadmin" },
-      "-password" // Exclude the password field
+      { _id: req.user.id, role: "superadmin" },
+      "-password"
     );
 
     if (!admin) {

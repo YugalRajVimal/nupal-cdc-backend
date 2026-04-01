@@ -156,16 +156,20 @@ class SuperAdminAuthController {
         return res.status(404).json({ message: "Superadmin not found" });
       }
 
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      
+
       // Save OTP ("000000") and expiry (optionally 10min)
       await User.findByIdAndUpdate(
         user._id,
         {
-          otp: "000000",
+          otp: otp,
           otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
         },
         { session }
       );
 
+      sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
       // === Mandatory Audit Log (must succeed for transaction) ===
       try {
         await AuditLogService.addLog(

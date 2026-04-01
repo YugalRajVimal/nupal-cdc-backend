@@ -72,14 +72,14 @@ adminRouter.use(
 
 
 
-adminRouter.get("/profile", async (req, res) => {
+adminRouter.get("/profile", jwtAuth, async (req, res) => {
   try {
-    // Option 1: If only one admin in DB
-    const adminData = await User.findOne({ role: "admin" }).select("-password");
+    // Use the id and role from the authenticated token (placed into req.user by jwtAuth middleware)
+    if (!req.user || !req.user.id || req.user.role !== "admin") {
+      return res.status(401).json({ success: false, message: "Invalid or missing admin token." });
+    }
 
-    // Option 2: If using JWT and admin id is in req.user
-    // const adminData = await Admin.findById(req.user.id).select("-password");
-
+    const adminData = await User.findOne({ _id: req.user.id, role: "admin" }).select("-password");
     if (!adminData) {
       return res.status(404).json({ success: false, message: "Admin not found." });
     }
@@ -89,7 +89,6 @@ adminRouter.get("/profile", async (req, res) => {
     res.status(500).json({ success: false, message: "Error fetching admin profile", error: error.message });
   }
 });
-
 
 
 

@@ -219,6 +219,180 @@ async loginAsUser(req, res) {
         return res.status(500).json({ error: "Internal server error", details: error.message });
     }
 }
+
+
+// Get superadmin profile (singleton)
+async getSuperAdminProfile(req, res) {
+    try {
+        // Find the main superadmin from User schema by role
+        const admin = await User.findOne(
+            { role: "superadmin" },
+            "-password" // Exclude the password field
+        );
+
+        if (!admin) {
+            return res.status(404).json({
+                success: false,
+                message: "Superadmin profile not found",
+            });
+        }
+
+        return res.json({
+            success: true,
+            data: admin,
+        });
+    } catch (error) {
+        console.error("Error fetching superadmin profile:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Error fetching superadmin profile",
+            error: error.message,
+        });
+    }
+}
+
+
+// =====================
+// ADMIN MANAGEMENT APIS
+// =====================
+// Create new admin
+// Create new admin (User schema only)
+async createAdmin(req, res) {
+    try {
+        const { name, email, phone, status = "active", isDisabled = false } = req.body;
+        if (!name || !email) {
+            return res.status(400).json({ message: "Name and email are required." });
+        }
+
+        // Check for existing user with same email
+        let existing = await User.findOne({ email: email.toLowerCase(), role: "admin" });
+        if (existing) {
+            return res.status(409).json({ message: "Admin with this email already exists." });
+        }
+
+        // Create User (User schema only)
+        const adminUser = await User.create({
+            role: "admin",
+            name,
+            phone,
+            email: email.toLowerCase(),
+            authProvider: "password",
+            status,
+            isDisabled
+        });
+
+        return res.status(201).json({ message: "Admin created.", user: adminUser });
+    } catch (err) {
+        console.error("Error creating admin:", err);
+        return res.status(500).json({ message: "Failed to create admin.", error: err.message });
+    }
+}
+
+// Get all admins (User schema only)
+async fetchAllAdmins(req, res) {
+    try {
+        // Support pagination & search (optional)
+        const { search = "", page = 1, limit = 50 } = req.query;
+        const query = { role: "admin" };
+        if (search.trim()) {
+            query.$or = [
+                { name: { $regex: search, $options: "i" } },
+                { email: { $regex: search, $options: "i" } }
+            ];
+        }
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const users = await User.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+        return res.json(users);
+    } catch (err) {
+        console.error("Error fetching admins:", err);
+        return res.status(500).json({ message: "Failed to fetch admins.", error: err.message });
+    }
+}
+
+// Edit admin (by id, User schema only)
+async editAdmin(req, res) {
+    try {
+        const { id } = req.params;
+        const { name, email, phone, status, isDisabled } = req.body;
+        const user = await User.findOne({ _id: id, role: "admin" });
+        if (!user) return res.status(404).json({ message: "Admin not found." });
+
+        if (typeof name === "string") user.name = name;
+        if (typeof email === "string") user.email = email.toLowerCase();
+        if (typeof phone === "string") user.phone = phone;
+        if (typeof status !== "undefined") user.status = status;
+        if (typeof isDisabled !== "undefined") user.isDisabled = isDisabled;
+
+        await user.save();
+
+        return res.json({ message: "Admin updated.", user });
+    } catch (err) {
+        console.error("Error updating admin:", err);
+        return res.status(500).json({ message: "Update failed", error: err.message });
+    }
+}
+
+// Change admin status (active/suspended/deleted) by id (User schema only)
+async editAdminStatus(req, res) {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+        if (!["active", "suspended", "deleted"].includes(status)) {
+            return res.status(400).json({ message: "Invalid status." });
+        }
+        const user = await User.findOneAndUpdate(
+            { _id: id, role: "admin" },
+            { $set: { status } },
+            { new: true }
+        );
+        if (!user) return res.status(404).json({ message: "Admin not found." });
+        return res.json({ message: "Status updated.", user });
+    } catch (err) {
+        console.error("Error updating admin status:", err);
+        return res.status(500).json({ message: "Failed to update status", error: err.message });
+    }
+}
+
+// Edit admin disabled (isDisabled) flag (User schema only)
+async editAdminDisabled(req, res) {
+    try {
+        const { id } = req.params;
+        const { isDisabled } = req.body;
+        if (typeof isDisabled !== "boolean") {
+            return res.status(400).json({ message: "isDisabled must be a boolean." });
+        }
+        const user = await User.findOneAndUpdate(
+            { _id: id, role: "admin" },
+            { $set: { isDisabled } },
+            { new: true }
+        );
+        if (!user) return res.status(404).json({ message: "Admin not found." });
+        return res.json({ message: "Disabled flag updated.", user });
+    } catch (err) {
+        console.error("Error updating admin disabled:", err);
+        return res.status(500).json({ message: "Failed to update disabled status", error: err.message });
+    }
+}
+
+// Delete admin (by id, User schema only)
+async deleteAdmin(req, res) {
+    try {
+        const { id } = req.params;
+        const user = await User.findOneAndDelete({ _id: id, role: "admin" });
+        if (!user) return res.status(404).json({ message: "Admin not found." });
+
+        return res.json({ message: "Admin deleted." });
+    } catch (err) {
+        console.error("Error deleting admin:", err);
+        return res.status(500).json({ message: "Failed to delete admin.", error: err.message });
+    }
+}
+
+
     
 }
 
