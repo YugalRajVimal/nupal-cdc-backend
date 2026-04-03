@@ -19784,3 +19784,1279 @@
       "__v": 0
     }
   ]
+
+
+
+  [
+    {
+      "_id": {
+        "$oid": "289ad5feacc4d65392fa3683"
+      },
+      "role": "therapist",
+      "name": "Aabha Pradhan",
+      "email": "aabha026@gmail.com",
+      "phone": "9555497935",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "e435bb242f12aa0eb5529e88"
+      },
+      "role": "therapist",
+      "name": "SHAIZI KHAN",
+      "email": "shaizikhan338@gmail.com",
+      "phone": "8010425687",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "5d441bf7c2f941c8435e8290"
+      },
+      "role": "therapist",
+      "name": "Karan pal",
+      "email": "karankaran4800@gmail.com",
+      "phone": "9761154201",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "7754605151f12cf910f7cd8a"
+      },
+      "role": "therapist",
+      "name": "Abhishek  Kumar",
+      "email": "rahul8285132597@gmail.com",
+      "phone": "8285132597",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "0a401a721b7289bd297f9f7e"
+      },
+      "role": "therapist",
+      "name": "Pahul Singh",
+      "email": "pahulsingh6@gmail.com",
+      "phone": "9958531855",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "7f7e84083f65f9d70ac3377d"
+      },
+      "role": "therapist",
+      "name": "Latasha",
+      "email": "kaimlatasha@gmail.com",
+      "phone": "8178293685",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "d2653a8c1634343270f8b8e9"
+      },
+      "role": "therapist",
+      "name": "Sumit Dabas",
+      "email": "sumitdabas44@gmail.com",
+      "phone": "8860546303",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "6048606484c88be2e7833915"
+      },
+      "role": "therapist",
+      "name": "Ritu",
+      "email": "ritukundudelhi@gmail.com",
+      "phone": "7982200478",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "18826fa4ec1072c6fc4ec665"
+      },
+      "role": "therapist",
+      "name": "Vikrant Kushwaha",
+      "email": "vkspl1989@gmail.com",
+      "phone": "9911524215",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "a61d9ffb29b02c1913905dcd"
+      },
+      "role": "therapist",
+      "name": "Nilesh Panwar",
+      "email": "nilunilesh001@gmail.com",
+      "phone": "7678614575",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "e791acdfd73afdc498041f78"
+      },
+      "role": "therapist",
+      "name": "Rahul Bhardwaj",
+      "email": "bhardwajr456@gmail.com",
+      "phone": "7838472196",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "193e49122d007bca06306558"
+      },
+      "role": "therapist",
+      "name": "Gitanjali bhatnagar",
+      "email": "gitanjalibhatnagar3@gmail.com",
+      "phone": "7011091809",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "f52cb3d2b94039ea56a51007"
+      },
+      "role": "therapist",
+      "name": "Manisha",
+      "email": "manshinirwan4@gmail.com",
+      "phone": "9821120607",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "7056d42f925f1fb47c451e29"
+      },
+      "role": "therapist",
+      "name": "Faheem Siddiqui",
+      "email": "faheemshami77@icloud.com",
+      "phone": "9305371958",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "678e150e49b9647f743c35d7"
+      },
+      "role": "therapist",
+      "name": "Tannu jaiswal",
+      "email": "jaiswaltannu007@gmail.com",
+      "phone": "8527676237",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "82bc9a6caec1748492ca61b0"
+      },
+      "role": "therapist",
+      "name": "Priya Tomar",
+      "email": "priyatomar.pt777@gmail.com",
+      "phone": "8810242442",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "4ab78f3d63bbaad6d81fe1f3"
+      },
+      "role": "therapist",
+      "name": "Minni gupta",
+      "email": "minnigupta561@gmail.com",
+      "phone": "9311594976",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "03aee385823e745331d18291"
+      },
+      "role": "therapist",
+      "name": "SURAJ",
+      "email": "surajkumar8670113@gmail.com",
+      "phone": "7827820024",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "daba57ba6809e2a401c8e887"
+      },
+      "role": "therapist",
+      "name": "Pinki singh",
+      "email": "pinkikohli197814@gmail.com",
+      "phone": "9654475778",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "b07224ad9b3df0c66fbd95c1"
+      },
+      "role": "therapist",
+      "name": "Dilpreet kaur",
+      "email": "pr33tdilkaur@gmail.com",
+      "phone": "8076728064",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "d4ae425587a273d5aac4075e"
+      },
+      "role": "therapist",
+      "name": "Sahil Mann",
+      "email": "mannsahab3859@gmail.com",
+      "phone": "9811779609",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "f49d8611946545013be0d793"
+      },
+      "role": "therapist",
+      "name": "Sumbul",
+      "email": "sumbulkhan19988@gmail.com",
+      "phone": "8595868437",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "50fc9b0cf2b10ac7b259911d"
+      },
+      "role": "therapist",
+      "name": "Rupa",
+      "email": "roopashah99@gmail.com",
+      "phone": "9315006219",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "976ee7cd47a39ca6c7b3815d"
+      },
+      "role": "therapist",
+      "name": "Anita Singh Verma",
+      "email": "kumarmohit101994@gmail.com",
+      "phone": "6394877731",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "6a687c6c34c3690e7a32d985"
+      },
+      "role": "therapist",
+      "name": "CHANDA YADAV",
+      "email": "ry483436@gmail.com",
+      "phone": "8700584023",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "01742e9c93608ad7fb664b68"
+      },
+      "role": "therapist",
+      "name": "Ruchi yadav",
+      "email": "ruchiyadavssrr@gmail.com",
+      "phone": "9076649502",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "39bff261cf7921230a6260b2"
+      },
+      "role": "therapist",
+      "name": "Rashmita kaushik",
+      "email": "rashmitakaushik98552@gmail.com",
+      "phone": "6001308688",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "62f28d9754743e52c5e4bb7c"
+      },
+      "role": "therapist",
+      "name": "KHUSHI MANN",
+      "email": "khushimann0513@gmail.com",
+      "phone": "7303020149",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "9a7f40f4b100c726717594d5"
+      },
+      "role": "therapist",
+      "name": "Pushpendra Singh bhadoriya",
+      "email": "pushpendrasingh861999@gmail.com",
+      "phone": "6266835842",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "b50f473728b4cab4da0c386c"
+      },
+      "role": "therapist",
+      "name": "Yukta Joshi",
+      "email": "yukta7772@gmail.com",
+      "phone": "8368157448",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "d51801f311c013d07431d085"
+      },
+      "role": "therapist",
+      "name": "Varsha kumari",
+      "email": "rajputvarsha454@gmail.com",
+      "phone": "8595795082",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "99c6b0e0cb98b27807913408"
+      },
+      "role": "therapist",
+      "name": "Titiksha",
+      "email": "titikshasaraswat@gmail.com",
+      "phone": "8130131920",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "61093bb220a22f5bd905c4e7"
+      },
+      "role": "therapist",
+      "name": "Richa Gupta",
+      "email": "richagupta8167000@gmail.com",
+      "phone": "8826933685",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "3908fadc5986a51683085144"
+      },
+      "role": "therapist",
+      "name": "KISHORI",
+      "email": "kishorijha123@gmail.com",
+      "phone": "9871154206",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "94c19f4979e5beeec7a70fd5"
+      },
+      "role": "therapist",
+      "name": "Harshit Srivastava",
+      "email": "2harshits@gmail.com",
+      "phone": "9821436892",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "6c7e0bad2a8ce15058deb60d"
+      },
+      "role": "therapist",
+      "name": "Dulari (himanshi)",
+      "email": "gautamhimanshi297@gmail.com",
+      "phone": "7678515568",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "eed505297f44056bc2ecbec7"
+      },
+      "role": "therapist",
+      "name": "Aryan Choudhary",
+      "email": "aryanbohimea2471@gmail.com",
+      "phone": "8920293699",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "1bbcd2a083f0696ef78de15d"
+      },
+      "role": "therapist",
+      "name": "Vasant",
+      "email": "vk748267@gmail.com",
+      "phone": "7428942906",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "14a1fec72df90b5ce3a02931"
+      },
+      "role": "therapist",
+      "name": "Himanshi Saini",
+      "email": "himanshisaini200314@gmail.com",
+      "phone": "7048976021",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "f25a5656a2df36a8c0a175e1"
+      },
+      "role": "therapist",
+      "name": "Nishant kumar",
+      "email": "nishantkumar202122@gmail.com",
+      "phone": "8799746349",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    },
+    {
+      "_id": {
+        "$oid": "8f810136b2b00b4a1d763baf"
+      },
+      "role": "therapist",
+      "name": "amrit kumar",
+      "email": "amritkunar8140@gmail.com",
+      "phone": "8368155543",
+      "authProvider": "otp",
+      "otpAttempts": 0,
+      "phoneVerified": false,
+      "emailVerified": false,
+      "status": "active",
+      "isDisabled": false,
+      "signUpOTP": null,
+      "signUpOTPExpiresAt": null,
+      "signUpOTPSentAt": null,
+      "signUpOTPAttempts": 0,
+      "signUpOTPLastUsedAt": null,
+      "incompleteTherapistProfile": false,
+      "incompleteParentProfile": true,
+      "manualSignUp": false,
+      "createdAt": {
+        "$date": "2025-01-01T00:00:00.000Z"
+      },
+      "updatedAt": {
+        "$date": "2026-03-30T07:34:42.413Z"
+      },
+      "__v": 0,
+      "otpExpiresAt": null
+    }
+  ]

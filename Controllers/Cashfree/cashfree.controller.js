@@ -172,9 +172,10 @@ class CashfreeController {
       // If NOT stored, you need to map order_id -> paymentId in some other way.
       // Here, still trying with paymentId=order_id for backward-compatibility/fallback.
 
-      const payment = await Payment.findOne({ paymentId: order_id });
+      // Find the payment based on Cashfree order_id (not our paymentId)
+      const payment = await Payment.findOne({ "cashfree.order_id": order_id });
       if (!payment) {
-        console.warn("Payment not found for order_id", order_id);
+        console.warn("Payment not found for cashfree order_id", order_id);
         return res.status(404).send("Payment record not found");
       }
 
