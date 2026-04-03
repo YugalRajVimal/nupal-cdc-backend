@@ -4,7 +4,7 @@ import authRouter from "./Routers/auth.routes.js";
 import therapistRouter from "./Routers/therapist.routes.js";
 import superAdminRouter from "./Routers/super-admin.routes.js";
 import parentRouter from "./Routers/Parent/parent.routes.js";
-
+import cashfreeRouter from "./Routers/cashfree.routes.js";
 
 const router = express.Router();
 
@@ -17,6 +17,7 @@ router.use("/admin", adminRouter);
 router.use("/super-admin", superAdminRouter);
 router.use("/parent", parentRouter);
 router.use("/therapist", therapistRouter);
-
+// Add Cashfree payment gateway routes
+router.use("/cashfree", cashfreeRouter);
 
 export default router;

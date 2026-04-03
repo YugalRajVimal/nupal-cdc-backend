@@ -15,35 +15,27 @@ class AuthController {
   checkAuth = async (req, res) => {
     try {
       const { id, role } = req.user || {};
-      console.log("[checkAuth] User id from req.user:", id);
-      console.log("[checkAuth] User role from req.user:", role);
 
       if (!role || !ALLOWED_ROLES.includes(role)) {
-        console.log("[checkAuth] Invalid user role or role missing:", role);
         return res.status(401).json({ message: "Unauthorized: Invalid user role" });
       }
 
       // Check if user with provided id and role exists in the database
       const dbUser = await User.findOne({ _id: id, role });
-      console.log("[checkAuth] Looked up user from DB:", dbUser ? dbUser._id : "NOT FOUND");
 
       if (!dbUser) {
-        console.log("[checkAuth] No user found in DB for id and role.");
         return res.status(401).json({ message: "Unauthorized: User not found" });
       }
 
       if (dbUser.status === "suspended") {
-        console.log("[checkAuth] User status is suspended.");
         return res.status(403).json({ message: "Your account has been suspended. Please contact support." });
       }
       if (dbUser.status === "deleted") {
-        console.log("[checkAuth] User status is deleted.");
         return res.status(403).json({ message: "Your account has been deleted. Please contact support." });
       }
 
       // If therapist and incompleteTherapistProfile is true, return error with unique status code
       if (dbUser.role === "therapist" && dbUser.incompleteTherapistProfile === true) {
-        console.log("[checkAuth] Therapist profile is incomplete.");
         // 428 Precondition Required: used as unique, fits context of incomplete profile
         return res.status(428).json({ 
           message: "Therapist profile is incomplete. Please complete your profile to continue.",
@@ -53,7 +45,6 @@ class AuthController {
       }
       // If parent and incompleteParentProfile is true, return error with unique status code
       if (dbUser.role === "patient" && dbUser.incompleteParentProfile === true) {
-        console.log("[checkAuth] Parent/Patient profile is incomplete.");
         // 428 Precondition Required, as above
         return res.status(428).json({ 
           message: "Parent profile is incomplete. Please complete your profile to continue.",
@@ -66,7 +57,6 @@ class AuthController {
         // Need to check TherapistProfile for isPanelAccessible
         const therapistProfile = await (await import("../../Schema/user.schema.js")).TherapistProfile.findOne({ userId: dbUser._id }).lean();
         if (therapistProfile && therapistProfile.isPanelAccessible === false) {
-          console.log("[checkAuth] Therapist panel is not accessible for this user.");
           // 451 Unavailable For Legal Reasons (as unique error, since 403/423 are common)
           return res.status(451).json({
             message: "Your therapist panel access is currently not enabled. Please contact support.",
@@ -76,14 +66,12 @@ class AuthController {
         }
       }
 
-      console.log("[checkAuth] User is authorized.");
       return res.status(200).json({ 
         message: "Authorized",
         name: dbUser.name,
         email: dbUser.email
       });
     } catch (error) {
-      console.error("[checkAuth] Error encountered:", error);
       return res.status(401).json({ message: "Unauthorized" });
     }
   };
@@ -144,8 +132,6 @@ class AuthController {
         tokenExpiry: new Date(Date.now() + 24 * 60 * 60 * 1000), // 1 day expiry
       }], { session });
 
-      console.log("Stored issued token in expired-tokens collection:", token);
-
       // === Mandatory Audit Log (must succeed for transaction) ===
       try {
         await AuditLogService.addLog(
@@ -168,7 +154,6 @@ class AuthController {
           { session }
         );
       } catch (elog) {
-        console.error("[verifyAccount] Error writing audit log:");
         await session.abortTransaction();
         session.endSession();
         return res.status(500).json({ message: "Audit log creation failed. Account verification not saved." });
@@ -183,7 +168,6 @@ class AuthController {
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
-      console.error("VerifyAccount Error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
   };
@@ -203,8 +187,6 @@ class AuthController {
 
       email = email.trim().toLowerCase();
       role = role.trim();
-
-      console.log(email, role);
 
       if (!ALLOWED_ROLES.includes(role)) {
         await session.abortTransaction();
@@ -234,7 +216,6 @@ class AuthController {
       await user.save({ session });
 
       // Send OTP via mail
-
       sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
 
       // === Mandatory Audit Log (must succeed for transaction) ===
@@ -259,7 +240,6 @@ class AuthController {
           { session }
         );
       } catch (elog) {
-        console.error("[signin] Error writing audit log:");
         await session.abortTransaction();
         session.endSession();
         return res.status(500).json({ message: "Audit log creation failed. OTP not sent." });
@@ -271,7 +251,6 @@ class AuthController {
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
-      console.error("Signin Error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
   };
@@ -295,7 +274,6 @@ class AuthController {
 
       return res.status(200).json({ message: "Signed out successfully" });
     } catch (error) {
-      console.error("SignOut Error:", error);
       return res.status(500).json({ message: "Internal Server Error" });
     }
   };
