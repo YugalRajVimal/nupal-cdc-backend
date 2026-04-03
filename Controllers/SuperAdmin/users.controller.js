@@ -5,11 +5,8 @@ class UsersSuperAdminController {
 
 async getAllUsers(req, res) {
     try {
-        console.log("Fetching all users for super admin with search and pagination...");
-
         // Extract query params for search & pagination
         const { role = "all", search = "", page = 1, limit = 20 } = req.query;
-        console.log(role);
         const pageNum = parseInt(page, 10) > 0 ? parseInt(page, 10) : 1;
         const limitNum = parseInt(limit, 10) > 0 ? parseInt(limit, 10) : 20;
         const skip = (pageNum - 1) * limitNum;
@@ -17,7 +14,6 @@ async getAllUsers(req, res) {
         // Helper: build search filter for user fields
         const getUserSearchQuery = (searchText) => {
             if (!searchText) return {};
-            // You can adapt/add fields to search as required
             return {
                 $or: [
                     { name: { $regex: searchText, $options: "i" } },
@@ -27,25 +23,21 @@ async getAllUsers(req, res) {
             };
         };
 
-        let results = {};
-        let total = 0;
+        let responseResults = {};
+        let totals = {};
 
-        // Patients
+        // Patients - only paginated if role === "patients"
         if (role === "patients" || role === "all") {
-            // Find patients whose related User or any patient details match the search
-            // Get matching userIds from User by search
             const userMatchQ = getUserSearchQuery(search);
             let patientQuery = {};
             if (search) {
-                // If searching on parent or patient name/email/phone, aggregate
-                // Find User _ids that match search
                 const userMatches = await User.find(userMatchQ).select("_id");
                 const userIdList = userMatches.map(u => u._id);
 
                 patientQuery = {
                     $or: [
                         { userId: { $in: userIdList } },
-                        { name:     { $regex: search, $options: "i" } },
+                        { name:          { $regex: search, $options: "i" } },
                         { fatherFullName: { $regex: search, $options: "i" } },
                         { motherFullName: { $regex: search, $options: "i" } },
                         { parentEmail:    { $regex: search, $options: "i" } },
@@ -57,19 +49,20 @@ async getAllUsers(req, res) {
             const [patients, patientsTotal] = await Promise.all([
                 PatientProfile.find(patientQuery)
                     .populate({ path: 'userId', model: User })
-                    .skip(role === "all" ? 0 : skip)
-                    .limit(role === "all" ? 0 : limitNum),
+                    .skip(role === "patients" ? skip : 0)
+                    .limit(role === "patients" ? limitNum : 0),
                 PatientProfile.countDocuments(patientQuery)
             ]);
-            results.patients = patients;
-            results.patientsTotal = patientsTotal;
-            total += patientsTotal;
+            responseResults.patients = patients;
+            responseResults.patientsTotal = patientsTotal;
+            totals.patientsTotal = patientsTotal;
         } else {
-            results.patients = [];
-            results.patientsTotal = 0;
+            responseResults.patients = [];
+            responseResults.patientsTotal = 0;
+            totals.patientsTotal = 0;
         }
 
-        // Therapists
+        // Therapists - only paginated if role === "therapists"
         if (role === "therapists" || role === "all") {
             let therapistQuery = {};
             if (search) {
@@ -92,19 +85,20 @@ async getAllUsers(req, res) {
             const [therapists, therapistsTotal] = await Promise.all([
                 TherapistProfile.find(therapistQuery)
                     .populate({ path: 'userId', model: User })
-                    .skip(role === "all" ? 0 : skip)
-                    .limit(role === "all" ? 0 : limitNum),
+                    .skip(role === "therapists" ? skip : 0)
+                    .limit(role === "therapists" ? limitNum : 0),
                 TherapistProfile.countDocuments(therapistQuery)
             ]);
-            results.therapists = therapists;
-            results.therapistsTotal = therapistsTotal;
-            total += therapistsTotal;
+            responseResults.therapists = therapists;
+            responseResults.therapistsTotal = therapistsTotal;
+            totals.therapistsTotal = therapistsTotal;
         } else {
-            results.therapists = [];
-            results.therapistsTotal = 0;
+            responseResults.therapists = [];
+            responseResults.therapistsTotal = 0;
+            totals.therapistsTotal = 0;
         }
 
-        // Admins (subadmins)
+        // Admins - only paginated if role === "admin"
         if (role === "admin" || role === "all") {
             let adminQuery = { role: "admin" };
             if (search) {
@@ -115,27 +109,31 @@ async getAllUsers(req, res) {
             }
             const [admins, adminsTotal] = await Promise.all([
                 User.find(adminQuery)
-                    .skip(role === "all" ? 0 : skip)
-                    .limit(role === "all" ? 0 : limitNum),
+                    .skip(role === "admin" ? skip : 0)
+                    .limit(role === "admin" ? limitNum : 0),
                 User.countDocuments(adminQuery)
             ]);
-            results.admins = admins;
-            results.adminsTotal = adminsTotal;
-            total += adminsTotal;
+            responseResults.admins = admins;
+            responseResults.adminsTotal = adminsTotal;
+            totals.adminsTotal = adminsTotal;
         } else {
-            results.admins = [];
-            results.adminsTotal = 0;
+            responseResults.admins = [];
+            responseResults.adminsTotal = 0;
+            totals.adminsTotal = 0;
         }
 
-        // If "all", total = sum of all roles, but paginated for each type may be confusing UI-side. 
-        // API returns totals for each, and single role's array will be paginated, others can be omitted or sent empty
+        // For UI: total and paginated arrays are specific to the selected role.
+        // For "all": returns unpaginated lists (limit 0 == unlimited), totals are still valid.
+        // For single role: returns paginated list of that role.
+        // Also return total for all, regardless of role, for UI-friendly pagination controls.
 
-        res.json({
-            ...results,
-            total,
-            page: pageNum,
-            limit: limitNum
-        });
+        // Get a global total (sum of all)
+        responseResults.total = (totals.patientsTotal || 0) + (totals.therapistsTotal || 0) + (totals.adminsTotal || 0);
+        responseResults.page = pageNum;
+        responseResults.limit = limitNum;
+
+        res.json(responseResults);
+
     } catch (error) {
         console.error("Error fetching users for super admin:", error);
         res.status(500).json({ error: "Failed to fetch users", details: error.message });
