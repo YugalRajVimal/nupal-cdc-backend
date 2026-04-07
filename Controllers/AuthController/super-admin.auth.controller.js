@@ -3,10 +3,24 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { User, SuperAdminProfile } from "../../Schema/user.schema.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
-
+import WhatsappController from "../Whatsapp/whatsapp.js"; // Add Whatsapp support like in @auth.controller.js
 
 // Only allow superadmin for these endpoints
 const ALLOWED_ROLES = ["superadmin"];
+
+// --- Copy/paste from auth.controller.js (see context, for phone normalization) ---
+function normalizeIndianPhone(phone) {
+  if (!phone) return phone;
+  let np = phone.replace(/\D/g, "");
+  while (np.length > 10 && np.startsWith("91")) {
+    np = np.slice(2);
+  }
+  if (np.length > 10) {
+    np = np.slice(np.length - 10);
+  }
+  return np;
+}
+// -------------------------------------------------------------------------------
 
 class SuperAdminAuthController {
   // Check Auth Token - expects Bearer token in Authorization header
@@ -31,19 +45,24 @@ class SuperAdminAuthController {
     }
   };
 
-  // Superadmin Login: with email and password
+  // Superadmin Login: email/password or phone/password
   login = async (req, res) => {
     const session = await User.startSession();
     session.startTransaction();
     try {
-      const { email, password } = req.body;
-      if (!email || !password) {
+      let { email, phone, password } = req.body;
+      if ((!email && !phone) || !password) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ message: "Email and password are required." });
+        return res.status(400).json({ message: "Email or phone and password are required." });
       }
 
-      const user = await User.findOne({ email: email.trim().toLowerCase(), role: "superadmin" }).session(session);
+      let query = { role: "superadmin" };
+      // Normalize and support login by email or phone
+      if (email) query.email = email.trim().toLowerCase();
+      if (phone) query.phone = normalizeIndianPhone(phone);
+
+      const user = await User.findOne(query).session(session);
 
       if (!user) {
         await session.abortTransaction();
@@ -51,7 +70,6 @@ class SuperAdminAuthController {
         return res.status(404).json({ message: "Superadmin not found" });
       }
 
-      // Check for passwordHash existence
       if (!user.passwordHash) {
         await session.abortTransaction();
         session.endSession();
@@ -70,6 +88,7 @@ class SuperAdminAuthController {
       const payload = {
         id: user._id,
         email: user.email,
+        phone: user.phone,
         role: user.role
       };
       const token = jwt.sign(payload, process.env.JWT_SECRET);
@@ -84,7 +103,7 @@ class SuperAdminAuthController {
             resource: "User",
             resourceId: user._id,
             details: {
-              message: `Superadmin login for userId=${user._id} (${user.email})`
+              message: `Superadmin login for userId=${user._id} (${user.email || user.phone})`
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]
@@ -97,6 +116,34 @@ class SuperAdminAuthController {
         return res.status(500).json({ message: "Audit log creation failed. Login aborted." });
       }
 
+      // --- Send WhatsApp notification for superadmin login success ---
+      try {
+        // Use text-based template from @whatsapp.js lines 119-144 for WhatsApp notification
+        // This matches the WhatsAppController.sendSuperAdminLoginSuccess() signature/documented structure
+
+        const destination = user.phone;
+        const userName = user.name || "";
+        const userNameParam = user.name || "Superadmin";
+        const device = req.headers["user-agent"] || "Unknown Device";
+        // Provide client IP from header or fallback
+        const location = req.headers["x-forwarded-for"] || req.ip || "Not available";
+        // Format as per India timezone and readable string
+        const dateTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+
+        // Using the implementation model from whatsapp.js (119-144)
+        await WhatsappController.sendSuperAdminLoginSuccess({
+          destination,
+          userName,
+          userNameParam,
+          dateTime,
+          device,
+          location
+        });
+      } catch (waErr) {
+        // Don't fail the login if WhatsApp notification fails -- log the error.
+        console.error("Failed to send WhatsApp superadmin login notification:", waErr);
+      }
+
       await session.commitTransaction();
       session.endSession();
 
@@ -106,6 +153,7 @@ class SuperAdminAuthController {
         data: {
           id: user._id,
           email: user.email,
+          phone: user.phone,
           name: user.name,
           role: user.role,
           status: user.status,
@@ -118,19 +166,23 @@ class SuperAdminAuthController {
     }
   };
 
-  // Forgot Password (superadmin): send OTP (always 000000 for now)
+  // Forgot Password (superadmin): send OTP to email or phone
   forgotPassword = async (req, res) => {
     const session = await User.startSession();
     session.startTransaction();
     try {
-      const { email } = req.body;
-      if (!email) {
+      let { email, phone } = req.body;
+      if (!email && !phone) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ message: "Email is required." });
+        return res.status(400).json({ message: "Email or phone is required." });
       }
 
-      const user = await User.findOne({ email: email.trim().toLowerCase(), role: "superadmin" }).session(session);
+      let query = { role: "superadmin" };
+      if (email) query.email = email.trim().toLowerCase();
+      if (phone) query.phone = normalizeIndianPhone(phone);
+
+      const user = await User.findOne(query).session(session);
 
       if (!user) {
         await session.abortTransaction();
@@ -138,9 +190,10 @@ class SuperAdminAuthController {
         return res.status(404).json({ message: "Superadmin not found" });
       }
 
+      // Generate OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-      // Save OTP ("000000") and expiry (optionally 10min)
+      // Save OTP and expiry (10min)
       await User.findByIdAndUpdate(
         user._id,
         {
@@ -150,7 +203,35 @@ class SuperAdminAuthController {
         { session }
       );
 
-      sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
+      // Send OTP via email or WhatsApp (phone)
+      let otpSent = false, sendError = null;
+      if (email) {
+        // SendMail returns a promise, properly await it and handle the error
+        try {
+          await sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`);
+          otpSent = true;
+        } catch (err) {
+          sendError = err;
+        }
+      } else if (phone) {
+        try {
+          await WhatsappController.sendOtpVerification({
+            destination: user.phone,
+            userName: user.name || "",
+            otp
+          });
+          otpSent = true;
+        } catch (waErr) {
+          sendError = waErr;
+        }
+      }
+
+      if (sendError) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ message: "Failed to send OTP", error: sendError });
+      }
+
       // === Mandatory Audit Log (must succeed for transaction) ===
       try {
         await AuditLogService.addLog(
@@ -162,10 +243,10 @@ class SuperAdminAuthController {
             resourceId: user._id,
             details: {
               changedFields: {
-                otp: { from: undefined, to: "000000" },
+                otp: { from: undefined, to: otp },
                 otpExpiresAt: { from: undefined, to: (new Date(Date.now() + 10 * 60 * 1000)).toISOString() }
               },
-              message: `Superadmin forgot password OTP sent for userId=${user._id} (${user.email})`
+              message: `Superadmin forgot password OTP sent for userId=${user._id} (${user.email || user.phone})`
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]
@@ -181,8 +262,9 @@ class SuperAdminAuthController {
       await session.commitTransaction();
       session.endSession();
 
-      // Optionally send email (for dev, just say sent)
-      return res.status(200).json({ message: "OTP sent to your registered email (for demo, OTP is 000000)" });
+      return res.status(200).json({
+        message: "OTP sent to your registered " + (email ? "email" : "phone") + (process.env.NODE_ENV === "development" ? ` (for dev, OTP is ${otp})` : ""),
+      });
     } catch (err) {
       await session.abortTransaction();
       session.endSession();
@@ -190,26 +272,22 @@ class SuperAdminAuthController {
     }
   };
 
-  // Verify Account - superadmin only, checks OTP (default 000000)
+  // Verify Account - superadmin only, checks OTP (input by either email or phone)
   verifyAccount = async (req, res) => {
     const session = await User.startSession();
     session.startTransaction();
     try {
-      let { email, otp } = req.body;
-      if (!email || !otp) {
+      let { email, phone, otp } = req.body;
+      if ((!email && !phone) || !otp) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ message: "Email and OTP are required" });
+        return res.status(400).json({ message: "Email or phone and OTP are required" });
       }
-      email = email.trim().toLowerCase();
-      // Find superadmin with OTP (default OTP is 000000)
+      let query = { role: "superadmin", otp, otpExpiresAt: { $gte: new Date() } };
+      if (email) query.email = email.trim().toLowerCase();
+      if (phone) query.phone = normalizeIndianPhone(phone);
       const user = await User.findOneAndUpdate(
-        {
-          email,
-          role: "superadmin",
-          otp,
-          otpExpiresAt: { $gte: new Date() },
-        },
+        query,
         { $unset: { otp: 1, otpExpiresAt: 1 } },
         { new: true, session }
       ).lean();
@@ -217,7 +295,7 @@ class SuperAdminAuthController {
       if (!user) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(401).json({ message: "Invalid email or OTP." });
+        return res.status(401).json({ message: "Invalid credentials or OTP." });
       }
 
       // === Mandatory Audit Log (must succeed for transaction) ===
@@ -233,7 +311,7 @@ class SuperAdminAuthController {
               changedFields: {
                 otp: { from: otp, to: undefined }
               },
-              message: `Superadmin verified account with OTP for userId=${user._id} (${user.email})`
+              message: `Superadmin verified account with OTP for userId=${user._id} (${user.email || user.phone})`
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]
@@ -243,13 +321,16 @@ class SuperAdminAuthController {
       } catch (elog) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(500).json({ message: "Audit log creation failed. Account verification not saved." });
+        return res.status(500).json({
+          message: "Audit log creation failed. Account verification not saved."
+        });
       }
 
       // Generate JWT
       const payload = {
         id: user._id,
         email: user.email,
+        phone: user.phone,
         role: user.role
       };
       const token = jwt.sign(payload, process.env.JWT_SECRET);
@@ -263,6 +344,7 @@ class SuperAdminAuthController {
         data: {
           id: user._id,
           email: user.email,
+          phone: user.phone,
           name: user.name,
           role: user.role,
           status: user.status
@@ -323,7 +405,7 @@ class SuperAdminAuthController {
               changedFields: {
                 passwordHash: { from: "hidden", to: "hidden" }
               },
-              message: `Superadmin password was reset for userId=${user._id} (${user.email})`
+              message: `Superadmin password was reset for userId=${user._id} (${user.email || user.phone})`
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]
@@ -339,6 +421,29 @@ class SuperAdminAuthController {
       await session.commitTransaction();
       session.endSession();
 
+      // === Send WhatsApp notification to superadmin ===
+      try {
+        // Compose notification details
+        const now = new Date();
+        const dateTime = now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }); // IST
+        const userNameParam = user.name || (user.email || user.phone || "Superadmin");
+        const device = req.headers["user-agent"] || "Unknown device";
+        // Optionally, you could use a geoip lookup here for a real location
+        const location = req.headers["x-forwarded-for"] || req.ip || "Unknown location";
+        await WhatsappController.sendSuperAdminPasswordResetSuccess({
+          destination: user.phone || "", // number in string format with country code, fallback empty
+          userName: user.name || "",
+          userNameParam,
+          dateTime,
+          device,
+          location
+        });
+      } catch (waErr) {
+        // WhatsApp notification failure should NOT block password reset success
+        // Optionally, log this error for system monitoring
+        console.error("Failed to send WhatsApp notification to superadmin:", waErr);
+      }
+
       return res.status(200).json({ message: "Password reset successfully." });
     } catch (error) {
       await session.abortTransaction();
@@ -350,5 +455,3 @@ class SuperAdminAuthController {
 }
 
 export default SuperAdminAuthController;
-
-

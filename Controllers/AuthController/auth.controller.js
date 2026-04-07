@@ -6,6 +6,8 @@ import {
 import ExpiredTokenModel from "../../Schema/expired-token.schema.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 import sendMail from "../../config/nodeMailer.config.js";
+import WhatsappController from "../Whatsapp/whatsapp.js"; // Make sure the path is correct based on your project structure
+
 
 // Allowed roles from user.schema.js (see enum in file_context_2 line 8)
 const ALLOWED_ROLES = ["patient", "therapist", "admin"];
@@ -76,19 +78,38 @@ class AuthController {
     }
   };
 
+  // Helper function: Normalize Indian phone numbers (works for +919837114001, 919837114001, 9837114001 to 9837114001)
+  normalizeIndianPhone(phone) {
+    if (!phone) return phone;
+    // Remove all non-digit characters
+    let np = phone.replace(/\D/g, "");
+    // Remove all leading '91' until we're down to 10 digits
+    while (np.length > 10 && np.startsWith("91")) {
+      np = np.slice(2);
+    }
+    // Finally, return last 10 digits (in case user enters extras like 000919837114001)
+    if (np.length > 10) {
+      np = np.slice(np.length - 10);
+    }
+    return np;
+  }
+
   // Verify Account with OTP (parent/therapist/admin/superadmin) using user.schema.js
   verifyAccount = async (req, res) => {
     const session = await User.startSession();
     session.startTransaction();
     try {
-      let { email, otp, role } = req.body;
+      let { email, phone, otp, role } = req.body;
 
-      if (!email || !otp || !role) {
+      if ((!email && !phone) || !otp || !role) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ message: "Email, OTP, and Role are required" });
+        return res.status(400).json({ message: "Email or phone, OTP, and Role are required" });
       }
-      email = email.trim().toLowerCase();
+
+      // Normalize
+      if (email) email = email.trim().toLowerCase();
+      if (phone) phone = this.normalizeIndianPhone(phone);
       role = role.trim();
 
       if (!ALLOWED_ROLES.includes(role)) {
@@ -97,14 +118,16 @@ class AuthController {
         return res.status(400).json({ message: "Invalid user role." });
       }
 
-      // Find user by email, role and OTP (inside transaction)
-      const user = await User.findOne(
-        {
-          email,
-          role,
-          otp
-        }
-      ).session(session);
+      // Build query for user (either by email or by phone)
+      const query = { role, otp };
+      if (email) {
+        query.email = email;
+      } else if (phone) {
+        query.phone = phone;
+      }
+
+      // Find user by email OR phone, role and OTP (inside transaction)
+      const user = await User.findOne(query).session(session);
 
       if (!user) {
         await session.abortTransaction();
@@ -121,6 +144,7 @@ class AuthController {
       const tokenPayload = {
         id: user._id,
         email: user.email,
+        phone: user.phone,
         role: user.role
       };
 
@@ -146,7 +170,7 @@ class AuthController {
                 otp: { from: otp, to: undefined },
                 lastLogin: { from: null, to: (new Date()).toISOString() }
               },
-              message: `Account verified with OTP for userId=${user._id} (${user.email})`
+              message: `Account verified with OTP for userId=${user._id} (${user.email || user.phone})`
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]
@@ -172,20 +196,23 @@ class AuthController {
     }
   };
 
-  // Sign In → Send OTP, only for known roles
+  // Sign In → Send OTP, only for known roles, using email OR phone
+
   signin = async (req, res) => {
     const session = await User.startSession();
     session.startTransaction();
     try {
-      let { email, role } = req.body;
+      let { email, phone, role } = req.body;
 
-      if (!email || !role) {
+      if ((!email && !phone) || !role) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ message: "Email and role are required" });
+        return res.status(400).json({ message: "Email or phone and role are required" });
       }
 
-      email = email.trim().toLowerCase();
+      // Normalize
+      if (email) email = email.trim().toLowerCase();
+      if (phone) phone = this.normalizeIndianPhone(phone);
       role = role.trim();
 
       if (!ALLOWED_ROLES.includes(role)) {
@@ -194,7 +221,16 @@ class AuthController {
         return res.status(400).json({ message: "Invalid user role." });
       }
 
-      const user = await User.findOne({ email, role }).session(session);
+      // Build query for user (either by email or by phone)
+      const query = { role };
+      if (email) {
+        query.email = email;
+      } else if (phone) {
+        query.phone = phone;
+      }
+
+      const user = await User.findOne(query).session(session);
+
       if (user && user.role !== role) {
         await session.abortTransaction();
         session.endSession();
@@ -206,17 +242,31 @@ class AuthController {
         return res.status(404).json({ message: "User not found" });
       }
 
-      // Generate 6-digit OTP (here, hardcoded for demo; use random in production)
+      // Generate 6-digit OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
       // Save OTP with expiry (10 min)
-      // user.otp = "000000";
-      user.otp=otp;
+      user.otp = otp;
       user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min expiry
       await user.save({ session });
 
-      // Send OTP via mail
-      sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
+      // Send OTP via mail or WhatsApp (if phone is provided)
+      if (email) {
+        sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
+      } else if (phone) {
+        // Send OTP via WhatsApp using WhatsappController
+        try {
+          await WhatsappController.sendOtpVerification({
+            destination: phone, // Already normalized
+            userName: user.name || "", // Optionally fallback to ""
+            otp
+          });
+        } catch (waErr) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(500).json({ message: "Failed to send OTP via WhatsApp", error: waErr });
+        }
+      }
 
       // === Mandatory Audit Log (must succeed for transaction) ===
       try {
@@ -232,7 +282,7 @@ class AuthController {
                 otp,
                 otpExpiresAt: { from: null, to: (user.otpExpiresAt).toISOString() }
               },
-              message: `Signin OTP sent to userId=${user._id} (${user.email})`
+              message: `Signin OTP sent to userId=${user._id} (${user.email || user.phone})`
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]
