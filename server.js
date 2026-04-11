@@ -12,6 +12,8 @@ const allowedOrigins = [
   "http://localhost:5173", // Vite
   "http://localhost:3000", // optional
   "https://nupal-cdc-software.onrender.com",
+  "https://booking.nupalcdc.com",
+  "https://www.booking.nupalcdc.com",
   process.env.FRONTEND_URL
 ];
 
