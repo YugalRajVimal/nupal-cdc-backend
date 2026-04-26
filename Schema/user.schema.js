@@ -85,6 +85,7 @@ const PatientProfileSchema = new mongoose.Schema({
   diagnosisInfo: { type: String, default: "" },
   childReference: { type: String, default: "" },
   parentOccupation: { type: String, default: "" },
+  motherOccupation: { type: String, default: "" }, // Added field as instructed
   remarks: { type: String, default: "" },
   profilePhoto: { type: mongoose.Schema.Types.Mixed, default: undefined },
   otherDocument: { type: mongoose.Schema.Types.Mixed, default: undefined },
@@ -96,7 +97,7 @@ const PatientProfileSchema = new mongoose.Schema({
 // Therapist Profile
 const TherapistProfileSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  therapistId:{type: String,  required: true },
+  therapistId:{type: String },
 
 
   // ADDED FIELDS AS REQUESTED

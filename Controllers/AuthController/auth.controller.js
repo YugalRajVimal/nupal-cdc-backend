@@ -210,7 +210,7 @@ class AuthController {
         return res.status(400).json({ message: "Email or phone and role are required" });
       }
 
-      // Normalize
+      // Normalize inputs
       if (email) email = email.trim().toLowerCase();
       if (phone) phone = this.normalizeIndianPhone(phone);
       role = role.trim();
@@ -221,7 +221,7 @@ class AuthController {
         return res.status(400).json({ message: "Invalid user role." });
       }
 
-      // Build query for user (either by email or by phone)
+      // Always build query with role + either email or phone (prefer email if present)
       const query = { role };
       if (email) {
         query.email = email;
@@ -229,6 +229,7 @@ class AuthController {
         query.phone = phone;
       }
 
+      // Find user by either email/role or phone/role
       const user = await User.findOne(query).session(session);
 
       if (user && user.role !== role) {
@@ -242,6 +243,17 @@ class AuthController {
         return res.status(404).json({ message: "User not found" });
       }
 
+      // If one of email/phone is missing, get from user's record
+      if (!email) email = user.email;
+      if (!phone) phone = user.phone;
+
+      // Sanity: if neither from record, still error
+      if (!email && !phone) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ message: "User does not have both email and phone on record" });
+      }
+
       // Generate 6-digit OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -250,22 +262,35 @@ class AuthController {
       user.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min expiry
       await user.save({ session });
 
-      // Send OTP via mail or WhatsApp (if phone is provided)
+      // Send OTP to both email and WhatsApp (if present)
+      let sendEmailError = null, whatsappError = null;
+      let sendEmailPromise = null, sendWhatsappPromise = null;
+
       if (email) {
-        sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`).catch(console.error);
-      } else if (phone) {
-        // Send OTP via WhatsApp using WhatsappController
-        try {
-          await WhatsappController.sendOtpVerification({
-            destination: phone, // Already normalized
-            userName: user.name || "", // Optionally fallback to ""
-            otp
-          });
-        } catch (waErr) {
-          await session.abortTransaction();
-          session.endSession();
-          return res.status(500).json({ message: "Failed to send OTP via WhatsApp", error: waErr });
-        }
+        sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
+          .catch((err) => { sendEmailError = err; });
+      }
+      if (phone) {
+        sendWhatsappPromise = WhatsappController.sendOtpVerification({
+          destination: phone,
+          userName: user.name || "",
+          otp
+        }).catch((err) => { whatsappError = err; });
+      }
+
+      // Await the sending (both in parallel)
+      if (sendEmailPromise) await sendEmailPromise;
+      if (sendWhatsappPromise) await sendWhatsappPromise;
+
+      // If both failed, treat as error; if at least one sent, consider successful
+      if (sendEmailError && whatsappError) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          message: "Failed to send OTP on both email and WhatsApp.",
+          emailError: sendEmailError,
+          whatsappError: whatsappError
+        });
       }
 
       // === Mandatory Audit Log (must succeed for transaction) ===
@@ -297,7 +322,11 @@ class AuthController {
 
       await session.commitTransaction();
       session.endSession();
-      return res.status(200).json({ message: "OTP sent successfully" });
+      return res.status(200).json({ 
+        message: "OTP sent successfully" + 
+          ((sendEmailError && !whatsappError) ? " (Email failed, WhatsApp sent)" :
+           (!sendEmailError && whatsappError) ? " (WhatsApp failed, Email sent)" : "")
+      });
     } catch (error) {
       await session.abortTransaction();
       session.endSession();

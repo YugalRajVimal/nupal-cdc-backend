@@ -2,6 +2,12 @@ import mongoose from "mongoose";
 
 const ticketSchema = new mongoose.Schema(
   {
+    ticketId: {
+      type: String,
+      required: false,
+      unique: true,
+      description: "Custom ticket identifier (e.g. for friendly display or reference)",
+    },
     raisedByRole: {
       type: String,
       enum: ["parent", "therapist"],

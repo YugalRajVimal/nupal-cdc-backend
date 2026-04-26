@@ -58,6 +58,15 @@ usersSuperAdminRouter.delete("/admins/:id", jwtAuth, (req, res) => {
     usersSuperAdminController.deleteAdmin(req, res);
 });
 
+// Route to pay therapist (create earning + add finance log etc)
+usersSuperAdminRouter.post(
+  "/therapists/:id/pay",
+  jwtAuth,
+  (req, res) => {
+    usersSuperAdminController.payTherapist(req, res);
+  }
+);
+
 
 
 

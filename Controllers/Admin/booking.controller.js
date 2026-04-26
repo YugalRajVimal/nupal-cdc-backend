@@ -13,6 +13,7 @@ import AavailabilitySlotsAdminController from "./availability-slots.controller.j
 import SessionEditRequest from "../../Schema/session-edit-request.schema.js";
 import Finances from "../../Schema/finances.schema.js";
 import Lead from "../../Schema/leads.schema.js";
+import WhatsappController from "../Whatsapp/whatsapp.js"; 
 
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 import mongoose from "mongoose";
@@ -634,20 +635,16 @@ class BookingAdminController {
       await paymentDoc.save({ session });
 
       // Step 5: Normalize sessions, WITH sessionId per session (S00001...)
-      // 1. Generate as many 'session' counters as needed, in bulk increment, for atomicity
       const sessionCount = Array.isArray(sessions) ? sessions.length : 0;
       let sessionCounterStart = 1;
       if (sessionCount > 0) {
-        // Attempt to atomically reserve sequence for all sessions
         const sessionCounterDoc = await Counter.findOneAndUpdate(
           { name: "session" },
           { $inc: { seq: sessionCount } },
           { new: true, upsert: true, session }
         );
-        // The first session sequence in this batch:
         sessionCounterStart = sessionCounterDoc.seq - sessionCount + 1;
       }
-      // Map: assign sessionId from counter
       const normalizedSessions = (sessions || []).map((sess, idx) => ({
         sessionId: `S${String(sessionCounterStart + idx).padStart(5, "0")}`,
         date: sess.date,
@@ -781,6 +778,73 @@ class BookingAdminController {
         .populate({ path: "therapy", model: "TherapyType" })
         .populate({ path: "therapist", model: "TherapistProfile" })
         .populate({ path: "payment", model: "Payment" });
+
+      // ---- WhatsApp Integration ----
+      try {
+        // patient details: phone, name
+        let phoneNo;
+        let patientName;
+        if (populatedBooking?.patient) {
+          if (populatedBooking.patient?.mobile1) {
+            phoneNo = populatedBooking.patient.mobile1;
+          } else if (populatedBooking.patient?.userId && populatedBooking.patient.userId?.phone) {
+            phoneNo = populatedBooking.patient.userId.phone;
+          }
+          patientName = populatedBooking.patient?.name || populatedBooking.patient?.userId?.fullName;
+        }
+        // therapist name
+        let therapistName;
+        if (populatedBooking?.therapist) {
+          therapistName = populatedBooking.therapist.name || populatedBooking.therapist.therapistId;
+        }
+        // package
+        let packageName = populatedBooking?.package?.name;
+        // therapy type
+        let therapyTypeName = populatedBooking?.therapy?.name;
+
+        // session dates and times - send all in WhatsApp message
+        let sessionsData = [];
+        if (Array.isArray(populatedBooking.sessions)) {
+          sessionsData = populatedBooking.sessions.map(ses => {
+            let sessionDate = ses.date;
+            let sessionTime = ses.time;
+            return { date: sessionDate, time: sessionTime };
+          });
+        }
+
+        // Only send if phoneNo present and not empty
+        if (phoneNo) {
+          // Convert sessionsData (array of {date, time}) to a readable multiline text string, showing every session on separate line as "Date: YYYY-MM-DD, Time: HH:mm"
+          const sessionsText = Array.isArray(sessionsData) && sessionsData.length
+            ? sessionsData.map(
+                (s, i) =>
+                  `Session ${i + 1}: Date: ${s.date || '-'}, Time: ${s.time ? s.time : '-'}`
+              ).join(",")
+            : "";
+
+          // Send the ACTUAL paymentId (not placeholder), as per @payment.schema.js (1-74)
+          // paymentId must be taken from populatedBooking.payment.paymentId
+          let waPaymentId = undefined;
+          if (populatedBooking?.payment && populatedBooking.payment.paymentId) {
+            waPaymentId = populatedBooking.payment.paymentId;
+          }
+
+          await WhatsappController.sendBookingCreationCompleted({
+            destination: phoneNo,
+            userName: patientName,
+            appointmentId: populatedBooking.appointmentId,
+            patientName: patientName,
+            therapist: therapistName,
+            totalSessions: sessionsText, // now sending multiline all sessions with date & time
+            paymentId: waPaymentId
+          });
+
+        }
+      } catch (waErr) {
+        // log error only, do not fail booking creation if WhatsApp fails
+        console.error("Failed to send WhatsApp message:", waErr?.message || waErr);
+      }
+      // ---- End WhatsApp Integration ----
 
       res.status(201).json({
         success: true,
@@ -963,11 +1027,12 @@ class BookingAdminController {
     await DailyAvailability.bulkWrite(ops);
   }
 
-  // Update booking with updated booking schema (1-47)
+  // Update booking with updated booking schema (1-47), and send WhatsApp message on update
   async updateBooking(req, res) {
     const mongoose = (await import("mongoose")).default;
     const session = await mongoose.startSession();
     session.startTransaction();
+
     try {
       const { id } = req.params;
       const {
@@ -1053,7 +1118,7 @@ class BookingAdminController {
         therapistToDates[key].add(date);
       });
 
-      // Collect all needed therapist docs so we can get readable .therapistId
+      // Collect all needed therapist docs so we can get readable .therapistId and .fullName/.name
       const uniqueTherapistIds = Array.from(
         new Set(requestedSlots.map(r => String(r.therapist)))
       );
@@ -1062,8 +1127,10 @@ class BookingAdminController {
       }).lean();
 
       const therapistIdMap = {};
+      const therapistNameMap = {};
       therapistDocs.forEach(tDoc => {
         therapistIdMap[String(tDoc._id)] = tDoc.therapistId;
+        therapistNameMap[String(tDoc._id)] = tDoc.fullName || tDoc.name || "";
       });
 
       // --- Check slot availability for all sessions ---
@@ -1350,6 +1417,36 @@ class BookingAdminController {
 
       // Audit log for booking update is mandatory: if log is not created, revert everything!
       try {
+        // New: Prepare therapist names as comma separated string for the audit log
+        // We'll collect therapistIds (therapistId field, not _id!) from updated sessions
+        let auditTherapistNamesArr = [];
+        let auditTherapistIds = [];
+        // use updatedSessions from above and therapistIdMap
+        auditTherapistIds = [
+          ...new Set(
+            updatedSessions
+              .map(sess => {
+                // convert to therapistId, not objectId
+                let id = therapistIdMap[String(sess.therapist)] || "";
+                return id;
+              })
+              .filter(x => x)
+          ),
+        ];
+        auditTherapistNamesArr = auditTherapistIds.map(tid => {
+          // Map therapistId back to readable name
+          // First, find the objectId in therapistIdMap that matches the therapistId
+          let objectId = Object.keys(therapistIdMap).find(k => therapistIdMap[k] === tid);
+          return therapistNameMap[objectId] || tid;
+        });
+        const auditTherapistText = auditTherapistNamesArr.length > 0
+          ? auditTherapistNamesArr.join(", ")
+          : (booking.therapist && (
+              booking.therapist.fullName ||
+              booking.therapist.name ||
+              (typeof booking.therapist === "string" ? booking.therapist : "")
+            )) || "--";
+
         await AuditLogService.addLog({
           action: "BOOKING_UPDATED",
           user: req.user?.id,
@@ -1358,7 +1455,8 @@ class BookingAdminController {
           resourceId: booking._id,
           details: {
             patientId,
-            therapistId: booking.therapist?._id || booking.therapist,
+            // TherapistId: join by comma and pass names not objectId, not array but text as per instruction
+            therapistId: auditTherapistText,
             appointmentId: booking.appointmentId,
             packageId,
             therapyId,
@@ -1367,7 +1465,7 @@ class BookingAdminController {
             invoiceNumber,
             remark,
             status,
-            message: `Booking updated for patient ${patientId} with therapist ${booking.therapist?._id || booking.therapist}, package ${packageId}, therapy ${therapyId}`
+            message: `Booking updated for patient ${patientId} with therapist ${auditTherapistText}, package ${packageId}, therapy ${therapyId}`
           },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
@@ -1378,12 +1476,95 @@ class BookingAdminController {
         // If audit log creation fails, revert booking update and respond as failure
         await session.abortTransaction();
         session.endSession();
-        // It's possible the booking doc was updated above but the transaction will be rolled back if transactions are supported
         return res.status(500).json({
           success: false,
           message: "Failed to update booking. Audit log is mandatory; changes reverted.",
           error: err?.message || "Audit logging failed.",
         });
+      }
+
+      // --- WhatsApp message logic after update, before commit ---
+      // Only send message if booking and patient populated, and sendWhatsAppMessage available
+      if (
+        booking &&
+        booking.patient &&
+        booking.patient.userId
+      ) {
+        try {
+          // patient phone, fallback to empty string if not found
+          let destination = "";
+          let userName = "";
+          let patientName = "";
+          let therapistNames = [];
+          let totalSessions = 0;
+          let appointmentId = booking.appointmentId || booking._id?.toString();
+          let statusToSend = "Updated"; // Set status explicitly to "Updated"
+
+          if (booking.patient.userId && booking.patient.userId.phone) {
+            destination = booking.patient.userId.phone;
+          }
+          if (booking.patient && booking.patient.fullName) {
+            userName = booking.patient.fullName;
+            patientName = booking.patient.fullName;
+          } else if (booking.patient && booking.patient.name) {
+            userName = booking.patient.name;
+            patientName = booking.patient.name;
+          }
+
+          // Collect all unique therapist IDs from sessions (by therapistId, not objectId)
+          let therapistIdsInSessions = [];
+          if (booking.sessions && Array.isArray(booking.sessions)) {
+            therapistIdsInSessions = [
+              ...new Set(
+                booking.sessions
+                  .map(s => {
+                    // s.therapist here may be objectId or object
+                    // convert to therapistId string
+                    let key = (s.therapist && typeof s.therapist === "object" && s.therapist._id)
+                      ? s.therapist._id.toString()
+                      : (typeof s.therapist === "string" ? s.therapist : s.therapist?.toString());
+                    return therapistIdMap[key] || "";
+                  })
+                  .filter(Boolean)
+              ),
+            ];
+          }
+
+          // Now convert those therapistIds to names, fallback handling
+          therapistNames = therapistIdsInSessions.map(tid => {
+            let objectId = Object.keys(therapistIdMap).find(k => therapistIdMap[k] === tid);
+            return therapistNameMap[objectId] || tid;
+          }).filter(Boolean);
+
+          // Remove duplicates, just in case
+          therapistNames = [...new Set(therapistNames)];
+
+          // Compose as comma separated text and send as string (not as array) as per requirements
+          let therapistNameText = therapistNames.length > 0
+            ? therapistNames.join(", ")
+            : (booking.therapist && (
+              booking.therapist.fullName ||
+              booking.therapist.name ||
+              (typeof booking.therapist === "string" ? booking.therapist : "")
+            )) || "--";
+
+          // Total number of sessions
+          totalSessions = Array.isArray(booking.sessions) ? booking.sessions.length : 0;
+
+          // Compose WhatsApp message fields object:
+          await WhatsappController.sendBookingEditSuccess({
+            destination,
+            userName,
+            appointmentId,
+            patientName,
+            therapistName: therapistNameText, // as text, not array, as instructed
+            totalSessions,
+            status: statusToSend, // explicitly send as "Updated"
+          });
+        } catch (waerr) {
+          // log only, do not fail main flow
+          console.error("WhatsApp sending failed on booking update:", waerr);
+        }
       }
 
       // All succeeded: commit final transaction
@@ -1783,6 +1964,7 @@ async getAllSessionEditRequests(req, res) {
  * Mark payment collection details for a booking.
  * Expects: { payment } in req.body
  * Params: booking id in req.params.id
+ * Sends WhatsApp message (see @whatsapp.js sendPaymentCollectedSuccessfully) 
  */
 async collectPayment(req, res) {
   const session = await Booking.startSession();
@@ -1802,7 +1984,20 @@ async collectPayment(req, res) {
       });
     }
 
-    const booking = await Booking.findById(id).session(session);
+    // Populate patient to obtain phone and name for WhatsApp notification
+    const booking = await Booking.findById(id)
+      .populate({
+        path: "patient",
+        model: "PatientProfile",
+        select: "name mobile1 patientId userId",
+        populate: {
+          path: "userId",
+          model: "User",
+          select: "phone name"
+        }
+      })
+      .session(session);
+
     if (!booking) {
       await session.abortTransaction();
       session.endSession();
@@ -1836,6 +2031,7 @@ async collectPayment(req, res) {
     let financeRecord = null;
     let auditLogMessage = "";
     let paymentStatusChanged = false;
+    let paymentStatusForWhatsapp = ""; // to determine sent status
 
     if (paymentType === "partial") {
       const { amountPaid = 0, amount } = payment;
@@ -1861,12 +2057,14 @@ async collectPayment(req, res) {
         payment.paymentTime = new Date();
         booking.paymentStatus = "partiallypaid";
         auditLogMessage = `[collectPayment] Marking as partiallypaid. Partial payment of Rs.${partialAmount} received for Booking #${booking.appointmentId}. Remaining: Rs.${payment.amount - payment.amountPaid}`;
+        paymentStatusForWhatsapp = "Partial";
         paymentStatusChanged = true;
       } else {
         payment.status = "paid";
         payment.paymentTime = new Date();
         booking.paymentStatus = "paid";
         auditLogMessage = `[collectPayment] Marking as fully paid after partial payment. Final partial payment of Rs.${partialAmount} received. Booking #${booking.appointmentId} fully paid.`;
+        paymentStatusForWhatsapp = "Full";
         paymentStatusChanged = true;
       }
       await payment.save({ session });
@@ -1892,6 +2090,7 @@ async collectPayment(req, res) {
       await booking.save({ session });
 
       auditLogMessage = `[collectPayment] Full payment of Rs.${payment.amount} received for Booking #${booking.appointmentId}.`;
+      paymentStatusForWhatsapp = "Full";
       paymentStatusChanged = true;
 
       const financeExists = await Finances.findOne({
@@ -1913,7 +2112,6 @@ async collectPayment(req, res) {
 
     // Add audit log for payment collection if payment status changed
     if (paymentStatusChanged) {
-      // Compose audit log payload according to schema (@logs.schema.js) and audit log method contract (@audit-logs.controller.js)
       const auditLogPayload = {
         action: "BOOKING_PAYMENT_UPDATE",
         user: req.user?.id,
@@ -1937,12 +2135,10 @@ async collectPayment(req, res) {
         userAgent: req.headers["user-agent"]
       };
       try {
-        // According to @audit-logs.controller.js, addLog is fire-and-forget (does not block/throw), so no need to check its return value
         await AuditLogService.addLog(auditLogPayload);
       } catch (err) {
         auditLogFailed = true;
         auditLogError = err;
-        // Logging here is just for our debugging
         console.error("[collectPayment] Error creating audit log:", err);
       }
     }
@@ -1960,6 +2156,60 @@ async collectPayment(req, res) {
 
     await session.commitTransaction();
     session.endSession();
+
+    // Send WhatsApp message if payment recorded and patient has mobile number
+    if (paymentStatusChanged) {
+      // Only attempt if patient exist
+      let patientProfile = booking.patient;
+      let userPhone =
+        (patientProfile && patientProfile.mobile1) ||
+        (patientProfile &&
+          patientProfile.userId &&
+          patientProfile.userId.phone) ||
+        null;
+
+      let userName =
+        (patientProfile && patientProfile.name) ||
+        (patientProfile &&
+          patientProfile.userId &&
+          patientProfile.userId.name) ||
+        "";
+
+      // Only send if we have a destination phone (prefer mobile1, fallback userId.phone)
+      if (userPhone) {
+        const { appointmentId } = booking;
+        let amountToSend = paymentType === "partial"
+          ? (payment.amountPaid < payment.amount
+              ? partialAmount
+              : payment.amountPaid)
+          : payment.amount;
+        // paymentStatus value for WhatsApp template
+        let paymentStatusTxt =
+          payment.status === "paid"
+            ? "Full"
+            : payment.status === "partiallypaid"
+              ? "Partial"
+              : payment.status;
+        try {
+
+
+          await WhatsappController.sendPaymentCollectedSuccessfully({
+            destination: userPhone,
+            userName: userName,
+            appointmentId: appointmentId,
+            amount: String(amountToSend),
+       
+            paymentStatus: paymentStatusTxt
+          });
+        } catch (err) {
+          console.error(
+            "[collectPayment] Error sending WhatsApp payment confirmation:",
+            err
+          );
+          // Do not block or error for WhatsApp failures.
+        }
+      }
+    }
 
     res.json({
       success: true,
@@ -2007,7 +2257,14 @@ async checkIn(req, res) {
     }
 
     // Find the booking (attach the session/tx)
-    const booking = await Booking.findById(bookingId).session(session);
+    const booking = await Booking.findById(bookingId)
+      .populate([
+        { path: "patient", model: "PatientProfile", select: "userId name mobile1", populate: { path: "userId", model: "User", select: "name phone email" } },
+        { path: "therapist", model: "TherapistProfile", select: "userId therapistId phoneNo", populate: { path: "userId", model: "User", select: "name phone email" } },
+        { path: "sessions.therapist", model: "TherapistProfile", select: "userId therapistId phoneNo", populate: { path: "userId", model: "User", select: "name phone email" } }
+      ])
+      .session(session);
+ 
     if (!booking) {
       await session.abortTransaction();
       session.endSession();
@@ -2042,7 +2299,7 @@ async checkIn(req, res) {
       });
     }
 
-    const date =  new Date()
+    const date = new Date();
     // Mark this session as checked in and set checkInTime
     booking.sessions[sessionIndex].isCheckedIn = true;
     booking.sessions[sessionIndex].checkInTime = date;
@@ -2060,7 +2317,7 @@ async checkIn(req, res) {
           bookingId: booking._id,
           sessionId: sessionId,
           checkedInBy: req.user && req.user._id ? req.user._id : null,
-          checkInAt: date ,
+          checkInAt: date,
         },
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"] || null,
@@ -2083,6 +2340,62 @@ async checkIn(req, res) {
 
     await session.commitTransaction();
     session.endSession();
+
+    // --- SEND WHATSAPP CHECK-IN NOTIFICATION ---
+    // Make sure to send correct data to whatsapp (patient name, phone number, appointmentId, sessionId, checkIn time, therapist, etc.)
+    try {
+      // Import WhatsappController only when needed to avoid cycles, or move to top if safe
+      // import WhatsappController from "../Whatsapp/whatsapp.js";
+      const WhatsappController = (await import("../Whatsapp/whatsapp.js")).default;
+
+      // Patient profile
+      let patientName = "";
+      let patientPhone = "";
+      if (booking.patient) {
+       
+          patientName = booking.patient.name || "";
+          patientPhone = booking.patient.mobile1 || "";
+
+      }
+      // Therapist profile
+      let therapistName = "";
+      let therapistPhone = "";
+      const sessionTherapist = booking.sessions[sessionIndex]?.therapist;
+      if (sessionTherapist) {
+        if (sessionTherapist.userId) {
+          therapistName = sessionTherapist.userId.fullName || "";
+          therapistPhone = sessionTherapist.userId.phoneNo || "";
+        } else {
+          therapistName = sessionTherapist.fullName || "";
+          therapistPhone = sessionTherapist.phoneNo || "";
+        }
+      } else if (booking.therapist) {
+        if (booking.therapist.userId) {
+          therapistName = booking.therapist.userId.fullName || "";
+          therapistPhone = booking.therapist.userId.phoneNo || "";
+        } else {
+          therapistName = booking.therapist.fullName || "";
+          therapistPhone = booking.therapist.phoneNo || "";
+        }
+      }
+
+      // SessionId for user (if stored), fall back to Mongo id
+      const sessionIdToSend =
+        booking.sessions[sessionIndex].sessionId ||
+        String(booking.sessions[sessionIndex]._id);
+
+      // Send WhatsApp message - customize template params as needed for your template
+      await WhatsappController.sendSessionCompleted({
+        destination: patientPhone,
+        userName: patientName,
+        appointmentId: booking.appointmentId || String(booking._id),
+        sessionId: sessionIdToSend,
+        completedAt: date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+      });
+    } catch (wserr) {
+      // WhatsApp send error should be logged but should not block check-in success
+      console.error("[checkIn] Error sending WhatsApp session completed message:", wserr);
+    }
 
     res.json({
       success: true,

@@ -2,6 +2,11 @@ import { AuditLog } from "../../Schema/logs.schema.js";
 import Package from "../../Schema/packages.schema.js";
 import { TherapyType } from "../../Schema/therapy-type.schema.js";
 import { PatientProfile, TherapistProfile, User } from "../../Schema/user.schema.js";
+import WhatsappController from "../Whatsapp/whatsapp.js"; // Make sure the path is correct based on your project structure
+
+
+ // Whatsapp notification for critical audit log events
+
 
 class AuditLogService {
   async addLog({

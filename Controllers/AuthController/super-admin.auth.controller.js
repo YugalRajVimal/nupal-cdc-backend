@@ -178,16 +178,29 @@ class SuperAdminAuthController {
         return res.status(400).json({ message: "Email or phone is required." });
       }
 
+      // Normalize and prepare query for superadmin
       let query = { role: "superadmin" };
       if (email) query.email = email.trim().toLowerCase();
       if (phone) query.phone = normalizeIndianPhone(phone);
 
+      // Fetch the user based on email or phone (must be superadmin)
       const user = await User.findOne(query).session(session);
 
       if (!user) {
         await session.abortTransaction();
         session.endSession();
         return res.status(404).json({ message: "Superadmin not found" });
+      }
+
+      // Ensure we always have both email and phone (fetch from user if missing)
+      if (!email) email = user.email;
+      if (!phone) phone = user.phone;
+
+      // Safety check
+      if (!email && !phone) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ message: "Superadmin does not have both email and phone on record." });
       }
 
       // Generate OTP
@@ -203,33 +216,35 @@ class SuperAdminAuthController {
         { session }
       );
 
-      // Send OTP via email or WhatsApp (phone)
-      let otpSent = false, sendError = null;
+      // Send OTP to both email and WhatsApp (if present)
+      let sendEmailError = null, whatsappError = null;
+      let sendEmailPromise = null, sendWhatsappPromise = null;
+
       if (email) {
-        // SendMail returns a promise, properly await it and handle the error
-        try {
-          await sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`);
-          otpSent = true;
-        } catch (err) {
-          sendError = err;
-        }
-      } else if (phone) {
-        try {
-          await WhatsappController.sendOtpVerification({
-            destination: user.phone,
-            userName: user.name || "",
-            otp
-          });
-          otpSent = true;
-        } catch (waErr) {
-          sendError = waErr;
-        }
+        sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
+          .catch((err) => { sendEmailError = err; });
+      }
+      if (phone) {
+        sendWhatsappPromise = WhatsappController.sendOtpVerification({
+          destination: phone,
+          userName: user.name || "",
+          otp
+        }).catch((err) => { whatsappError = err; });
       }
 
-      if (sendError) {
+      // Await sending (parallel)
+      if (sendEmailPromise) await sendEmailPromise;
+      if (sendWhatsappPromise) await sendWhatsappPromise;
+
+      // If both failed, treat as error; else, success if at least one sent
+      if (sendEmailError && whatsappError) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(500).json({ message: "Failed to send OTP", error: sendError });
+        return res.status(500).json({
+          message: "Failed to send OTP on both email and WhatsApp.",
+          emailError: sendEmailError,
+          whatsappError: whatsappError
+        });
       }
 
       // === Mandatory Audit Log (must succeed for transaction) ===
@@ -262,8 +277,17 @@ class SuperAdminAuthController {
       await session.commitTransaction();
       session.endSession();
 
+      // Compose message depending on what worked
+      let via = [];
+      if (!sendEmailError && email) via.push("email");
+      if (!whatsappError && phone) via.push("phone");
+      let message = "OTP sent to your registered " + (via.length > 0 ? via.join(" & ") : "contacts");
+      if (process.env.NODE_ENV === "development") {
+        message += ` (for dev, OTP is ${otp})`;
+      }
+
       return res.status(200).json({
-        message: "OTP sent to your registered " + (email ? "email" : "phone") + (process.env.NODE_ENV === "development" ? ` (for dev, OTP is ${otp})` : ""),
+        message
       });
     } catch (err) {
       await session.abortTransaction();

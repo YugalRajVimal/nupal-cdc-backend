@@ -1,5 +1,7 @@
+import mongoose from "mongoose";
 import { PatientProfile, TherapistProfile, User } from "../../Schema/user.schema.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+import WhatsappController from "../Whatsapp/whatsapp.js";
 
 class UsersSuperAdminController {
 
@@ -389,6 +391,225 @@ async deleteAdmin(req, res) {
         return res.status(500).json({ message: "Failed to delete admin.", error: err.message });
     }
 }
+
+payTherapist = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+      const { id } = req.params; // TherapistProfile _id
+      const { amount, type, fromDate, toDate, remark, paidOn } = req.body;
+
+      // Debug: log incoming request parameters for payTherapist
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[payTherapist] Received params:", {
+          id,
+          amount,
+          type,
+          fromDate,
+          toDate,
+          remark,
+          paidOn,
+        });
+      }
+
+      // Validate therapist id
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        await session.abortTransaction();
+        session.endSession();
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[payTherapist] Invalid therapist profile ID:", id);
+        }
+        return res.status(400).json({ error: "Invalid therapist profile ID" });
+      }
+      // Validate amount, type, fromDate, toDate
+      if (
+        typeof amount !== "number" ||
+        amount <= 0 ||
+        !["salary", "contract"].includes(type) ||
+        !fromDate ||
+        !toDate
+      ) {
+        await session.abortTransaction();
+        session.endSession();
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[payTherapist] Validation error: ", {
+            amount,
+            type,
+            fromDate,
+            toDate
+          });
+        }
+        return res.status(400).json({ error: "Missing or invalid payment details" });
+      }
+
+      const therapist = await TherapistProfile.findById(id).session(session);
+      if (!therapist) {
+        await session.abortTransaction();
+        session.endSession();
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[payTherapist] Therapist not found:", id);
+        }
+        return res.status(404).json({ error: "Therapist not found" });
+      }
+
+      // Construct payment object as per schema
+      const payment = {
+        amount,
+        type,
+        fromDate: new Date(fromDate),
+        toDate: new Date(toDate),
+        remark: remark || "",
+        paidOn: paidOn ? new Date(paidOn) : new Date(),
+      };
+
+      // Append to earnings array and save within session
+      therapist.earnings.push(payment);
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[payTherapist] Adding payment to therapist.earnings:", payment);
+      }
+      await therapist.save({ session });
+
+      // ----- Add entry in Finances schema -----
+      const Finances = (await import("../../Schema/finances.schema.js")).default;
+
+      let description = `Therapist ${type} payment to ${therapist.name || therapist.therapistId || therapist._id} for ${fromDate} to ${toDate}`;
+      if (remark) {
+        description += ` [${remark}]`;
+      }
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[payTherapist] Creating Finances document with description:", description);
+      }
+      const financesDoc = await Finances.create([{
+        date: payment.paidOn,
+        description,
+        type: "expense",
+        amount: payment.amount,
+        creditDebitStatus: "debited"
+      }], { session });
+      const financeDocObj = financesDoc && Array.isArray(financesDoc) ? financesDoc[0] : financesDoc;
+
+      // ====== Audit Log using AuditLogService (must succeed for transaction) ======
+      try {
+        await AuditLogService.addLog(
+          {
+            action: "THERAPIST_PAID",
+            user: req?.user?.id,
+            role: req?.user?.role,
+            resource: "Therapist",
+            resourceId: id,
+            details: {
+              amount,
+              type,
+              fromDate,
+              toDate,
+              remark: remark || "",
+              paidOn: payment.paidOn,
+              financeId: financeDocObj?._id?.toString() || undefined,
+              message: `Therapist paid (amount=${amount}, type=${type}) by userId=${req?.user?.id || "SYSTEM"} for therapistId=${id}`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[payTherapist] Audit log written for therapist payment");
+        }
+      } catch (elog) {
+        console.error("[payTherapist] Error writing audit log (aborting transaction):", elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ error: "Audit log creation failed. Changes not saved." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // ---- WhatsApp notification logic ----
+      try {
+        // Import WhatsappController only after transaction success to avoid cyclic issues
+        // Get destination (therapist's phone number) from TherapistProfile or maybe from related User doc
+        // Prefer: therapist.mobile1, then therapist.phone, then therapist.contact
+        let destination = null;
+        if (therapist.mobile1 && typeof therapist.mobile1 === "string" && therapist.mobile1.trim()) {
+          destination = therapist.mobile1.trim();
+        } else if (therapist.phone && typeof therapist.phone === "string" && therapist.phone.trim()) {
+          destination = therapist.phone.trim();
+        } else if (therapist.contact && typeof therapist.contact === "string" && therapist.contact.trim()) {
+          destination = therapist.contact.trim();
+        }
+
+        // therapistName: use therapist.name or therapist.therapistId or empty string for WhatsApp template
+        const therapistName = therapist.name || therapist.therapistId || "";
+
+        // Get userName for WhatsApp: could be therapist.name, or fallback to empty string
+        // If TherapistProfile ref to User is available, try to get user.name
+        let userName = therapist.userName || therapist.name || "";
+        if (!userName && therapist.userId) {
+          // Try to fetch User doc
+          const foundUser = await User.findById(therapist.userId).lean();
+          if (foundUser && foundUser.name) {
+            userName = foundUser.name;
+          }
+        }
+
+        // periodFrom, periodTo, paidOn - format as yyyy-mm-dd strings
+        const formatISODate = d => {
+          if (!d) return "";
+          try {
+            // Accepts Date obj or string
+            const dateObj = typeof d === "string" ? new Date(d) : d;
+            return dateObj.toISOString().slice(0, 10);
+          } catch { return ""; }
+        };
+
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[payTherapist] WhatsApp notification destination:", destination);
+        }
+
+        if (destination) {
+          await WhatsappController.sendTherapistPaymentInitiated({
+            destination,
+            userName: userName || "",
+            therapistName: therapistName || "",
+            amountPaid: amount != null ? String(amount) : "",
+            paymentType: type || "",
+            periodFrom: formatISODate(fromDate),
+            periodTo: formatISODate(toDate),
+            paidOn: formatISODate(payment.paidOn)
+          });
+
+          if (process.env.NODE_ENV !== "production") {
+            console.log("[payTherapist] WhatsApp notification sent for therapistId:", therapist._id);
+          }
+        } else {
+          console.warn("[payTherapist] No available WhatsApp destination for therapist ID:", therapist._id);
+        }
+      } catch (whatsAppErr) {
+        // DO NOT block main response, just log
+        console.error("[payTherapist] Failed to send WhatsApp notification:", whatsAppErr);
+      }
+
+      // --- Final success response ---
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[payTherapist] Therapist paid successfully. Returning response for therapistId:", id);
+      }
+      res.json({
+        success: true,
+        message: "Therapist paid and earning added.",
+        earnings: therapist.earnings,
+        payment,
+        finance: financeDocObj
+      });
+    } catch (e) {
+      await session.abortTransaction();
+      session.endSession();
+      console.error("[payTherapist] Exception caught in catch block:", e);
+      res.status(400).json({ error: "Failed to pay therapist", details: e.message });
+    }
+  }
 
 
     

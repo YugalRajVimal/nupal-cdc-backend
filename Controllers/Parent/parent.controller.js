@@ -51,8 +51,8 @@ class ParentController {
         return res.status(409).json({ success: false, message: "A parent with this email already exists." });
       }
 
-      // Use default OTP 000000 for demo; replace with real random OTP generator in prod.
-      const otp = "000000";
+      // Generate 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresInMs = 1000 * 300; // 5 min
 
       // Always create a new temp User record for sign up (never update existing)
@@ -74,8 +74,46 @@ class ParentController {
 
       // Do NOT create PatientProfile or patientId yet (done on completeProfile)
 
-      // Real: Send OTP via nodemailer/sendgrid here. --- For demo, just log.
-      console.log(`[ParentSignup] OTP for ${email}:`, otp);
+      // Send OTP to email (using sendMail instead of a console.log for demo parity)
+      let sendEmailError = null;
+      let sendEmailPromise = null;
+      let whatsappStatus = null;
+
+      // Lazy load sendMail to prevent circular dependency if necessary,
+      // otherwise import sendMail at top of file.
+      try {
+        // Delay require for sendMail so import won't break for existing code
+        // If you have sendMail already imported, you can remove the next two lines and just use sendMail directly.
+        const sendMail = (await import('../../config/nodeMailer.config.js')).default;
+        sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
+          .catch((err) => { sendEmailError = err; });
+      } catch (err) {
+        sendEmailError = err;
+      }
+
+      // For WhatsApp: Only send if phone exists (future-proof), for now skip
+      try {
+        whatsappStatus = '[Skipped WhatsApp OTP - only send if phone is available]';
+        // If you want WhatsApp OTP for parent sign up, add logic here similar to WhatsAppController.sendOtpVerification
+      } catch (waErr) {
+        whatsappStatus = waErr?.message || "Failed to send OTP on WhatsApp";
+        // Do not block signup on WhatsApp fail; just log
+        console.error("ParentSignUp OTP WhatsApp error:", waErr);
+      }
+
+      // Await the sendMail promise if created
+      if (sendEmailPromise) await sendEmailPromise;
+
+      // If email failed, treat as error
+      if (sendEmailError) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          success: false,
+          message: "Failed to send OTP to email address.",
+          emailError: sendEmailError?.message || sendEmailError
+        });
+      }
 
       // ---- AUDIT LOG: Parent signup OTP sent ----
       try {
@@ -89,7 +127,8 @@ class ParentController {
             email,
             name,
             message: `Parent signup OTP sent to ${email}`,
-            completeProfileOrigin: 'self-service'
+            completeProfileOrigin: 'self-service',
+            whatsappStatus
           },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
@@ -368,6 +407,7 @@ class ParentController {
       res.status(400).json({ error: "Failed to complete parent profile", details: e.message });
     }
   }
+  
 
   async getDashboardDetails(req, res) {
     try {

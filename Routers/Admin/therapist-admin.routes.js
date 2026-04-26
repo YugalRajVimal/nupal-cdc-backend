@@ -107,6 +107,9 @@ therapistAdminRouter.post(
   jwtAuth, 
   // authorize("admin.write"),
   (req, res) => {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[therapist-admin.routes] POST /:id/pay - Incoming request body:", req.body);
+    }
     therapistAdminController.payTherapist(req, res);
   }
 );

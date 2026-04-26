@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import Counter from "../../Schema/counter.schema.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 import { deleteUploadedFiles } from "../../middlewares/fileDelete.middleware.js";
+import WhatsappController from "../Whatsapp/whatsapp.js"; 
 
 
 // Utility: Get next patient sequence for PatientID generation
@@ -23,11 +24,7 @@ const generatePatientId = (seq) => {
 class PatientAdminController {
   // Add new patient (user + patient profile)
   async addPatient(req, res) {
-    // Import unlinkSync and resolve if not already done at the top!
-    // import { unlinkSync } from "fs";
-    // import { resolve } from "path";
-
-    // Log file paths if files were uploaded
+    // Handle and log file paths if files were uploaded
     if (req.files) {
       if (req.files.otherDocument && req.files.otherDocument[0]?.path) {
         console.log("Uploaded otherDocument path:", req.files.otherDocument[0].path);
@@ -39,6 +36,7 @@ class PatientAdminController {
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     try {
       const {
         email,
@@ -46,19 +44,20 @@ class PatientAdminController {
         gender,
         childDOB,
         fatherFullName,
-        plannedSessionsPerMonth, // optional
-        package: packageName,    // optional
+        plannedSessionsPerMonth,
+        package: packageName,
         motherFullName,
         parentEmail,
         mobile1,
-        mobile2,                 // optional
+        mobile2,
         address,
         areaName,
-        pincode,                 // now mandatory
+        pincode,
         diagnosisInfo,
         childReference,
         parentOccupation,
-        remarks,                 // optional
+        motherOccupation,
+        remarks,
       } = req.body;
 
       let otherDocumentPath = "";
@@ -67,13 +66,11 @@ class PatientAdminController {
       if (req.files?.otherDocument?.[0]?.path) {
         otherDocumentPath = req.files.otherDocument[0].path;
       }
-
       if (req.files?.profilePhoto?.[0]?.path) {
         profilePhotoPath = req.files.profilePhoto[0].path;
       }
 
-      console.log(req.files);
-      // Required fields array (all except: mobile2, plannedSessionsPerMonth, package, remarks, profilePhoto)
+      // Define required fields (except: mobile2, plannedSessionsPerMonth, package, remarks, profilePhoto)
       const requiredFields = [
         { key: "email", value: email },
         { key: "childFullName", value: childFullName },
@@ -85,16 +82,22 @@ class PatientAdminController {
         { key: "mobile1", value: mobile1 },
         { key: "address", value: address },
         { key: "areaName", value: areaName },
-        { key: "pincode", value: pincode }, // now required
+        { key: "pincode", value: pincode },
         { key: "diagnosisInfo", value: diagnosisInfo },
         { key: "childReference", value: childReference },
         { key: "parentOccupation", value: parentOccupation },
+        { key: "motherOccupation", value: motherOccupation },
       ];
 
       // Gather missing required fields
       const missingRequired = requiredFields
-        .filter(f => !f.value || (typeof f.value === "string" && f.value.trim() === ""))
-        .map(f => f.key);
+        .filter(
+          (f) =>
+            f.value === undefined ||
+            f.value === null ||
+            (typeof f.value === "string" && f.value.trim() === "")
+        )
+        .map((f) => f.key);
 
       if (missingRequired.length > 0) {
         await session.abortTransaction();
@@ -103,21 +106,25 @@ class PatientAdminController {
         // Clean up uploaded files
         deleteUploadedFiles(req.files);
         return res.status(400).json({
-          message: `Missing required fields: ${missingRequired.join(", ")}.`
+          message: `Missing required fields: ${missingRequired.join(", ")}.`,
         });
       }
 
-      // Prepare trimmed input for comparisons
+      // Prepare for comparison (trim string types)
       const emailTrimmed = email.trim();
       const mobile1Trimmed = mobile1.trim();
-      const pincodeValue = typeof pincode === "string" ? pincode.trim() : "";
+      const pincodeValue =
+        typeof pincode === "string" ? pincode.trim() : pincode;
 
-      // Check for existing associations
-      const existingUserByEmail = await User.findOne({ email: emailTrimmed, role: "patient" }).session(session);
-      const existingUserByMobile = await PatientProfile.findOne({ mobile1: mobile1Trimmed }).session(session);
+      // Find if user already exists by email or mobile
+      const existingUserByEmail = await User.findOne({
+        email: emailTrimmed,
+        role: "patient",
+      }).session(session);
 
-      console.log("Check existingUserByEmail:", existingUserByEmail ? existingUserByEmail.email : null);
-      console.log("Check existingUserByMobile:", existingUserByMobile ? existingUserByMobile.mobile1 : null);
+      const existingUserByMobile = await PatientProfile.findOne({
+        mobile1: mobile1Trimmed,
+      }).session(session);
 
       let emailAssociatedMobile = null;
       let emailAssociatedMobileFull = null;
@@ -125,15 +132,14 @@ class PatientAdminController {
       let mobileAssociatedEmailFull = null;
 
       if (existingUserByEmail) {
-        const patientProfileForEmail = await PatientProfile.findOne({ userId: existingUserByEmail._id }).session(session);
+        const patientProfileForEmail = await PatientProfile.findOne({
+          userId: existingUserByEmail._id,
+        }).session(session);
         if (patientProfileForEmail) {
           emailAssociatedMobile = (patientProfileForEmail.mobile1 || "").trim();
           emailAssociatedMobileFull = patientProfileForEmail.mobile1 || "";
         }
       }
-
-      console.log("emailAssociatedMobile for existingUserByEmail:", emailAssociatedMobile);
-
       if (existingUserByMobile) {
         const userForMobile = await User.findById(existingUserByMobile.userId).session(session);
         if (userForMobile) {
@@ -142,16 +148,14 @@ class PatientAdminController {
         }
       }
 
-      console.log("mobileAssociatedEmail for existingUserByMobile:", mobileAssociatedEmail);
-
-      // Helper to get last 4 digits of phone number (or full if less than 4)
+      // Helper for last 4 digits (or full if less than 4)
       function getLast4Digits(phone) {
         if (!phone) return "";
         const str = phone.toString();
         return str.length > 4 ? str.substring(str.length - 4) : str;
       }
 
-      // Violation 1: Trying to register same email with a different mobile1
+      // Violation 1: Email registered with different phone
       if (
         existingUserByEmail &&
         emailAssociatedMobile &&
@@ -159,11 +163,6 @@ class PatientAdminController {
       ) {
         await session.abortTransaction();
         session.endSession();
-        console.log(
-          "Violation 1 - Email already registered with different phone:",
-          { email: emailTrimmed, existingPhone: emailAssociatedMobile, inputPhone: mobile1Trimmed }
-        );
-        // Log attempt
         try {
           await AuditLogService.addLog({
             action: "PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_EMAIL_MOBILE_MISMATCH",
@@ -175,26 +174,29 @@ class PatientAdminController {
               email: emailTrimmed,
               attemptedMobile: mobile1Trimmed,
               existingMobile: emailAssociatedMobile,
-              message: `Attempted to register ${emailTrimmed} with mobile ${mobile1Trimmed}, but email already has mobile ${emailAssociatedMobile}.`
+              message:
+                `Attempted to register ${emailTrimmed} with mobile ${mobile1Trimmed}, but email already has mobile ${emailAssociatedMobile}.`,
             },
             ipAddress: req.ip,
-            userAgent: req.headers['user-agent']
+            userAgent: req.headers["user-agent"],
           });
         } catch (logErr) {
-          console.error('Failed to write audit log (PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_EMAIL_MOBILE_MISMATCH):', logErr);
+          console.error(
+            "Failed to write audit log (PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_EMAIL_MOBILE_MISMATCH):",
+            logErr
+          );
         }
-        // Clean up uploaded files
         deleteUploadedFiles(req.files);
         return res.status(409).json({
           success: false,
-          message: `This email is already registered with a different phone number (ending ${(emailAssociatedMobile)}).`,
+          message: `This email is already registered with a different phone number (ending ${emailAssociatedMobile}).`,
           phoneEnding: getLast4Digits(emailAssociatedMobile),
           phoneFull: emailAssociatedMobileFull,
           email: emailTrimmed,
         });
       }
 
-      // Violation 2: Trying to register same mobile1 with a different email
+      // Violation 2: Phone registered with different email
       if (
         existingUserByMobile &&
         mobileAssociatedEmail &&
@@ -202,11 +204,6 @@ class PatientAdminController {
       ) {
         await session.abortTransaction();
         session.endSession();
-        console.log(
-          "Violation 2 - Phone already registered with different email:",
-          { phone: mobile1Trimmed, existingEmail: mobileAssociatedEmail, inputEmail: emailTrimmed }
-        );
-        // Log attempt
         try {
           await AuditLogService.addLog({
             action: "PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_MOBILE_EMAIL_MISMATCH",
@@ -218,19 +215,22 @@ class PatientAdminController {
               phone: mobile1Trimmed,
               attemptedEmail: emailTrimmed,
               existingEmail: mobileAssociatedEmail,
-              message: `Attempted to register mobile ${mobile1Trimmed} with email ${emailTrimmed}, but phone is registered with email ${mobileAssociatedEmail}.`
+              message:
+                `Attempted to register mobile ${mobile1Trimmed} with email ${emailTrimmed}, but phone is registered with email ${mobileAssociatedEmail}.`,
             },
             ipAddress: req.ip,
-            userAgent: req.headers['user-agent']
+            userAgent: req.headers["user-agent"],
           });
         } catch (logErr) {
-          console.error('Failed to write audit log (PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_MOBILE_EMAIL_MISMATCH):', logErr);
+          console.error(
+            "Failed to write audit log (PATIENT_PROFILE_CREATE_ATTEMPT_FAIL_MOBILE_EMAIL_MISMATCH):",
+            logErr
+          );
         }
-        // Clean up uploaded files
         deleteUploadedFiles(req.files);
         return res.status(409).json({
           success: false,
-          message: `This phone number (${(mobile1Trimmed)}) is already registered with a different email.`,
+          message: `This phone number (${mobile1Trimmed}) is already registered with a different email.`,
           phoneEnding: getLast4Digits(mobile1Trimmed),
           phoneFull: mobile1Trimmed,
           email: mobileAssociatedEmailFull,
@@ -249,7 +249,6 @@ class PatientAdminController {
         emailAssociatedMobile &&
         emailAssociatedMobile === mobile1Trimmed
       ) {
-        // Check for PatientProfile with both matching
         user = existingUserByEmail;
         reusedExistingUser = true;
       } else if (
@@ -257,12 +256,10 @@ class PatientAdminController {
         mobileAssociatedEmail &&
         mobileAssociatedEmail === emailTrimmed
       ) {
-        // Defensive, in case only mobile->email found
         user = await User.findOne({ _id: existingUserByMobile.userId }).session(session);
         reusedExistingUser = true;
       } else {
-        // No match for BOTH, so create new User as before
-        // Get next patient sequence and generate patientId
+        // No match for BOTH, so create new User and PatientProfile
         nextSeq = await getNextSequence("patient");
         patientId = generatePatientId(nextSeq);
 
@@ -274,11 +271,11 @@ class PatientAdminController {
           phoneVerified: false,
           emailVerified: false,
           status: "active",
-          phone: mobile1Trimmed // Save mobile1 to User.phone
+          phone: mobile1Trimmed,
         });
+
         await user.save({ session });
 
-        // Create PatientProfile below using generated patientId
         patientProfile = new PatientProfile({
           userId: user._id,
           patientId,
@@ -298,15 +295,13 @@ class PatientAdminController {
           diagnosisInfo,
           childReference,
           parentOccupation,
+          motherOccupation,
           remarks,
           otherDocument: otherDocumentPath,
           profilePhoto: profilePhotoPath,
         });
         await patientProfile.save({ session });
 
-        console.log("Patient successfully created for:", { email: emailTrimmed, mobile1: mobile1Trimmed, patientId });
-
-        // ---- AUDIT LOG: Patient profile created ----
         try {
           await AuditLogService.addLog({
             action: "PARENT_ONBOARDED",
@@ -319,14 +314,38 @@ class PatientAdminController {
               name: childFullName,
               phone: mobile1Trimmed,
               patientId: patientProfile.patientId,
-              message: `Patient profile created for ${childFullName} (${emailTrimmed})`
+              message: `Patient profile created for ${childFullName} (${emailTrimmed})`,
             },
             ipAddress: req.ip,
-            userAgent: req.headers['user-agent']
+            userAgent: req.headers["user-agent"],
           });
         } catch (logErr) {
-          console.error('Failed to write audit log (PATIENT_PROFILE_CREATED) in addPatient:', logErr);
+          console.error(
+            "Failed to write audit log (PATIENT_PROFILE_CREATED) in addPatient:",
+            logErr
+          );
         }
+
+        // --------- SEND WHATSAPP MESSAGE -------------
+        try {
+          await WhatsappController.sendChildrenRegistrationSuccessfull({
+            
+              destination:mobile1Trimmed,
+  userName:fatherFullName,
+  patientName:childFullName,
+  patientId:patientId,
+            registeredMobile:mobile1Trimmed,
+  createdOn: new Date().toISOString()
+            // Add any extra details if required
+          });
+        } catch (waErr) {
+          console.error(
+            "Failed to send WhatsApp onboarding message (addPatient):",
+            waErr
+          );
+          // We don't fail the creation if WhatsApp fails, just log it.
+        }
+        // ----------------------------------------------
 
         await session.commitTransaction();
         session.endSession();
@@ -342,7 +361,6 @@ class PatientAdminController {
       }
 
       // If here, reuse user and create PatientProfile (do not create User)
-      // Still need to generate a new patientId for this PatientProfile
       nextSeq = await getNextSequence("patient");
       patientId = generatePatientId(nextSeq);
 
@@ -365,23 +383,18 @@ class PatientAdminController {
         diagnosisInfo,
         childReference,
         parentOccupation,
+        motherOccupation,
         remarks,
         otherDocument: otherDocumentPath,
         profilePhoto: profilePhotoPath,
       });
       await patientProfile.save({ session });
 
-      console.log(
-        "PatientProfile created for existing user:",
-        { email: emailTrimmed, mobile1: mobile1Trimmed, patientId, reusedExistingUser }
-      );
-
-      // ---- AUDIT LOG: Patient profile created (existing user) ----
       try {
         await AuditLogService.addLog({
           action: "PARENT_ONBOARDED",
-          user: req.user?.id,
           role: "admin",
+          user: req.user?.id,
           resource: "Parent",
           resourceId: patientProfile._id,
           details: {
@@ -389,14 +402,35 @@ class PatientAdminController {
             name: childFullName,
             phone: mobile1Trimmed,
             patientId: patientProfile.patientId,
-            message: `Patient profile created for ${childFullName} (${emailTrimmed}) (existing user)`
+            message: `Patient profile created for ${childFullName} (${emailTrimmed}) (existing user)`,
           },
           ipAddress: req.ip,
-          userAgent: req.headers['user-agent']
+          userAgent: req.headers["user-agent"],
         });
       } catch (logErr) {
-        console.error('Failed to write audit log (PATIENT_PROFILE_CREATED) in addPatient (existing user):', logErr);
+        console.error(
+          "Failed to write audit log (PATIENT_PROFILE_CREATED) in addPatient (existing user):",
+          logErr
+        );
       }
+
+      // --------- SEND WHATSAPP MESSAGE FOR PROFILE (existing user) -------------
+      try {
+        await WhatsappController.sendOnboardingMessage({
+          phone: mobile1Trimmed,
+          name: childFullName,
+          parentName: fatherFullName,
+          patientId: patientId,
+          email: emailTrimmed,
+        });
+      } catch (waErr) {
+        console.error(
+          "Failed to send WhatsApp onboarding message (addPatient/existing user):",
+          waErr
+        );
+        // Do not interrupt success flow.
+      }
+      // ------------------------------------------------------------------------
 
       await session.commitTransaction();
       session.endSession();
@@ -413,9 +447,8 @@ class PatientAdminController {
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
-      // Clean up uploaded files (if any error occurs)
+      // Clean up uploaded files on error
       deleteUploadedFiles(req.files);
-      // Mandatory logging even in error!
       try {
         await AuditLogService.addLog({
           action: "PATIENT_PROFILE_CREATE_FAILED",
@@ -425,16 +458,21 @@ class PatientAdminController {
           resourceId: null,
           details: {
             error: error.message || (typeof error === "string" ? error : JSON.stringify(error)),
-            message: "Patient creation failed."
+            message: "Patient creation failed.",
           },
           ipAddress: req.ip,
-          userAgent: req.headers['user-agent']
+          userAgent: req.headers["user-agent"],
         });
       } catch (logErr) {
-        console.error('Failed to write audit log (PATIENT_PROFILE_CREATE_FAILED) in catch:', logErr);
+        console.error(
+          "Failed to write audit log (PATIENT_PROFILE_CREATE_FAILED) in catch:",
+          logErr
+        );
       }
       console.error(error);
-      return res.status(500).json({ success: false, message: "Error creating patient.", error: error.message });
+      return res
+        .status(500)
+        .json({ success: false, message: "Error creating patient.", error: error.message });
     }
   }
 
@@ -446,31 +484,26 @@ class PatientAdminController {
         page = 1,
         pageSize = 20,
         search = "",
-        sortField = "createdAt",
-        sortOrder = "desc"
       } = req.query;
 
       page = parseInt(page, 10) || 1;
       pageSize = parseInt(pageSize, 10) || 20;
 
-      // No filters -- just fetch all first
       let query = {};
 
-      // Sort setup
-      let sortObj = {};
-      if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+      // Always use patientId for descending sort
+      let sortObj = { patientId: -1 };
 
-      // Fetch all matching patients, populate userId for searching in populated data
+      // Fetch all matching patients, populate userId
       let patients = await PatientProfile.find(query)
         .populate({ path: "userId" })
         .sort(sortObj)
         .lean();
 
-      // Search logic: filter over both PatientProfile and populated userId.* fields in-memory
+      // Search logic as before
       if (search && typeof search === "string" && search.trim().length > 0) {
         const regex = new RegExp(search.trim(), "i");
         patients = patients.filter(p => {
-          // Search fields direct in PatientProfile
           const matchesProfile =
             (p.name && regex.test(p.name)) ||
             (p.patientId && regex.test(p.patientId)) ||
@@ -488,8 +521,7 @@ class PatientAdminController {
             (p.childReference && regex.test(p.childReference)) ||
             (p.parentOccupation && regex.test(p.parentOccupation)) ||
             (p.remarks && regex.test(p.remarks));
-          
-          // Search in populated userId fields
+
           const matchesUser = p.userId && (
             (p.userId.email && regex.test(p.userId.email)) ||
             (p.userId.name && regex.test(p.userId.name)) ||
@@ -499,9 +531,16 @@ class PatientAdminController {
 
           return matchesProfile || matchesUser;
         });
+
+        // Resort after in-memory filter, descending patientId
+        patients = patients.sort((a, b) => {
+          // Patient IDs are string like "P0001", so sort as numbers after removing P
+          const aid = parseInt((a.patientId || "").replace(/^P/, "")) || 0;
+          const bid = parseInt((b.patientId || "").replace(/^P/, "")) || 0;
+          return bid - aid;
+        });
       }
 
-      // Pagination and response
       const total = patients.length;
       const offset = (page - 1) * pageSize;
       const pagedPatients = patients.slice(offset, offset + pageSize);

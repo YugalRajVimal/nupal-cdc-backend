@@ -4,6 +4,7 @@ import counterSchema from '../../Schema/counter.schema.js';
 import TicketModel from '../../Schema/ticket.schema.js';
 import { TherapistProfile, User } from '../../Schema/user.schema.js';
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+import WhatsappController from "../Whatsapp/whatsapp.js";
 
 
 // Optionally import Therapist schema if you have one
@@ -41,9 +42,11 @@ class TherapistController {
    */
   async therapistSignUpSendOTP(req, res) {
     const session = await User.startSession();
-    try {
-      session.startTransaction();
+    session.startTransaction();
+    let sendEmailError = null;
+    let sendEmailPromise = null;
 
+    try {
       const { email, name } = req.body;
 
       if (!email || typeof email !== "string") {
@@ -58,7 +61,7 @@ class TherapistController {
         return res.status(400).json({ success: false, message: "Name is required." });
       }
 
-      // Check if a therapist or user with this email already exists
+      // Check if a therapist user with this email already exists
       const userExists = await User.findOne({ email, role: "therapist" }).session(session);
       if (userExists) {
         await session.abortTransaction();
@@ -66,8 +69,8 @@ class TherapistController {
         return res.status(409).json({ success: false, message: "A therapist with this email already exists." });
       }
 
-      // Use default OTP 000000 for demo; replace with real random OTP generator in prod.
-      const otp = "000000";
+      // Generate 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresInMs = 1000 * 300; // 5 min
 
       // Always create a new temp User record for sign up (never update existing)
@@ -94,16 +97,40 @@ class TherapistController {
       });
       await therapistProfile.save({ session });
 
+      // Send OTP to email (nodemailer/sendgrid)
+      try {
+        // Lazy import, replace/remove if you have a top-level import
+        const sendMail = (await import('../../config/nodeMailer.config.js')).default;
+        sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
+          .catch((err) => { sendEmailError = err; });
+      } catch (err) {
+        sendEmailError = err;
+      }
+
+      // Await the sendMail promise if created
+      if (sendEmailPromise) await sendEmailPromise;
+
+      // If email failed, treat as error
+      if (sendEmailError) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          success: false,
+          message: "Failed to send OTP to email address.",
+          emailError: sendEmailError?.message || sendEmailError
+        });
+      }
+
       await session.commitTransaction();
       session.endSession();
 
-      // Real: Send OTP via nodemailer/sendgrid here. --- For demo, just log.
+      // Optional: Log for debugging/demo only
       console.log(`[TherapistSignup] OTP for ${email}:`, otp);
 
       // ---- AUDIT LOG: OTP sent ----
       try {
         await AuditLogService.addLog({
-          action: 'OTP_SENT',
+          action: 'THERAPIST_SIGNUP_OTP_SENT',
           user: newUser._id,
           role: 'therapist',
           resource: 'Therapist',
@@ -111,19 +138,22 @@ class TherapistController {
           details: {
             email,
             name,
+            message: `Therapist signup OTP sent to ${email}`,
             context: 'Therapist self-signup OTP requested and sent'
           },
-            ipAddress: req.ip,
+          ipAddress: req.ip,
           userAgent: req.headers['user-agent']
         });
       } catch (logErr) {
-        console.error('Failed to write audit log (OTP_SENT) in therapistSignUpSendOTP:', logErr);
+        // Still consider success, but log the error
+        console.error('Failed to write audit log (THERAPIST_SIGNUP_OTP_SENT) in therapistSignUpSendOTP:', logErr);
       }
 
       return res.json({ success: true, message: "OTP sent to email address." });
     } catch (e) {
       await session.abortTransaction();
       session.endSession();
+      console.error("Error in therapistSignUpSendOTP:", e);
       return res.status(500).json({ success: false, message: "Server error." });
     }
   }
@@ -1255,8 +1285,34 @@ class TherapistController {
         });
       }
 
-      // Build ticket data to match ticket.schema.js: raisedByRole: "therapist", raisedById
+      // Generate a unique ticketId (using timestamp and therapist id for human readability)
+      function generateTicketId(therapistId) {
+        // Example format: TKT-20240609-<last4ofid>-<random>
+        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+        const idStr = therapistId.toString().slice(-4);
+        const rand = Math.random().toString(36).substr(2, 4).toUpperCase();
+        return `TKT-${dateStr}-${idStr}-${rand}`;
+      }
+
+      // Attempt ticketId creation with collision check
+      let ticketId, attempts = 0, maxAttempts = 5, unique = false;
+      while (!unique && attempts < maxAttempts) {
+        ticketId = generateTicketId(raisedById);
+        // eslint-disable-next-line no-await-in-loop
+        const exists = await TicketModel.exists({ ticketId });
+        if (!exists) unique = true;
+        else attempts++;
+      }
+      if (!unique) {
+        return res.status(500).json({
+          success: false,
+          message: "Could not generate a unique ticket ID after several attempts. Please try again.",
+        });
+      }
+
+      // Build ticket data
       const ticketData = {
+        ticketId,
         raisedByRole: "therapist",
         raisedById,
         subject: subject.trim(),
@@ -1272,6 +1328,40 @@ class TherapistController {
       const ticket = new TicketModel(ticketData);
       await ticket.save();
 
+      // Prepare WhatsApp notification fields
+      // Decide destination: if therapist's mobile/phone is present.
+      let destination = null;
+      if (user.mobile1 && typeof user.mobile1 === "string" && user.mobile1.trim()) {
+        destination = user.mobile1.trim();
+      } else if (user.phone && typeof user.phone === "string" && user.phone.trim()) {
+        destination = user.phone.trim();
+      } else if (user.contact && typeof user.contact === "string" && user.contact.trim()) {
+        destination = user.contact.trim();
+      }
+
+      // therapistName: use user's name (either name or fullName, fallback empty string)
+      const therapistName = user.name || user.fullName || "";
+
+      // Call WhatsAppController::sendTherapistTicketRaised, ignore errors (do not block ticket creation)
+      if (destination) {
+        try {
+          // Lazy require to avoid cyclic dependency error if any
+
+          await WhatsappController.sendTherapistTicketRaised({
+            destination,
+            therapistName,
+            subject: subject.trim(),
+            priority: ticketData.priority,
+            ticketId,
+          });
+        } catch (err) {
+          console.error("[raiseTicket] Error sending WhatsApp notification:", err);
+          // Continue and do not block
+        }
+      } else {
+        console.warn(`[raiseTicket] No destination mobile/phone for therapistId=${raisedById}, WhatsApp alert not sent.`);
+      }
+
       res.json({
         success: true,
         ticket,
@@ -1283,6 +1373,13 @@ class TherapistController {
           success: false,
           message: "Validation failed when creating ticket.",
           error: error.message,
+        });
+      }
+      if (error.code === 11000 && error.keyPattern && error.keyPattern.ticketId) {
+        // Duplicate ticketId collision
+        return res.status(409).json({
+          success: false,
+          message: "A ticket with this ID already exists. Please retry.",
         });
       }
       console.error("[RAISE TICKET]", error);
