@@ -601,6 +601,120 @@ async sendTherapistPaymentInitiated({
   }
 }
 
+/**
+ * Sends WhatsApp notification: Children Profile Completed
+ * Template variables:
+ *   {{1}} - User Name
+ *   {{2}} - Child Name
+ *   {{3}} - Patient ID
+ * 
+ * Example call:
+ *   await sendChildrenProfileCompleted({
+ *     destination: "+91xxxxxxxxxx",
+ *     userName: "Parent Name",
+ *     childName: "Child Name",
+ *     patientId: "P0001"
+ *   });
+ */
+async sendChildrenProfileCompleted({
+  destination,
+  userName,
+  childName,
+  patientId
+}) {
+  const url = "https://backend.aisensy.com/campaign/t1/api/v2";
+  const payload = {
+    apiKey: AISENSY_API_KEY,
+    campaignName: "Children Profile Completed",
+    destination: destination || "",
+    userName: userName || "",
+    templateParams: [
+      userName || "",
+      childName || "",
+      patientId || ""
+    ]
+  };
+
+  // Debug logging
+  console.log("sendChildrenProfileCompleted: called with params:", {
+    destination,
+    userName,
+    childName,
+    patientId
+  });
+  console.log("sendChildrenProfileCompleted: payload being sent:", payload);
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    console.log("sendChildrenProfileCompleted: API response:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("sendChildrenProfileCompleted: API error:", error.response ? error.response.data : error);
+    throw error.response ? error.response.data : error;
+  }
+}
+
+/**
+ * Sends WhatsApp message to therapist when their profile is completed.
+ * Example call:
+ *   await sendTherapistProfileCompleted({
+ *     destination: "+91xxxxxxxxxx",
+ *     userName: "Therapist Name",
+ *     therapistId: "T0001",
+ *     specializations: "Speech Therapy, Occupational Therapy",
+ *     experience: "5"
+ *   });
+ */
+async sendTherapistProfileCompleted({
+  destination,
+  userName,
+  therapistId,
+  specializations,
+  experience
+}) {
+  const url = "https://backend.aisensy.com/campaign/t1/api/v2";
+  const payload = {
+    apiKey: AISENSY_API_KEY,
+    campaignName: "Therapist Profile Completed",
+    destination: destination || "",
+    userName: userName || "",
+    templateParams: [
+      userName || "",
+      therapistId || "",
+      specializations || "",
+      experience || ""
+    ]
+  };
+
+  // Debug logging
+  console.log("sendTherapistProfileCompleted: called with params:", {
+    destination,
+    userName,
+    therapistId,
+    specializations,
+    experience
+  });
+  console.log("sendTherapistProfileCompleted: payload being sent:", payload);
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    console.log("sendTherapistProfileCompleted: API response:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("sendTherapistProfileCompleted: API error:", error.response ? error.response.data : error);
+    throw error.response ? error.response.data : error;
+  }
+}
+
+
 
 
 }

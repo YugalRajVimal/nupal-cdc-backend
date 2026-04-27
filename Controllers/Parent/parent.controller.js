@@ -9,6 +9,7 @@ import { TherapyType } from '../../Schema/therapy-type.schema.js';
 import TicketModel from '../../Schema/ticket.schema.js';
 import { PatientProfile, TherapistProfile, User } from '../../Schema/user.schema.js';
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
+import WhatsappController from "../Whatsapp/whatsapp.js";
 
 
 
@@ -240,15 +241,20 @@ class ParentController {
   // Expects (optionally) phone in body to patch onto User profile, and creates PatientProfile with unique patientId
   async completeParentProfile(req, res) {
     try {
+      console.log("Step 1: Starting completeParentProfile");
       // Expect parent user is authenticated (from JWT) and userId is req.user.id
       const parentUserId = req.user?.id;
+      console.log("Step 2: parentUserId:", parentUserId);
       if (!parentUserId) {
+        console.log("Step 2.1: No user ID found, unauthorized.");
         return res.status(401).json({ error: "Unauthorized: No user ID found." });
       }
 
       // Find user
       const user = await User.findById(parentUserId);
+      console.log("Step 3: Found user:", !!user, "Role:", user?.role);
       if (!user || user.role !== "patient") {
+        console.log("Step 3.1: No parent user found.");
         return res.status(404).json({ error: "No parent user found." });
       }
 
@@ -268,13 +274,18 @@ class ParentController {
         diagnosisInfo,
         childReference,
         parentOccupation,
+        motherOccupation, // <-- Add motherOccupation field
         remarks,
         otherDocument
       } = req.body;
-
-      console.log(req.body);
+      console.log("Step 4: req.body received:", {
+        mobile1, childFullName, gender, childDOB, fatherFullName, motherFullName,
+        parentEmail, mobile2, address, areaName, pincode, diagnosisInfo, childReference,
+        parentOccupation, motherOccupation, remarks, otherDocument
+      });
 
       const phone = mobile1;
+      console.log("Step 5: Phone for user will be:", phone);
 
       if (phone && typeof phone === "string" && phone.trim() !== "") {
         // Check whether another user has this phone
@@ -282,24 +293,30 @@ class ParentController {
           phone: phone.trim(),
           _id: { $ne: parentUserId }
         });
+        console.log("Step 5.1: existingUser for phone?", !!existingUser);
         if (existingUser) {
+          console.log("Step 5.2: Phone number conflict with user", existingUser.email);
           return res.status(409).json({
             error: `This phone number is already used by another user (Email: ${existingUser.email || "[none]"})`
           });
         }
         user.phone = phone.trim();
         user.incompleteParentProfile = false;
+        console.log("Step 5.3: User phone set and marked profile as complete");
       }
       await user.save();
+      console.log("Step 6: User saved.");
 
       // Only create PatientProfile (and patientId) if not already present
       let existingProfile = await PatientProfile.findOne({ userId: user._id });
       let createdProfile = null;
       let patientId = null;
+      console.log("Step 7: existingProfile?", !!existingProfile);
 
       if (!existingProfile) {
         // Require childFullName to create PatientProfile
         if (!childFullName || typeof childFullName !== "string" || !childFullName.trim()) {
+          console.log("Step 7.1: Child full name missing on first profile creation");
           return res.status(400).json({ error: "Child name (childFullName) is required to complete profile for the first time." });
         }
 
@@ -312,12 +329,15 @@ class ParentController {
             { new: true, upsert: true }
           );
           seq = counter.seq;
+          console.log("Step 7.2: New patientId sequence number:", seq);
         } catch (counterErr) {
+          console.log("Step 7.2: Failed to increment patient ID counter.", counterErr);
           return res.status(500).json({ error: "Could not generate patient ID." });
         }
         patientId = `P${seq.toString().padStart(4, "0")}`;
+        console.log("Step 7.3: Generated patientId:", patientId);
 
-        // Save all details per code block (file_context_0)
+        // Save all details including motherOccupation
         createdProfile = new PatientProfile({
           userId: user._id,
           name: childFullName ? childFullName.trim() : "",
@@ -326,7 +346,7 @@ class ParentController {
           childDOB: childDOB || "",
           fatherFullName: fatherFullName || "",
           motherFullName: motherFullName || "",
-          parentEmail: parentEmail || "",
+          parentEmail: parentEmail || user.email,
           mobile1: mobile1 || "",
           mobile2: mobile2 || "",
           address: address || "",
@@ -335,16 +355,39 @@ class ParentController {
           diagnosisInfo: diagnosisInfo || "",
           childReference: childReference || "",
           parentOccupation: parentOccupation || "",
+          motherOccupation: motherOccupation || "", // <-- Save motherOccupation
           remarks: remarks || "",
-          parentEmail: parentEmail || user.email,
           otherDocument: otherDocument || undefined,
           // Add other profile fields here as needed
         });
         await createdProfile.save();
+        console.log("Step 7.4: PatientProfile created:", createdProfile._id);
+
+        // ---- Whatsapp Notification: Children Profile Completed ----
+        try {
+          console.log("Step 8: Sending Children Profile Completed WhatsApp notification:", {
+            destination: user.phone || user.phoneNumber || mobile1 || "",
+            userName: user.name || "",
+            childName: childFullName || "",
+            patientId: createdProfile.patientId || ""
+          });
+          await WhatsappController.sendChildrenProfileCompleted({
+            destination: user.phone || user.phoneNumber || mobile1 || "",
+            userName: user.name || "",
+            childName: childFullName || "",
+            patientId: createdProfile.patientId || ""
+          });
+          console.log("Step 8.1: WhatsApp notification sent successfully.");
+        } catch (whErr) {
+          console.error('Failed to send Children Profile Completed WhatsApp notification:', whErr);
+        }
+      } else {
+        console.log("Step 7.5: PatientProfile already exists, not creating again.");
       }
 
       // ---- AUDIT LOG: Parent profile completed ----
       try {
+        console.log("Step 9: Writing audit log for PARENT_PROFILE_COMPLETED.");
         await AuditLogService.addLog({
           action: 'PARENT_PROFILE_COMPLETED',
           user: user._id,
@@ -357,7 +400,8 @@ class ParentController {
             fieldsSubmitted: {
               childFullName, gender, childDOB, fatherFullName, motherFullName, parentEmail,
               mobile1, mobile2, address, areaName, pincode, diagnosisInfo, childReference,
-              parentOccupation, remarks, otherDocument
+              parentOccupation, motherOccupation, // <-- Add motherOccupation here
+              remarks, otherDocument
             },
             createdProfile: !!createdProfile,
             completeProfileOrigin: 'self-service',
@@ -366,10 +410,12 @@ class ParentController {
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
         });
+        console.log("Step 9.1: Audit log written successfully.");
       } catch (logErr) {
         console.error('Failed to write audit log (PARENT_PROFILE_COMPLETED) in completeParentProfile:', logErr);
       }
 
+      console.log("Step 10: Returning success response.");
       return res.status(200).json({
         success: true,
         user: {
@@ -397,6 +443,7 @@ class ParentController {
               diagnosisInfo: createdProfile.diagnosisInfo,
               childReference: createdProfile.childReference,
               parentOccupation: createdProfile.parentOccupation,
+              motherOccupation: createdProfile.motherOccupation, // <-- Add motherOccupation here
               remarks: createdProfile.remarks,
               otherDocument: createdProfile.otherDocument,
             }
@@ -407,7 +454,6 @@ class ParentController {
       res.status(400).json({ error: "Failed to complete parent profile", details: e.message });
     }
   }
-  
 
   async getDashboardDetails(req, res) {
     try {

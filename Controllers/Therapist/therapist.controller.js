@@ -179,7 +179,8 @@ class TherapistController {
       }
 
       // Find the user-in-signup (either existing with pending signUpOTP, or never started)
-      const signupUser = await User.findOne({ email }).session(session);
+      const signupUser = await User.findOne({ email, role: "therapist" }).session(session);
+ 
 
       if (!signupUser || (!signupUser.signUpOTP || !signupUser.signUpOTPExpiresAt)) {
         await session.abortTransaction();
@@ -450,7 +451,7 @@ class TherapistController {
       therapistProfile.specializations = specializations;
       therapistProfile.experienceYears = experienceYears;
       therapistProfile.isPanelAccessible = false; // ensure always set (redundant but explicit)
-      therapistProfile.isDisabled=true
+      therapistProfile.isDisabled = true;
 
       // Patch file fields if file was uploaded; preserve any prior value if not replaced
       for (const field of fileFields) {
@@ -492,6 +493,21 @@ class TherapistController {
         });
       } catch (logErr) {
         console.error('Failed to write audit log (THERAPIST_PROFILE_COMPLETED) in completeProfile:', logErr);
+      }
+
+      // --- Send WhatsApp notification via sendTherapistProfileCompleted ---
+      // Import here to avoid circular/dependency issues
+      try {
+        await WhatsappController.sendTherapistProfileCompleted({
+          destination: therapistProfile.mobile1,
+          userName: user.name || "",
+          therapistId: therapistProfile.therapistId || "",
+          specializations: Array.isArray(specializations) ? specializations.join(", ") : (specializations || ""),
+          experience: experienceYears || ""
+        });
+      } catch (wErr) {
+        console.error('Failed to send WhatsApp notification (THERAPIST_PROFILE_COMPLETED) in completeProfile:', wErr);
+        // Notification failure should not block success
       }
 
       return res.status(200).json({
