@@ -313,6 +313,8 @@ class TherapistAdminController {
         sortOrder = "desc"
       } = req.query;
 
+      
+
       page = parseInt(page, 10) || 1;
       pageSize = parseInt(pageSize, 10) || 20;
 
