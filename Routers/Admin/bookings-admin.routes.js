@@ -120,6 +120,23 @@ bookingsAdminRouter.get("/session-edit-requests", (req, res) =>
 );
 
 /**
+ * @route POST /api/admin/session-edit-requests/:id/approve
+ * @desc Approve a session edit request (admin)
+ */
+bookingsAdminRouter.post("/session-edit-requests/:id/approve", (req, res) =>
+  bookingAdminController.approveSessionEditRequest(req, res)
+);
+
+/**
+ * @route POST /api/admin/session-edit-requests/:id/reject
+ * @desc Reject a session edit request (admin)
+ */
+bookingsAdminRouter.post("/session-edit-requests/:id/reject", (req, res) =>
+  bookingAdminController.rejectSessionEditRequest(req, res)
+);
+
+
+/**
  * @route GET /api/admin/full-calendar
  * @desc Get all sessions from all bookings for the admin full calendar
  */

@@ -13,7 +13,7 @@ ConsultationBookingRouter.get(
 // Route: Approve a consultation booking by id
 ConsultationBookingRouter.put(
   '/:id/approve',
-  (req, res) => consultationBookingAdminController.approveConsultationBooking(req, res)
+  (req, res) => consultationBookingAdminController.statusUpdateConsultationBooking(req, res)
 );
 
 

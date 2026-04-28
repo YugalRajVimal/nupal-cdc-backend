@@ -1752,7 +1752,7 @@ class BookingAdminController {
     }
   }
 
-  // Reject a booking request (admin action)
+  // Reject a booking request (admin action) + trigger WhatsApp notification
   async rejectBookingRequest(req, res) {
     let session;
     try {
@@ -1765,8 +1765,20 @@ class BookingAdminController {
       session = await BookingRequests.startSession();
       await session.startTransaction();
 
-      // Find booking request
-      const bookingRequest = await BookingRequests.findById(id).session(session);
+      // Find booking request with relevant populations for WhatsApp info
+      // We'll want patient info, and maybe also appointmentId
+      const bookingRequest = await BookingRequests.findById(id)
+        .populate({
+          path: "patient",
+          model: "PatientProfile",
+          select: "name email phoneNo mobile1 mobile2"
+        })
+        .populate({
+          path: "appointmentId",
+          model: "Booking", // or the correct appointment model
+          select: "appointmentId scheduledAt time"
+        })
+        .session(session);
       if (!bookingRequest) {
         await session.abortTransaction();
         session.endSession();
@@ -1822,6 +1834,49 @@ class BookingAdminController {
 
       await session.commitTransaction();
       session.endSession();
+
+      // --- Send WhatsApp notification ---
+      try {
+        // Use the WhatsApp controller
+        // We want: destination, userName, bookingId, date, time
+        // Fallback logic for destination/mobile
+
+        // Try to get the patient's (user's) main WhatsAppable phone number
+        let phone = (
+          bookingRequest.patient?.mobile1 ||
+          bookingRequest.patient?.phoneNo ||
+          bookingRequest.patient?.mobile2 ||
+          ""
+        );
+        // Sanitize phone (basic): remove non-numeric, make sure starts with country code if possible
+        if (phone) phone = phone.replace(/[^0-9]/g, "");
+        if (phone && !phone.startsWith('91') && phone.length === 10) phone = `91${phone}`;
+
+        let bookingIdForMsg = bookingRequest.appointmentId?.appointmentId || bookingRequest.appointmentId?._id?.toString() || bookingRequest._id.toString();
+
+        // Scheduled date+time: try to format in "YYYY-MM-DD" and "HH:mm"
+        let scheduledAt = bookingRequest.appointmentId?.scheduledAt || bookingRequest.scheduledAt || bookingRequest.createdAt;
+        let dateStr = "";
+        let timeStr = "";
+        if (scheduledAt) {
+          const dt = new Date(scheduledAt);
+          dateStr = dt.toISOString().slice(0, 10); // "YYYY-MM-DD"
+        }
+        timeStr = bookingRequest.appointmentId?.time
+          || bookingRequest.time
+          || ((scheduledAt && (new Date(scheduledAt)).toISOString().slice(11,16)) || "");
+
+        await WhatsappController.sendBookingRequestRejected({
+          destination: phone,
+          userName: bookingRequest.patient?.name || "",
+          bookingId: bookingRequest.requestId,
+          date: dateStr,
+          time: timeStr
+        });
+      } catch (waErr) {
+        // Log but do not fail the main flow on WhatsApp error!
+        console.error("[rejectBookingRequest] Failed to send WhatsApp notification:", waErr);
+      }
 
       res.json({ success: true, message: "Booking request rejected successfully." });
     } catch (error) {
@@ -1959,6 +2014,161 @@ async getAllSessionEditRequests(req, res) {
     });
   }
 }
+
+// Approve a session edit request (Admin)
+async approveSessionEditRequest(req, res) {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, message: "Session edit request ID required." });
+    }
+
+    // Populate appointment and patient for WhatsApp
+    const editReq = await SessionEditRequest.findById(id)
+      .populate({
+        path: "appointmentId",
+        model: "Booking",
+        populate: {
+          path: "patient",
+          model: "PatientProfile",
+          select: "name mobile1 email"
+        }
+      });
+    if (!editReq) {
+      return res.status(404).json({ success: false, message: "Session edit request not found." });
+    }
+    if (editReq.status === "approved") {
+      return res.status(400).json({ success: false, message: "Session edit request already approved." });
+    }
+
+    // Apply the session edits to the Booking
+    const booking = await Booking.findById(editReq.appointmentId._id || editReq.appointmentId);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found for session edit request." });
+    }
+
+    // For each session edit, update the session in the booking
+    let appliedCount = 0;
+    for (const sessionEdit of editReq.sessions) {
+      // The booking has sessions as an array, each containing _id or id
+      const sessionToUpdate = booking.sessions.id(sessionEdit.sessionId) || 
+        booking.sessions.find(s => String(s._id || s.id) === String(sessionEdit.sessionId));
+      if (sessionToUpdate) {
+        // Update session date and slotId
+        sessionToUpdate.date = sessionEdit.newDate;
+        sessionToUpdate.slotId = sessionEdit.newSlotId;
+        appliedCount++;
+      }
+    }
+
+    await booking.save();
+
+    // Set the status to approved
+    editReq.status = "approved";
+    await editReq.save();
+
+    // --- WhatsApp Notification ---
+    try {
+      // Get patient info for WhatsApp
+      let patientProfile = editReq.appointmentId.patient;
+      let patientName = patientProfile && patientProfile.name ? patientProfile.name : "User";
+      let patientMobile = patientProfile && patientProfile.mobile1 
+        ? String(patientProfile.mobile1)
+        : (patientProfile && patientProfile.phoneNo ? String(patientProfile.phoneNo) : "");
+
+      // fallback for mobile, can be customized
+      if (patientMobile && !patientMobile.startsWith("+")) {
+        patientMobile = "+91" + patientMobile.replace(/[^0-9]/g, "");
+      }
+      // Build WhatsApp payload
+      await WhatsappController.sendSessionEditRequestStatusUpdate({
+        destination: patientMobile,
+        userName: patientName,
+        status: "approved",
+        appointmentId: editReq.appointmentId.appointmentId || editReq.appointmentId._id?.toString() || "",
+        extraMessage: `Your request to change session schedule has been approved. Updated sessions: ${appliedCount}.`
+      });
+    } catch (waErr) {
+      console.error("[WhatsApp][approveSessionEditRequest] error sending notification:", waErr);
+      // Continue, but log
+    }
+
+    return res.json({
+      success: true,
+      message: `Session edit request approved and ${appliedCount} sessions updated.`,
+      editRequest: editReq
+    });
+  } catch (error) {
+    console.error("[approveSessionEditRequest] Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to approve session edit request.", error: error.message });
+  }
+}
+
+// Reject a session edit request (Admin)
+async rejectSessionEditRequest(req, res) {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, message: "Session edit request ID required." });
+    }
+    // Populate appointment and patient for WhatsApp
+    const editReq = await SessionEditRequest.findById(id)
+      .populate({
+        path: "appointmentId",
+        model: "Booking",
+        populate: {
+          path: "patient",
+          model: "PatientProfile",
+          select: "name mobile1 email"
+        }
+      });
+    if (!editReq) {
+      return res.status(404).json({ success: false, message: "Session edit request not found." });
+    }
+    if (editReq.status === "rejected") {
+      return res.status(400).json({ success: false, message: "Session edit request already rejected." });
+    }
+
+    editReq.status = "rejected";
+    await editReq.save();
+
+    // --- WhatsApp Notification ---
+    try {
+      // Get patient info for WhatsApp
+      let patientProfile = editReq.appointmentId.patient;
+      let patientName = patientProfile && patientProfile.name ? patientProfile.name : "User";
+      let patientMobile = patientProfile && patientProfile.mobile1 
+        ? String(patientProfile.mobile1)
+        : (patientProfile && patientProfile.phoneNo ? String(patientProfile.phoneNo) : "");
+
+      // fallback for mobile, can be customized
+      if (patientMobile && !patientMobile.startsWith("+")) {
+        patientMobile = "+91" + patientMobile.replace(/[^0-9]/g, "");
+      }
+      // Build WhatsApp payload
+      await WhatsappController.sendSessionEditRequestStatusUpdate({
+        destination: patientMobile,
+        userName: patientName,
+        status: "rejected",
+        appointmentId: editReq.appointmentId.appointmentId || editReq.appointmentId._id?.toString() || "",
+        extraMessage: `Your request to change the session schedule has been rejected. Please contact us for details.`
+      });
+    } catch (waErr) {
+      console.error("[WhatsApp][rejectSessionEditRequest] error sending notification:", waErr);
+      // Continue, but log
+    }
+
+    return res.json({
+      success: true,
+      message: `Session edit request rejected.`,
+      editRequest: editReq
+    });
+  } catch (error) {
+    console.error("[rejectSessionEditRequest] Error:", error);
+    return res.status(500).json({ success: false, message: "Failed to reject session edit request.", error: error.message });
+  }
+}
+
 
 /**
  * Mark payment collection details for a booking.

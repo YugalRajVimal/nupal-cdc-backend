@@ -714,6 +714,208 @@ async sendTherapistProfileCompleted({
   }
 }
 
+// INSERT_YOUR_CODE
+
+/**
+ * Send WhatsApp notification for Booking Request Rejected.
+ *
+ * WhatsApp Template:
+ * -- Hello {{1}},
+ *
+ * We regret to inform you that your booking request has been rejected.
+ *
+ * 📌 Booking ID: {{2}}
+ *
+ * 📅 Date: {{3}}
+ *
+ * ⏰ Time: {{4}}
+ *
+ * If you have any questions or would like to request another booking, feel free to contact us.
+ *
+ * Thank you for your understanding.
+ *
+ * Regards,
+ * Nupal CDC
+ *
+ * @param {Object} options
+ * @param {string} options.destination - WhatsApp number (e.g., '919999999999')
+ * @param {string} options.userName - User's name (to personalize greeting)
+ * @param {string} options.bookingId - The booking ID
+ * @param {string} options.date - Booking date (string, e.g. "2024-06-01")
+ * @param {string} options.time - Booking time (string, e.g. "14:30")
+ *
+ * @returns {Promise<Object>} Resolves with response data or throws error
+ */
+async sendBookingRequestRejected({
+  destination,
+  userName,
+  bookingId,
+  date,
+  time
+}) {
+  const url = "https://backend.aisensy.com/campaign/t1/api/v2";
+  const payload = {
+    apiKey: AISENSY_API_KEY,
+    campaignName: "Booking Request Rejected",
+    destination: destination || "",
+    userName: userName || "",
+    templateParams: [
+      userName || "",
+      bookingId || "",
+      date || "",
+      time || ""
+    ]
+  };
+
+  // Debug logging
+  console.log("sendBookingRequestRejected: called with params:", {
+    destination,
+    userName,
+    bookingId,
+    date,
+    time
+  });
+  console.log("sendBookingRequestRejected: payload being sent:", payload);
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    console.log("sendBookingRequestRejected: API response:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("sendBookingRequestRejected: API error:", error.response ? error.response.data : error);
+    throw error.response ? error.response.data : error;
+  }
+}
+
+/**
+ * Send WhatsApp notification for Session Edit Request Status Update
+ *
+ * @param {Object} options - Notification options
+ * @param {string} options.destination - WhatsApp phone number (with country code)
+ * @param {string} options.userName - User name
+ * @param {string} options.status - Status ("approved", "rejected", "pending", etc.)
+ * @param {string} options.appointmentId - Appointment/Booking reference ID
+ * @param {string} options.extraMessage - Extra message to be sent (string, e.g. details/reason)
+ *
+ * @returns {Promise<Object>} Resolves with response data or throws error
+ */
+async sendSessionEditRequestStatusUpdate({
+  destination,
+  userName,
+  status,
+  appointmentId,
+  extraMessage
+}) {
+  const url = "https://backend.aisensy.com/campaign/t1/api/v2";
+  const payload = {
+    apiKey: AISENSY_API_KEY,
+    campaignName: "Session Edit Request Status Update",
+    destination: destination || "",
+    userName: userName || "",
+    templateParams: [
+      userName || "",
+      (status ? String(status).toUpperCase() : ""),
+      appointmentId || "",
+      extraMessage || ""
+    ]
+  };
+
+  // Debug logging
+  console.log("sendSessionEditRequestStatusUpdate: called with params:", {
+    destination,
+    userName,
+    status,
+    appointmentId,
+    extraMessage
+  });
+  console.log("sendSessionEditRequestStatusUpdate: payload being sent:", payload);
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    console.log("sendSessionEditRequestStatusUpdate: API response:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("sendSessionEditRequestStatusUpdate: API error:", error.response ? error.response.data : error);
+    throw error.response ? error.response.data : error;
+  }
+}
+
+/**
+ * Send WhatsApp message for Consultation Booking Status Update.
+ *
+ * Template:
+ *  Hello {{1}},
+ *
+ *  Your consultation booking status is now {{2}}.
+ *
+ *  📅 Booking Details:
+ *  • Date: {{3}}
+ *  • Time: {{4}}
+ *  • Consultant: {{5}}
+ *
+ *  {{6}}
+ *
+ *  Regards,
+ *  Nupal CDC
+ *
+ * @param {Object} options
+ * @param {string} options.destination - Recipient WhatsApp number (+91XXX or full int'l w/o spaces)
+ * @param {string} options.userName - Patient/User name (for {{1}})
+ * @param {string} options.status - Status (for {{2}}) e.g. "confirmed"
+ * @param {string} options.date - Booking Date (for {{3}})
+ * @param {string} options.time - Booking Time (for {{4}})
+ * @param {string} options.consultantName - Consultant's name (for {{5}})
+ * @param {string} options.extraMessage - Extra message for {{6}}
+ *
+ * @returns {Promise<Object>} Resolves with response data or throws error
+ */
+async sendConsultationBookingStatusUpdate({
+  destination,
+  userName,
+  status,
+  date,
+  time,
+  consultantName,
+  extraMessage
+}) {
+  const url = "https://backend.aisensy.com/campaign/t1/api/v2";
+  const payload = {
+    apiKey: AISENSY_API_KEY,
+    campaignName: "consultation booking status update",
+    destination: destination || "",
+    userName: userName || "",
+    templateParams: [
+      userName || "",
+      status ? String(status).toUpperCase() : "",
+      date || "",
+      time || "",
+      extraMessage || ""
+    ]
+  };
+
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+    console.log("sendConsultationBookingStatusUpdate: API response:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("sendConsultationBookingStatusUpdate: API error:", error.response ? error.response.data : error);
+    throw error.response ? error.response.data : error;
+  }
+}
+
 
 
 
