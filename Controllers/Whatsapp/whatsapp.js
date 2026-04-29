@@ -130,7 +130,7 @@ class WhatsappController {
     const url = "https://backend.aisensy.com/campaign/t1/api/v2";
     const payload = {
       apiKey: AISENSY_API_KEY, // Should be set in your environment and required at top
-      campaignName: "Super Admin Logged In Successfully",
+      campaignName: "superadmin_logged_in_successfully",
       destination: destination || "",
       userName: userName || "",
       templateParams: [
@@ -157,7 +157,7 @@ class WhatsappController {
     const url = "https://backend.aisensy.com/campaign/t1/api/v2";
     const payload = {
       apiKey: AISENSY_API_KEY, // Should be set in your environment and required at top
-      campaignName: "Super Admin Password Reset Successfully",
+      campaignName: "superadmin_password_reset_successfully",
       destination: destination || "",
       userName: userName || "",
       templateParams: [
