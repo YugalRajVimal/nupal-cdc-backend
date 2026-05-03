@@ -30,7 +30,7 @@ const getNextSequence = async (name) => {
 
 // Given appointment sequence number, format appointmentId as B000001 etc.
 function generateAppointmentId(seq) {
-  return 'B' + seq.toString().padStart(6, '0');
+  return 'B' + seq.toString().padStart(5, '0');
 }
 
 const aavailabilitySlotsAdminController = new AavailabilitySlotsAdminController();
@@ -342,8 +342,8 @@ class BookingAdminController {
       const therapyTypes = await TherapyType.find();
       const packages = await Package.find();
 
-      // Fetch all active therapists with their holidays
-      const activeTherapists = await (await import("../../Schema/user.schema.js")).TherapistProfile.aggregate([
+      // Fetch all active therapists with their holidays, skip if therapist is disabled
+      const allTherapists = await (await import("../../Schema/user.schema.js")).TherapistProfile.aggregate([
         {
           $lookup: {
             from: "users",
@@ -353,7 +353,12 @@ class BookingAdminController {
           }
         },
         { $unwind: "$user" },
-        { $match: { "user.status": "active" } },
+        { 
+          $match: { 
+            "user.status": "active",
+            "user.isDisabled": { $ne: true } // Exclude disabled therapists
+          } 
+        },
         {
           $project: {
             _id: 1,
@@ -364,6 +369,7 @@ class BookingAdminController {
           }
         }
       ]);
+      const activeTherapists = allTherapists; // preserve variable name for downstream use
 
       // Get bookings count per therapist grouped by date
       const bookingCounts = await Booking.aggregate([
@@ -634,7 +640,7 @@ class BookingAdminController {
       });
       await paymentDoc.save({ session });
 
-      // Step 5: Normalize sessions, WITH sessionId per session (S00001...)
+      // Step 5: Normalize sessions, WITH sessionId per session (S00001...) -- updated: sessionId sorted by date
       const sessionCount = Array.isArray(sessions) ? sessions.length : 0;
       let sessionCounterStart = 1;
       if (sessionCount > 0) {
@@ -645,8 +651,24 @@ class BookingAdminController {
         );
         sessionCounterStart = sessionCounterDoc.seq - sessionCount + 1;
       }
-      const normalizedSessions = (sessions || []).map((sess, idx) => ({
-        sessionId: `S${String(sessionCounterStart + idx).padStart(5, "0")}`,
+
+      // Sort the sessions by date (earlier sessions first)
+      // If two sessions have same date, maintain their original order (stable sort)
+      let sortedSessions = [];
+      if (Array.isArray(sessions)) {
+        sortedSessions = sessions
+          .map((s, origIdx) => ({ ...s, __origIdx: origIdx }))
+          .sort((a, b) => {
+            // Compare dates as ISO strings (YYYY-MM-DD)
+            if (a.date < b.date) return -1;
+            if (a.date > b.date) return 1;
+            return a.__origIdx - b.__origIdx;
+          });
+      }
+
+      // Assign sessionIds according to the sorted order
+      const normalizedSessions = (sortedSessions || []).map((sess, idx) => ({
+        sessionId: `S${String(sessionCounterStart + idx).padStart(6, "0")}`,
         date: sess.date,
         time: sess.time || "",
         slotId: sess.slotId || sess.id,
@@ -2183,7 +2205,11 @@ async collectPayment(req, res) {
   let auditLogError = null;
   try {
     const { id } = req.params;
-    const { paymentType = "full", partialAmount } = req.body;
+    const {
+      paymentType = "full",
+      partialAmount,
+      discountApplied = false // Discount applied flag from frontend
+    } = req.body;
 
     if (!id) {
       await session.abortTransaction();
@@ -2194,18 +2220,24 @@ async collectPayment(req, res) {
       });
     }
 
-    // Populate patient to obtain phone and name for WhatsApp notification
+    // Populate patient, discountInfo for WhatsApp and discount calculation
     const booking = await Booking.findById(id)
-      .populate({
-        path: "patient",
-        model: "PatientProfile",
-        select: "name mobile1 patientId userId",
-        populate: {
-          path: "userId",
-          model: "User",
-          select: "phone name"
+      .populate([
+        {
+          path: "patient",
+          model: "PatientProfile",
+          select: "name mobile1 patientId userId",
+          populate: {
+            path: "userId",
+            model: "User",
+            select: "phone name"
+          }
+        },
+        {
+          path: "discountInfo.coupon",
+          model: "Discount"
         }
-      })
+      ])
       .session(session);
 
     if (!booking) {
@@ -2238,15 +2270,34 @@ async collectPayment(req, res) {
       });
     }
 
+    // --- Discount Logic ---
+    let originalAmount = payment.amount;
+    let amountToCollect = originalAmount;
+    let discountAmount = 0;
+    let appliedDiscountPercent = 0;
+
+    // If discount applied, get actual discount percent from booking's coupon if available
+    if (discountApplied && booking.discountInfo && booking.discountInfo.coupon && typeof booking.discountInfo.coupon.discount === "number") {
+      appliedDiscountPercent = booking.discountInfo.coupon.discount;
+      if (appliedDiscountPercent > 0) {
+        discountAmount = Math.round((originalAmount * appliedDiscountPercent) / 100);
+        amountToCollect = originalAmount - discountAmount;
+      }
+    }
+
     let financeRecord = null;
     let auditLogMessage = "";
     let paymentStatusChanged = false;
     let paymentStatusForWhatsapp = ""; // to determine sent status
 
+    // -------- PARTIAL PAYMENT --------
     if (paymentType === "partial") {
-      const { amountPaid = 0, amount } = payment;
-      const remaining = amount - amountPaid;
+      const { amountPaid = 0 } = payment;
+      // Remaining is always based on original amount (before discount)
+      let actualAmountToCompare = amountToCollect;
+      let remaining = actualAmountToCompare - amountPaid;
 
+      // Validate partial amount (must not exceed remaining)
       if (
         typeof partialAmount !== "number" ||
         partialAmount <= 0 ||
@@ -2262,28 +2313,33 @@ async collectPayment(req, res) {
 
       payment.amountPaid = (payment.amountPaid || 0) + partialAmount;
 
-      if (payment.amountPaid < payment.amount) {
+      // Handle payment status vs discounted collection
+      if (payment.amountPaid < amountToCollect) {
         payment.status = "partiallypaid";
         payment.paymentTime = new Date();
         booking.paymentStatus = "partiallypaid";
-        auditLogMessage = `[collectPayment] Marking as partiallypaid. Partial payment of Rs.${partialAmount} received for Booking #${booking.appointmentId}. Remaining: Rs.${payment.amount - payment.amountPaid}`;
+        auditLogMessage = `[collectPayment] Marking as partiallypaid. Partial payment of Rs.${partialAmount} received for Booking #${booking.appointmentId}. Remaining: Rs.${amountToCollect - payment.amountPaid}. DiscountApplied: ${discountApplied}${discountApplied ? ` (${appliedDiscountPercent}%)` : ""}`;
         paymentStatusForWhatsapp = "Partial";
         paymentStatusChanged = true;
       } else {
         payment.status = "paid";
         payment.paymentTime = new Date();
+        // Make sure we don't overpay (limit to discounted total)
+        payment.amountPaid = amountToCollect;
         booking.paymentStatus = "paid";
-        auditLogMessage = `[collectPayment] Marking as fully paid after partial payment. Final partial payment of Rs.${partialAmount} received. Booking #${booking.appointmentId} fully paid.`;
+        auditLogMessage = `[collectPayment] Marking as fully paid after partial payment. Final partial payment of Rs.${partialAmount} received. Booking #${booking.appointmentId} fully paid. DiscountApplied: ${discountApplied}${discountApplied ? ` (${appliedDiscountPercent}%)` : ""}`;
         paymentStatusForWhatsapp = "Full";
         paymentStatusChanged = true;
       }
+
+      // Persist payment and booking
       await payment.save({ session });
       await booking.save({ session });
 
       financeRecord = await Finances.create([
         {
           date: payment.paymentTime || new Date(),
-          description: `Partial Payment for Booking #${booking.appointmentId}`,
+          description: `Partial Payment for Booking #${booking.appointmentId}${discountApplied ? " (DISCOUNT APPLIED)" : ""}`,
           type: "income",
           amount: partialAmount,
           creditDebitStatus: "credited",
@@ -2291,15 +2347,16 @@ async collectPayment(req, res) {
       ], { session });
 
     } else {
+      // -------- FULL PAYMENT --------
       payment.status = "paid";
       payment.paymentTime = new Date();
-      payment.amountPaid = payment.amount;
+      payment.amountPaid = amountToCollect; // Use discounted amount if discount applied
       await payment.save({ session });
 
       booking.paymentStatus = "paid";
       await booking.save({ session });
 
-      auditLogMessage = `[collectPayment] Full payment of Rs.${payment.amount} received for Booking #${booking.appointmentId}.`;
+      auditLogMessage = `[collectPayment] Full payment of Rs.${amountToCollect} received for Booking #${booking.appointmentId}.${discountApplied ? ` Discount of Rs.${discountAmount} (${appliedDiscountPercent}%) applied.` : ""}`;
       paymentStatusForWhatsapp = "Full";
       paymentStatusChanged = true;
 
@@ -2310,9 +2367,9 @@ async collectPayment(req, res) {
       if (!financeExists) {
         financeRecord = await Finances.create([{
           date: payment.paymentTime || new Date(),
-          description: `Payment for Booking #${booking.appointmentId}`,
+          description: `Payment for Booking #${booking.appointmentId}${discountApplied ? " (DISCOUNT APPLIED)" : ""}`,
           type: "income",
-          amount: payment.amount,
+          amount: amountToCollect,
           creditDebitStatus: "credited",
         }], { session });
       } else {
@@ -2339,7 +2396,12 @@ async collectPayment(req, res) {
           invoiceNumber: booking.invoiceNumber,
           remark: booking.remark,
           status: booking.paymentStatus,
-          message: auditLogMessage
+          message: auditLogMessage,
+          discountApplied,
+          discountPercent: appliedDiscountPercent,
+          totalAmount: originalAmount,
+          discountAmount,
+          netAmount: amountToCollect
         },
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"]
@@ -2353,7 +2415,7 @@ async collectPayment(req, res) {
       }
     }
 
-    // If audit log creation failed with an error (should never throw, but if so)
+    // If audit log creation failed with an error
     if (paymentStatusChanged && auditLogFailed) {
       await session.abortTransaction();
       session.endSession();
@@ -2388,12 +2450,10 @@ async collectPayment(req, res) {
       // Only send if we have a destination phone (prefer mobile1, fallback userId.phone)
       if (userPhone) {
         const { appointmentId } = booking;
-        let amountToSend = paymentType === "partial"
-          ? (payment.amountPaid < payment.amount
-              ? partialAmount
-              : payment.amountPaid)
-          : payment.amount;
-        // paymentStatus value for WhatsApp template
+        let amountForWhatsapp = (paymentType === "partial")
+          ? (payment.amountPaid < amountToCollect ? partialAmount : payment.amountPaid)
+          : amountToCollect;
+
         let paymentStatusTxt =
           payment.status === "paid"
             ? "Full"
@@ -2401,14 +2461,11 @@ async collectPayment(req, res) {
               ? "Partial"
               : payment.status;
         try {
-
-
           await WhatsappController.sendPaymentCollectedSuccessfully({
             destination: userPhone,
             userName: userName,
             appointmentId: appointmentId,
-            amount: String(amountToSend),
-       
+            amount: String(amountForWhatsapp),
             paymentStatus: paymentStatusTxt
           });
         } catch (err) {
@@ -2416,7 +2473,6 @@ async collectPayment(req, res) {
             "[collectPayment] Error sending WhatsApp payment confirmation:",
             err
           );
-          // Do not block or error for WhatsApp failures.
         }
       }
     }
@@ -2433,7 +2489,14 @@ async collectPayment(req, res) {
       payment,
       finance: Array.isArray(financeRecord)
         ? financeRecord[0]
-        : financeRecord
+        : financeRecord,
+      discount: discountApplied
+        ? {
+            percent: appliedDiscountPercent,
+            discountAmount,
+            netAmount: amountToCollect
+          }
+        : undefined
     });
 
   } catch (error) {
@@ -2748,10 +2811,7 @@ async getReceptionDeskDetails(req, res) {
     const todayStr = `${year}-${month}-${day}`;
 
     // Get Today's Bookings: those with at least one session whose date == today
-    // Find *all* bookings that have at least one session scheduled for today, not just one per patient
-    // Each booking may contain multiple sessions, possibly for the same or different patients, but we return all bookings matching the session-date
-    // Instead of returning raw bookings that may have multiple sessions on the same date,
-    // flatten out all sessions for today as separate entries, each with session + booking info
+    // Populate discount details as well
     const rawBookings = await Booking.find({
       "sessions.date": todayStr
     })
@@ -2767,6 +2827,11 @@ async getReceptionDeskDetails(req, res) {
           select: "name"
         }
       })
+      .populate({
+        path: "discountInfo.coupon",
+        model: "Discount",
+        select: "discountEnabled discount couponCode validityDays createdAt"
+      })
       .lean();
 
     // For each session today, create a booking object where sessions contains only that session.
@@ -2775,15 +2840,9 @@ async getReceptionDeskDetails(req, res) {
       if (Array.isArray(booking.sessions)) {
         booking.sessions.forEach(session => {
           if (session.date === todayStr) {
-            // Make a shallow copy of the booking object
             const bookingCopy = { ...booking };
-
-            // Remove the sessions property entirely
             delete bookingCopy.sessions;
-
-            // Also expose the session directly as per current UI needs
             bookingCopy.session = session;
-
             todaysBookings.push(bookingCopy);
           }
         });
@@ -2791,12 +2850,18 @@ async getReceptionDeskDetails(req, res) {
     });
 
     // Get Pending Payment Bookings: those with no payment or incomplete payment
+    // Populate discount details as well
     const pendingPaymentBookings = await Booking.find({})
       .populate({ path: "patient", model: "PatientProfile", select: "name patientId mobile gender" })
       .populate({ path: "therapist", model: "TherapistProfile", select: "name" })
       .populate({ path: "package", model: "Package" })
       .populate({ path: "therapy", model: "TherapyType" })
       .populate({ path: "payment", model: "Payment" })  // Populate payment to check its status
+      .populate({
+        path: "discountInfo.coupon",
+        model: "Discount",
+        select: "discountEnabled discount couponCode validityDays createdAt"
+      })
       .lean();
 
     // Filter bookings: payment is missing OR payment.status !== "completed"
@@ -2810,13 +2875,11 @@ async getReceptionDeskDetails(req, res) {
       return false;
     });
 
-    // Use filteredPendingPaymentBookings as pending payments
-
     res.json({
       success: true,
       today: todayStr,
       todaysBookings,
-      pendingPaymentBookings:filteredPendingPaymentBookings,
+      pendingPaymentBookings: filteredPendingPaymentBookings,
     });
   } catch (error) {
     console.error("[getReceptionDeskDetails] Error:", error);
@@ -2905,6 +2968,8 @@ async getAllSessions(req, res) {
             if (isCheckedIn === "false" && session.isCheckedIn === true) continue;
             if (isCheckedIn === "true" && session.isCheckedIn !== true) continue;
           }
+
+          const therapyTypeName = session.therapyTypeId;
           // Compose item
           sessions.push({
             bookingId: booking._id,
@@ -2912,7 +2977,7 @@ async getAllSessions(req, res) {
             package: booking.package,
             patient: booking.patient,
             therapist: booking.therapist,
-            therapy: booking.therapy,
+            therapy: therapyTypeName,
             session: session,
             // You can add more fields here as necessary for frontend
           });

@@ -491,16 +491,13 @@ class PatientAdminController {
 
       let query = {};
 
-      // Always use patientId for descending sort
-      let sortObj = { patientId: -1 };
-
-      // Fetch all matching patients, populate userId
+      // We want descending "bigger" patientId on top. PatientId is of format "P0001" (string).
+      // Mongoose sort on patientId will NOT produce P0111 > P0109 > P0011 > P0009 (lexical sort). So we must sort in-memory after mapping.
       let patients = await PatientProfile.find(query)
         .populate({ path: "userId" })
-        .sort(sortObj)
         .lean();
 
-      // Search logic as before
+      // Search
       if (search && typeof search === "string" && search.trim().length > 0) {
         const regex = new RegExp(search.trim(), "i");
         patients = patients.filter(p => {
@@ -531,15 +528,15 @@ class PatientAdminController {
 
           return matchesProfile || matchesUser;
         });
-
-        // Resort after in-memory filter, descending patientId
-        patients = patients.sort((a, b) => {
-          // Patient IDs are string like "P0001", so sort as numbers after removing P
-          const aid = parseInt((a.patientId || "").replace(/^P/, "")) || 0;
-          const bid = parseInt((b.patientId || "").replace(/^P/, "")) || 0;
-          return bid - aid;
-        });
       }
+
+      // Always sort biggest patientId (numerically) on top
+      patients = patients.sort((a, b) => {
+        // Extract number part after 'P', fallback to 0
+        const aid = parseInt((a.patientId || "").replace(/^P/i, "")) || 0;
+        const bid = parseInt((b.patientId || "").replace(/^P/i, "")) || 0;
+        return bid - aid;
+      });
 
       const total = patients.length;
       const offset = (page - 1) * pageSize;

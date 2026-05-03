@@ -309,11 +309,9 @@ class TherapistAdminController {
         page = 1,
         pageSize = 20,
         search = "",
-        sortField = "createdAt",
+        sortField = "therapistId", // Default: sort by therapistId (NPL001 format)
         sortOrder = "desc"
       } = req.query;
-
-      
 
       page = parseInt(page, 10) || 1;
       pageSize = parseInt(pageSize, 10) || 20;
@@ -321,9 +319,14 @@ class TherapistAdminController {
       // No filters -- just fetch all
       let query = {};
 
-      // Setup sorting object
+      // Always sort by therapistId as string, but descending (bigger on top)
+      // NPL001, NPL002... so sort lexicographically desc for "bigger on top"
       let sortObj = {};
-      if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+      if (sortField === "therapistId") {
+        sortObj["therapistId"] = sortOrder === "asc" ? 1 : -1; 
+      } else if (sortField) {
+        sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+      }
 
       // Fetch all matching therapists, populate userId for searching in populated data
       let therapists = await TherapistProfile.find(query)
@@ -354,6 +357,19 @@ class TherapistAdminController {
           );
 
           return matchesTherapist || matchesUser;
+        });
+
+        // Resort filtered results by therapistId, desc (bigger on top)
+        therapists.sort((a, b) => {
+          if (a.therapistId && b.therapistId) {
+            if (a.therapistId < b.therapistId) return sortOrder === "asc" ? -1 : 1;
+            if (a.therapistId > b.therapistId) return sortOrder === "asc" ? 1 : -1;
+            return 0;
+          }
+          // If therapistId missing, those items go below
+          if (!a.therapistId) return 1;
+          if (!b.therapistId) return -1;
+          return 0;
         });
       }
 
