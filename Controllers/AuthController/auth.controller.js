@@ -7,7 +7,7 @@ import ExpiredTokenModel from "../../Schema/expired-token.schema.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 import sendMail from "../../config/nodeMailer.config.js";
 import WhatsappController from "../Whatsapp/whatsapp.js"; // Make sure the path is correct based on your project structure
-
+import bcrypt from "bcrypt";
 
 // Allowed roles from user.schema.js (see enum in file_context_2 line 8)
 const ALLOWED_ROLES = ["patient", "therapist", "admin"];
@@ -266,17 +266,17 @@ class AuthController {
       let sendEmailError = null, whatsappError = null;
       let sendEmailPromise = null, sendWhatsappPromise = null;
 
-      if (email) {
-        sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
-          .catch((err) => { sendEmailError = err; });
-      }
-      if (phone) {
-        sendWhatsappPromise = WhatsappController.sendOtpVerification({
-          destination: phone,
-          userName: user.name || "",
-          otp
-        }).catch((err) => { whatsappError = err; });
-      }
+      // if (email) {
+      //   sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
+      //     .catch((err) => { sendEmailError = err; });
+      // }
+      // if (phone) {
+      //   sendWhatsappPromise = WhatsappController.sendOtpVerification({
+      //     destination: phone,
+      //     userName: user.name || "",
+      //     otp
+      //   }).catch((err) => { whatsappError = err; });
+      // }
 
       // Await the sending (both in parallel)
       if (sendEmailPromise) await sendEmailPromise;
@@ -353,6 +353,207 @@ class AuthController {
 
       return res.status(200).json({ message: "Signed out successfully" });
     } catch (error) {
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+  };
+
+
+  // Login with email/phone and password (for patient, therapist, admin)
+  loginWithPassword = async (req, res) => {
+    try {
+      const { email, phone, password } = req.body;
+      if ((!email && !phone) || !password) {
+        return res.status(400).json({ message: "Email or phone and password are required." });
+      }
+
+      // Normalize input
+      let query = {};
+      if (email) query.email = (email || "").trim().toLowerCase();
+      if (phone) query.phone = (phone || "").trim();
+      // Only allow patient, therapist, admin
+      query.role = { $in: ["patient", "therapist", "admin"] };
+
+      const user = await User.findOne(query);
+
+      if (!user) {
+        return res.status(401).json({ message: "Invalid credentials." });
+      }
+
+      // Check if passwordHash is set (for this user/role)
+      if (!user.passwordHash) {
+        return res.status(401).json({ message: "Password login is not available for this user." });
+      }
+
+      // Compare password
+      const isMatch = await bcrypt.compare(password, user.passwordHash);
+      if (!isMatch) {
+        return res.status(401).json({ message: "Invalid credentials." });
+      }
+
+      // Check user status, suspension, etc.
+      if (user.status === "suspended" || user.isDisabled) {
+        return res.status(403).json({ message: "Account is suspended or disabled." });
+      }
+
+      // Prepare JWT payload
+      const payload = {
+        id: user._id,
+        role: user.role,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+      };
+
+      // Issue token (use your secret and setup)
+      const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "24h" });
+
+      // Audit log
+      try {
+        await AuditLogService.addLog({
+          action: `${user.role.toUpperCase()}_LOGIN_PASSWORD`,
+          user: user._id,
+          role: user.role,
+          resource: "User",
+          resourceId: user._id,
+          details: {
+            message: `User logged in via password for userId=${user._id} (${user.email || user.phone})`
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"]
+        });
+      } catch (elog) {
+        // Don't block login, but log error for monitoring
+        console.error("AuditLogService login error:", elog);
+      }
+
+      return res.status(200).json({
+        message: "Login successful",
+        token,
+        user: {
+          id: user._id,
+          role: user.role,
+          name: user.name,
+          email: user.email,
+          phone: user.phone
+        }
+      });
+    } catch (err) {
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+  };
+
+  // Reset password for parent, therapist, and admin (NOT superadmin)
+  resetPassword = async (req, res) => {
+    const session = await User.startSession();
+    session.startTransaction();
+    try {
+      const { id, role } = req.user;
+
+      // Console log the requesting user info
+      console.log(`[resetPassword] Requested by User: id=${id}, role=${role}`);
+
+      // Only allow for patient, therapist, admin (not superadmin)
+      if (!id || !["patient", "therapist", "admin"].includes(role)) {
+        console.log(`[resetPassword] Unauthorized attempt by id=${id}, role=${role}`);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(403).json({ message: "Unauthorized. Only parent (patient), therapist, or admin can reset password." });
+      }
+
+      const { newPassword } = req.body;
+      if (!newPassword || newPassword.length < 6) {
+        console.log(`[resetPassword] Invalid password length: length=${newPassword ? newPassword.length : 'undefined'}`);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ message: "Password must be at least 6 characters." });
+      }
+
+      // Fetch the user and update password
+      const newPasswordHash = await bcrypt.hash(newPassword, 10);
+      const user = await User.findOneAndUpdate(
+        { _id: id, role },
+        { passwordHash: newPasswordHash },
+        { new: true, session }
+      );
+
+      if (!user) {
+        console.log(`[resetPassword] User not found for id=${id}, role=${role}`);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ message: "User not found." });
+      }
+
+      // Audit Log (must succeed for transaction)
+      try {
+        await AuditLogService.addLog(
+          {
+            action: `${role.toUpperCase()}_PASSWORD_RESET`,
+            user: user._id,
+            role: user.role,
+            resource: "User",
+            resourceId: user._id,
+            details: {
+              changedFields: {
+                passwordHash: { from: "hidden", to: "hidden" }
+              },
+              message: `${role.charAt(0).toUpperCase() + role.slice(1)} password was reset for userId=${user._id} (${user.email || user.phone})`
+            },
+            ipAddress: req.ip,
+            userAgent: req.headers["user-agent"]
+          },
+          { session }
+        );
+        console.log(`[resetPassword] Audit log added for userId=${user._id}, role=${role}`);
+      } catch (elog) {
+        console.log(`[resetPassword] Audit log creation failed, aborting transaction. userId=${user._id}, role=${role}`, elog);
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({ message: "Audit log creation failed. Password reset aborted." });
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+      console.log(`[resetPassword] Password reset committed for userId=${user._id}, role=${role}`);
+
+      // Optional: Send notification to user (email/whatsapp) on password reset
+      try {
+        const now = new Date();
+        const dateTime = now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+        const userNameParam = user.name || (user.email || user.phone || "User");
+        const device = req.headers["user-agent"] || "Unknown device";
+        const location = req.headers["x-forwarded-for"] || req.ip || "Unknown location";
+        // Send email if user has email
+        if (user.email) {
+          await sendMail(
+            user.email,
+            "Your Password Was Reset",
+            `Hi ${user.name || ""},\n\nYour password was successfully reset on ${dateTime} IST, from device: ${device} and IP: ${location}.\nIf you did not perform this action, please contact support immediately.`
+          );
+          console.log(`[resetPassword] Email sent for userId=${user._id}, email=${user.email}`);
+        }
+        // Send WhatsApp if user has phone
+        if (user.phone && WhatsappController && typeof WhatsappController.sendUserPasswordResetSuccess === "function") {
+          await WhatsappController.sendUserPasswordResetSuccess({
+            destination: user.phone,
+            userName: user.name || "",
+            userNameParam,
+            dateTime,
+            device,
+            location,
+            role,
+          });
+          console.log(`[resetPassword] WhatsApp notification sent for userId=${user._id}, phone=${user.phone}`);
+        }
+      } catch (notifyErr) {
+        // Notification errors are not blocking
+        console.log(`[resetPassword] Failed to notify ${role} of password reset, userId=${user._id}`, notifyErr);
+      }
+
+      return res.status(200).json({ message: "Password reset successfully." });
+    } catch (error) {
+      console.log(`[resetPassword] Internal server error, user.id=${req.user?.id}, role=${req.user?.role}`, error);
+      await session.abortTransaction();
+      session.endSession();
       return res.status(500).json({ message: "Internal Server Error" });
     }
   };

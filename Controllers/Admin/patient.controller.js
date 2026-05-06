@@ -6,7 +6,7 @@ import { deleteUploadedFiles } from "../../middlewares/fileDelete.middleware.js"
 import WhatsappController from "../Whatsapp/whatsapp.js"; 
 
 
-// Utility: Get next patient sequence for PatientID generation
+// Utility: Get next Children sequence for PatientID generation
 const getNextSequence = async (name) => {
   const counter = await Counter.findOneAndUpdate(
     { name },
@@ -16,13 +16,13 @@ const getNextSequence = async (name) => {
   return counter.seq;
 };
 
-// Format patient ID as P + 4-digit padded number (e.g., P0001, P0056)
+// Format Children ID as P + 4-digit padded number (e.g., P0001, P0056)
 const generatePatientId = (seq) => {
   return `P${seq.toString().padStart(4, "0")}`;
 };
 
 class PatientAdminController {
-  // Add new patient (user + patient profile)
+  // Add new Children (user + Children profile)
   async addPatient(req, res) {
     // Handle and log file paths if files were uploaded
     if (req.files) {
@@ -314,7 +314,7 @@ class PatientAdminController {
               name: childFullName,
               phone: mobile1Trimmed,
               patientId: patientProfile.patientId,
-              message: `Patient profile created for ${childFullName} (${emailTrimmed})`,
+              message: `Children profile created for ${childFullName} (${emailTrimmed})`,
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"],
@@ -352,7 +352,7 @@ class PatientAdminController {
 
         return res.status(201).json({
           success: true,
-          message: "Patient created successfully.",
+          message: "Children created successfully.",
           patient: {
             ...patientProfile.toObject(),
             userId: user,
@@ -402,14 +402,14 @@ class PatientAdminController {
             name: childFullName,
             phone: mobile1Trimmed,
             patientId: patientProfile.patientId,
-            message: `Patient profile created for ${childFullName} (${emailTrimmed}) (existing user)`,
+            message: `Children profile created for ${childFullName} (${emailTrimmed}) (existing user)`,
           },
           ipAddress: req.ip,
           userAgent: req.headers["user-agent"],
         });
       } catch (logErr) {
         console.error(
-          "Failed to write audit log (PATIENT_PROFILE_CREATED) in addPatient (existing user):",
+          "Failed to write audit log (PATIENT_PROFILE_CREATED) in addChildren (existing user):",
           logErr
         );
       }
@@ -437,7 +437,7 @@ class PatientAdminController {
 
       return res.status(201).json({
         success: true,
-        message: "Patient created successfully.",
+        message: "Children created successfully.",
         patient: {
           ...patientProfile.toObject(),
           userId: user,
@@ -458,7 +458,7 @@ class PatientAdminController {
           resourceId: null,
           details: {
             error: error.message || (typeof error === "string" ? error : JSON.stringify(error)),
-            message: "Patient creation failed.",
+            message: "Children creation failed.",
           },
           ipAddress: req.ip,
           userAgent: req.headers["user-agent"],
@@ -555,16 +555,16 @@ class PatientAdminController {
     }
   }
 
-  // Fetch single patient by ID (patient profile)
+  // Fetch single Children by ID (Children profile)
   async getPatientById(req, res) {
     try {
       const { id } = req.params;
       if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ message: "Invalid patient ID." });
+        return res.status(400).json({ message: "Invalid Children ID." });
       }
       const profile = await PatientProfile.findById(id).populate("userId");
       if (!profile) {
-        return res.status(404).json({ message: "Patient not found." });
+        return res.status(404).json({ message: "Children not found." });
       }
       return res.json({ success: true, patient: profile });
     } catch (error) {
@@ -572,7 +572,7 @@ class PatientAdminController {
     }
   }
 
-  // Update/edit patient profile (and update child name on User if present) -- now with transaction & mandatory audit log
+  // Update/edit Children profile (and update child name on User if present) -- now with transaction & mandatory audit log
   async editPatient(req, res) {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -581,7 +581,7 @@ class PatientAdminController {
       if (!mongoose.Types.ObjectId.isValid(id)) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ message: "Invalid patient ID." });
+        return res.status(400).json({ message: "Invalid Children ID." });
       }
       const update = req.body;
 
@@ -592,7 +592,7 @@ class PatientAdminController {
       if (!patientProfile) {
         await session.abortTransaction();
         session.endSession();
-        return res.status(404).json({ message: "Patient not found." });
+        return res.status(404).json({ message: "Children not found." });
       }
 
       // Fetch current association for comparison
@@ -616,20 +616,20 @@ class PatientAdminController {
       }
 
       if (associationCheckNeeded) {
-        // Check for an existing patient with newEmail as parentEmail and newMobile as mobile1
+        // Check for an existing Children with newEmail as parentEmail and newMobile as mobile1
         const patientWithBoth = await PatientProfile.findOne({
           email: newEmail,
           mobile1: newMobile,
           _id: { $ne: patientProfile._id }
         }).session(session);
 
-        // Check for any patient with newEmail and another phone
+        // Check for any Children with newEmail and another phone
         const patientWithEmail = await PatientProfile.findOne({
           email: newEmail,
           _id: { $ne: patientProfile._id }
         }).session(session);
 
-        // Check for any patient with newMobile and another email
+        // Check for any Children with newMobile and another email
         const patientWithMobile = await PatientProfile.findOne({
           mobile1: newMobile,
           _id: { $ne: patientProfile._id }
@@ -744,7 +744,7 @@ class PatientAdminController {
         }
       }
 
-      // ---- AUDIT LOG: Patient profile edited ----
+      // ---- AUDIT LOG: Children profile edited ----
       // Always attempt audit log: if log fails, abort transaction and send failure
       try {
         await AuditLogService.addLog({
@@ -757,7 +757,7 @@ class PatientAdminController {
             changedFields,
             patientId: patientProfile.patientId,
             childFullName: patientProfile.childFullName,
-            message: `Patient profile edited for ${patientProfile.childFullName || patientProfile.name} (${patientProfile.parentEmail || patientProfile.email})`
+            message: `Children profile edited for ${patientProfile.childFullName || patientProfile.name} (${patientProfile.parentEmail || patientProfile.email})`
           },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
@@ -768,17 +768,17 @@ class PatientAdminController {
         session.endSession();
         return res.status(500).json({
           success: false,
-          message: "Failed to write audit log. Patient update not saved.",
+          message: "Failed to write audit log. Children update not saved.",
           error: logErr.message
         });
       }
 
       await session.commitTransaction();
       session.endSession();
-      // Get updated patient after commit (outside txn for consistency)
+      // Get updated Children after commit (outside txn for consistency)
       const updated = await PatientProfile.findById(id).populate("userId");
 
-      return res.json({ success: true, message: "Patient updated successfully.", patient: updated });
+      return res.json({ success: true, message: "Children updated successfully.", patient: updated });
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
@@ -786,16 +786,16 @@ class PatientAdminController {
     }
   }
 
-  // Delete patient (both patient profile and user)
+  // Delete Children (both Children profile and user)
   // async deletePatient(req, res) {
   //   try {
   //     const { id } = req.params;
   //     if (!mongoose.Types.ObjectId.isValid(id)) {
-  //       return res.status(400).json({ success: false, message: "Invalid patient ID." });
+  //       return res.status(400).json({ success: false, message: "Invalid Children ID." });
   //     }
   //     const patientProfile = await PatientProfile.findById(id);
   //     if (!patientProfile) {
-  //       return res.status(404).json({ success: false, message: "Patient not found." });
+  //       return res.status(404).json({ success: false, message: "Children not found." });
   //     }
   //     // Delete PatientProfile
   //     await PatientProfile.findByIdAndDelete(id);
@@ -803,7 +803,7 @@ class PatientAdminController {
   //     if (patientProfile.userId) {
   //       await User.findByIdAndDelete(patientProfile.userId);
   //     }
-  //     return res.json({ success: true, message: "Patient deleted successfully." });
+  //     return res.json({ success: true, message: "Children deleted successfully." });
   //   } catch (error) {
   //     return res.status(500).json({ success: false, message: "Failed to delete patient.", error: error.message });
   //   }

@@ -14,6 +14,12 @@ authRouter.post("/", jwtAuth, authController.checkAuth);
 authRouter.post("/signin", authController.signin);
 authRouter.post("/verify-account", authController.verifyAccount);
 authRouter.post("/signout", jwtAuth, authController.signOut);
+// Login with password for patient, therapist, admin
+authRouter.post("/login", authController.loginWithPassword);
+
+// Reset password for patient, therapist, admin
+authRouter.post("/reset-password", jwtAuth, authController.resetPassword);
+
 
 
 

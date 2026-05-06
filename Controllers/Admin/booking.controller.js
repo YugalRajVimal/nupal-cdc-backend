@@ -803,7 +803,7 @@ class BookingAdminController {
 
       // ---- WhatsApp Integration ----
       try {
-        // patient details: phone, name
+        // Children details: phone, name
         let phoneNo;
         let patientName;
         if (populatedBooking?.patient) {
@@ -1487,7 +1487,7 @@ class BookingAdminController {
             invoiceNumber,
             remark,
             status,
-            message: `Booking updated for patient ${patientId} with therapist ${auditTherapistText}, package ${packageId}, therapy ${therapyId}`
+            message: `Booking updated for Children ${patientId} with therapist ${auditTherapistText}, package ${packageId}, therapy ${therapyId}`
           },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
@@ -1506,14 +1506,14 @@ class BookingAdminController {
       }
 
       // --- WhatsApp message logic after update, before commit ---
-      // Only send message if booking and patient populated, and sendWhatsAppMessage available
+      // Only send message if booking and Children populated, and sendWhatsAppMessage available
       if (
         booking &&
-        booking.patient &&
+        booking.Children &&
         booking.patient.userId
       ) {
         try {
-          // patient phone, fallback to empty string if not found
+          // Children phone, fallback to empty string if not found
           let destination = "";
           let userName = "";
           let patientName = "";
@@ -1525,10 +1525,10 @@ class BookingAdminController {
           if (booking.patient.userId && booking.patient.userId.phone) {
             destination = booking.patient.userId.phone;
           }
-          if (booking.patient && booking.patient.fullName) {
+          if (booking.Children && booking.patient.fullName) {
             userName = booking.patient.fullName;
             patientName = booking.patient.fullName;
-          } else if (booking.patient && booking.patient.name) {
+          } else if (booking.Children && booking.patient.name) {
             userName = booking.patient.name;
             patientName = booking.patient.name;
           }
@@ -1710,7 +1710,7 @@ class BookingAdminController {
           { path: "package", select: "name totalSessions sessionCount costPerSession totalCost", model: "Package" },
           {
             path: "appointmentId",
-            select: "appointmentId patient therapy package sessions",
+            select: "appointmentId Children therapy package sessions",
             model: "Booking"
           }
         ]);
@@ -1724,7 +1724,7 @@ class BookingAdminController {
           if (br.requestId && String(br.requestId).toLowerCase().includes(s)) return true;
           // Patient: name, patientId, phoneNo, mobile1, email
           if (
-            br.patient &&
+            br.Children &&
             (
               (br.patient.name && br.patient.name.toLowerCase().includes(s)) ||
               (br.patient.patientId && br.patient.patientId.toLowerCase().includes(s)) ||
@@ -1788,7 +1788,7 @@ class BookingAdminController {
       await session.startTransaction();
 
       // Find booking request with relevant populations for WhatsApp info
-      // We'll want patient info, and maybe also appointmentId
+      // We'll want Children info, and maybe also appointmentId
       const bookingRequest = await BookingRequests.findById(id)
         .populate({
           path: "patient",
@@ -1810,12 +1810,14 @@ class BookingAdminController {
       if (bookingRequest.status === "rejected") {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ success: false, message: "Booking request already rejected." });
+        return res.status(400).json({ success: false, message: "Booking request has already been processed as not approved." });
+   
       }
       if (bookingRequest.status === "approved") {
         await session.abortTransaction();
         session.endSession();
-        return res.status(400).json({ success: false, message: "Booking request already approved. Cannot reject." });
+        return res.status(400).json({ success: false, message: "Booking request already approved. Cannot mark as not approved." });
+   
       }
 
       const previousBookingRequest = bookingRequest.toObject();
@@ -1837,7 +1839,8 @@ class BookingAdminController {
               updated: bookingRequest,
               rejectedBy: req.user?.id,
               appointmentId: bookingRequest.appointmentId || null,
-              message: `Booking request rejected by admin ${req.user?.id}`
+              message: `Booking request not approved by admin ${req.user?.id}`
+         
             },
             ipAddress: req.ip,
             userAgent: req.headers['user-agent']
@@ -1849,7 +1852,8 @@ class BookingAdminController {
         session.endSession();
         return res.status(500).json({
           success: false,
-          message: "Failed to reject booking request (audit log failure).",
+          message: "Failed to mark booking request as not approved (audit log failure).",
+     
           error: logError?.message || "Audit logging failed.",
         });
       }
@@ -1900,7 +1904,8 @@ class BookingAdminController {
         console.error("[rejectBookingRequest] Failed to send WhatsApp notification:", waErr);
       }
 
-      res.json({ success: true, message: "Booking request rejected successfully." });
+      res.json({ success: true, message: "Booking request declined successfully." });
+ 
     } catch (error) {
       if (session) {
         await session.abortTransaction();
@@ -1909,7 +1914,8 @@ class BookingAdminController {
       console.error("[rejectBookingRequest] Error:", error);
       res.status(500).json({
         success: false,
-        message: "Failed to reject booking request.",
+        message: "Failed to process booking request decline.",
+   
         error: error.message,
       });
     }
@@ -1960,7 +1966,7 @@ async getAllSessionEditRequests(req, res) {
             select: 'name'
           },
         ],
-        select: 'patient therapy appointmentId sessions'
+        select: 'Children therapy appointmentId sessions'
       })
       .lean();
 
@@ -1987,7 +1993,7 @@ async getAllSessionEditRequests(req, res) {
           ) {
             return true;
           }
-          // patient populated fields
+          // Children populated fields
           if (appt.patient) {
             if ((appt.patient.name && appt.patient.name.toLowerCase().includes(s)) ||
                 (appt.patient.patientId && String(appt.patient.patientId).toLowerCase().includes(s)) ||
@@ -2045,7 +2051,7 @@ async approveSessionEditRequest(req, res) {
       return res.status(400).json({ success: false, message: "Session edit request ID required." });
     }
 
-    // Populate appointment and patient for WhatsApp
+    // Populate appointment and Children for WhatsApp
     const editReq = await SessionEditRequest.findById(id)
       .populate({
         path: "appointmentId",
@@ -2091,7 +2097,7 @@ async approveSessionEditRequest(req, res) {
 
     // --- WhatsApp Notification ---
     try {
-      // Get patient info for WhatsApp
+      // Get Children info for WhatsApp
       let patientProfile = editReq.appointmentId.patient;
       let patientName = patientProfile && patientProfile.name ? patientProfile.name : "User";
       let patientMobile = patientProfile && patientProfile.mobile1 
@@ -2133,7 +2139,7 @@ async rejectSessionEditRequest(req, res) {
     if (!id) {
       return res.status(400).json({ success: false, message: "Session edit request ID required." });
     }
-    // Populate appointment and patient for WhatsApp
+    // Populate appointment and Children for WhatsApp
     const editReq = await SessionEditRequest.findById(id)
       .populate({
         path: "appointmentId",
@@ -2156,7 +2162,7 @@ async rejectSessionEditRequest(req, res) {
 
     // --- WhatsApp Notification ---
     try {
-      // Get patient info for WhatsApp
+      // Get Children info for WhatsApp
       let patientProfile = editReq.appointmentId.patient;
       let patientName = patientProfile && patientProfile.name ? patientProfile.name : "User";
       let patientMobile = patientProfile && patientProfile.mobile1 
@@ -2429,9 +2435,9 @@ async collectPayment(req, res) {
     await session.commitTransaction();
     session.endSession();
 
-    // Send WhatsApp message if payment recorded and patient has mobile number
+    // Send WhatsApp message if payment recorded and Children has mobile number
     if (paymentStatusChanged) {
-      // Only attempt if patient exist
+      // Only attempt if Children exist
       let patientProfile = booking.patient;
       let userPhone =
         (patientProfile && patientProfile.mobile1) ||
@@ -2511,7 +2517,7 @@ async collectPayment(req, res) {
   }
 }
 
-// Check-in a patient for a booking
+// Check-in a Children for a booking
 async checkIn(req, res) {
   const session = await Booking.startSession();
   session.startTransaction();
@@ -2567,7 +2573,7 @@ async checkIn(req, res) {
       session.endSession();
       return res.status(200).json({
         success: true,
-        message: "Patient already checked in for this session.",
+        message: "Children already checked in for this session.",
         booking
       });
     }
@@ -2615,13 +2621,13 @@ async checkIn(req, res) {
     session.endSession();
 
     // --- SEND WHATSAPP CHECK-IN NOTIFICATION ---
-    // Make sure to send correct data to whatsapp (patient name, phone number, appointmentId, sessionId, checkIn time, therapist, etc.)
+    // Make sure to send correct data to whatsapp (Children name, phone number, appointmentId, sessionId, checkIn time, therapist, etc.)
     try {
       // Import WhatsappController only when needed to avoid cycles, or move to top if safe
       // import WhatsappController from "../Whatsapp/whatsapp.js";
       const WhatsappController = (await import("../Whatsapp/whatsapp.js")).default;
 
-      // Patient profile
+      // Children profile
       let patientName = "";
       let patientPhone = "";
       if (booking.patient) {
@@ -2672,7 +2678,7 @@ async checkIn(req, res) {
 
     res.json({
       success: true,
-      message: "Patient checked in successfully for this session.",
+      message: "Children checked in successfully for this session.",
       booking
     });
   } catch (error) {
@@ -2687,7 +2693,7 @@ async checkIn(req, res) {
   }
 }
 
-// Check-in a patient for a booking
+// Check-in a Children for a booking
 // async checkIn(req, res) {
 //   const session = await Booking.startSession();
 //   session.startTransaction();
@@ -2738,7 +2744,7 @@ async checkIn(req, res) {
 //       session.endSession();
 //       return res.status(200).json({
 //         success: true,
-//         message: "Patient already checked in for this session.",
+//         message: "Children already checked in for this session.",
 //         booking
 //       });
 //     }
@@ -2786,7 +2792,7 @@ async checkIn(req, res) {
 
 //     res.json({
 //       success: true,
-//       message: "Patient checked in successfully for this session.",
+//       message: "Children checked in successfully for this session.",
 //       booking
 //     });
 //   } catch (error) {
@@ -2913,13 +2919,13 @@ async getAllSessions(req, res) {
     } = req.query;
 
     // We need: 
-    // - Booking populated with patient ("PatientProfile"), package, therapy ("TherapyType"), therapist ("TherapistProfile")
+    // - Booking populated with Children ("PatientProfile"), package, therapy ("TherapyType"), therapist ("TherapistProfile")
     // - Each session in booking.sessions with therapist, therapyTypeId populated
     // - Flatten to array: [{ session, booking }]
 
     // Build booking query level filters
     const bookingQuery = {};
-    if (patientId) bookingQuery.patient = patientId;
+    if (patientId) bookingQuery.Children = patientId;
     if (therapistId) bookingQuery.therapist = therapistId; // legacy: top-level therapist
 
     // Fetch bookings
@@ -3027,7 +3033,7 @@ async getAllSessions(req, res) {
 
       // If filtering by patientId (from PatientProfile), add a direct filter
       if (patientId) {
-        bookingQuery.patient = patientId;
+        bookingQuery.Children = patientId;
       }
 
       // Fetch all relevant bookings with population
@@ -3106,11 +3112,11 @@ async getAllSessions(req, res) {
                   : undefined;
               if (!sD || sD !== targetDate) return;
             }
-            // 5. search: match in patient name, therapist name, therapyType name
+            // 5. search: match in Children name, therapist name, therapyType name
             if (search && search.trim().length > 0) {
               const q = search.trim().toLowerCase();
 
-              const patientName = (booking.patient && booking.patient.name) ? booking.patient.name.toLowerCase() : "";
+              const patientName = (booking.Children && booking.patient.name) ? booking.patient.name.toLowerCase() : "";
               const therapistName = (session.therapist && session.therapist.userId && session.therapist.userId.name) ? session.therapist.userId.name.toLowerCase() : "";
               const therapyTypeName = (session.therapyTypeId && session.therapyTypeId.name) ? session.therapyTypeId.name.toLowerCase() : "";
 
@@ -3127,8 +3133,8 @@ async getAllSessions(req, res) {
 
             // Prepare output fields
             let patientInfo = {
-              patientId: booking.patient && booking.patient.patientId ? booking.patient.patientId : undefined,
-              name: (booking.patient && booking.patient.name)
+              patientId: booking.Children && booking.patient.patientId ? booking.patient.patientId : undefined,
+              name: (booking.Children && booking.patient.name)
                 ? booking.patient.name
                 : undefined,
             };

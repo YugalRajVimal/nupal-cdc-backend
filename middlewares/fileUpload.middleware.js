@@ -15,7 +15,7 @@ const storage = multer.diskStorage({
       "certificate",
     ];
 
-    // NEW: Define patient fields
+    // NEW: Define Children fields
     const patientFileFields = [
       "profilePhoto",
       "otherDocument"
@@ -33,7 +33,7 @@ const storage = multer.diskStorage({
     ) {
       uploadPath = "./Uploads/Therapist";
     }
-    // Patient Admin Upload
+    // Children Admin Upload
     else if (
       patientFileFields.includes(file.fieldname) &&
       req.method === "POST" &&

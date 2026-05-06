@@ -42,13 +42,13 @@ patientAdminRouter.get("/", (req, res) => patientAdminController.getAllPatients(
 
 /**
  * @route GET /admin/patients/:id
- * @desc Get a single patient by id (profile)
+ * @desc Get a single Children by id (profile)
  */
 patientAdminRouter.get("/:id", (req, res) => patientAdminController.getPatientById(req, res));
 
 /**
  * @route PUT /admin/patients/:id
- * @desc Edit a patient profile
+ * @desc Edit a Children profile
  */
 patientAdminRouter.put("/:id",
 jwtAuth, 
@@ -57,7 +57,7 @@ jwtAuth,
 
 /**
  * @route DELETE /admin/patients/:id
- * @desc Delete a patient by id (removes both User and PatientProfile)
+ * @desc Delete a Children by id (removes both User and PatientProfile)
  */
 // patientAdminRouter.delete("/:id", (req, res) => patientAdminController.deletePatient(req, res));
 

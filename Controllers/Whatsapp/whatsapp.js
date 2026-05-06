@@ -187,7 +187,7 @@ class WhatsappController {
    * @param {string} options.destination - WhatsApp number (with country code, e.g., '919999999999').
    * @param {string} options.userName - Name of the user (goes into {{1}}).
    * @param {string} options.appointmentId - Appointment ID ({{2}}).
-   * @param {string} options.patientName - Patient Name ({{3}}).
+   * @param {string} options.patientName - Children Name ({{3}}).
    * @param {string} options.therapist - Therapist Name ({{4}}).
    * @param {string|number} options.totalSessions - Total Sessions ({{5}}).
    * @param {string} options.paymentId - Payment ID ({{6}}).
@@ -245,7 +245,7 @@ class WhatsappController {
   }
 
 /**
- * Sends a WhatsApp message when children registration (patient profile) is successful.
+ * Sends a WhatsApp message when children registration (Children profile) is successful.
  *
  * Template:
  *  - campaignName: "Children Registration Successfull"
@@ -259,7 +259,7 @@ class WhatsappController {
  * @param {Object} params
  * @param {string} params.destination - WhatsApp phone number (with country code)
  * @param {string} params.userName - User's name (for greeting)
- * @param {string} params.patientName - The name of the patient (child)
+ * @param {string} params.patientName - The name of the Children (child)
  * @param {string} params.patientId - Patient/child unique ID
  * @param {string} params.registeredMobile - Mobile number registered for the patient
  * @param {string} params.createdOn - Date of registration/creation (string)
@@ -606,7 +606,7 @@ async sendTherapistPaymentInitiated({
  * Template variables:
  *   {{1}} - User Name
  *   {{2}} - Child Name
- *   {{3}} - Patient ID
+ *   {{3}} - Children ID
  * 
  * Example call:
  *   await sendChildrenProfileCompleted({

@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 
 /**
  * Valid names:
- * - 'patient'                   => For Patient Code: P0001, P0002, ... (3 zeros before 1)
+ * - 'patient'                   => For Children Code: P0001, P0002, ... (3 zeros before 1)
  * - 'appointment'               => For Appointment Code: B000001, B000002, ... (5 zeros before 1)
  * - 'lead'                      => For Lead Code: L00001, L00002, ... (4 zeros before 1)
  * - 'therapist'                 => For Therapist/Employee Code: NPL001, NPL002, ... (2 zeros before 1)

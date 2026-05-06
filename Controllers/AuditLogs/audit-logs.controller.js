@@ -54,11 +54,11 @@ class AuditLogService {
         .lean();
 
       // Prepare sets for efficient lookups
-      const userIdsToPatient = new Set();
+      const userIdsToChildren = new Set();
       const userIdsToTherapist = new Set();
       const userIdsToAdmin = new Set();
       const userIdsToSuperAdmin = new Set();
-      const resourceIdsToPatient = new Set();
+      const resourceIdsToChildren = new Set();
       const resourceIdsToTherapist = new Set();
       const resourceIdsToBookingRequest = new Set();
       const resourceIdsToUserForAdmin = new Set(); // Only for admin and superadmin
@@ -72,7 +72,7 @@ class AuditLogService {
       const userIdsForParentResourceUser = new Set();
 
       logsRaw.forEach(log => {
-        // For parent & patient roles, user field may need patientId lookup
+        // For parent & Children roles, user field may need patientId lookup
         if (
           (log.role === "parent" || log.role === "patient") &&
           log.user
@@ -97,7 +97,7 @@ class AuditLogService {
         ) {
           userIdsToSuperAdmin.add(log.user.toString());
         }
-        // For ParentProfile/Patient resource, resourceId is likely patientProfile._id
+        // For ParentProfile/Children resource, resourceId is likely patientProfile._id
         if (
           (log.resource === "ParentProfile" || log.resource === "Parent" || log.resource === "patient") &&
           log.resourceId
@@ -137,7 +137,7 @@ class AuditLogService {
         ) {
           resourceIdsToUserForTherapist.add(log.resourceId.toString());
         }
-        // For Parent role and resource is User, collect user ID for patient ids mapping (our custom logic)
+        // For Parent role and resource is User, collect user ID for Children ids mapping (our custom logic)
         if (
           log.resource &&
           log.resource.toUpperCase() === "USER" &&
@@ -219,7 +219,7 @@ class AuditLogService {
       const patientIdsByUserIdForParentResourceUser = {};
 
       if (needPatientQuery) {
-        // Get PatientProfiles by userId (for parent/patient role user field)
+        // Get PatientProfiles by userId (for parent/Children role user field)
         const userIds = Array.from(new Set([
           ...userIdsToPatient,
           ...userIdsForParentResourceUser

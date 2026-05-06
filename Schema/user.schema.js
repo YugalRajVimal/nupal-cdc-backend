@@ -64,7 +64,7 @@ const UserSchema = new mongoose.Schema(
    2. ROLE-SPECIFIC PROFILE TABLES
    ================================ */
 
-// Patient Profile (extended with child/patient details)
+// Children Profile (extended with child/Children details)
 const PatientProfileSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   name: { type: String, required: true },

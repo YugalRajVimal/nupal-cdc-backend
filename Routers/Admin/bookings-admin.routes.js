@@ -75,7 +75,7 @@ bookingsAdminRouter.post("/:id/collect-payment",jwtAuth, (req, res) =>
 
 /**
  * @route POST /api/admin/bookings/check-in
- * @desc Check-in a patient for a booking
+ * @desc Check-in a Children for a booking
  */
 bookingsAdminRouter.post("/check-in",jwtAuth, (req, res) =>
   bookingAdminController.checkIn(req, res)

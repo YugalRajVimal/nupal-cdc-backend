@@ -52,10 +52,10 @@ class CashfreeController {
         model: PatientProfile,
       });
 
-      let patient = null;
+      let Children = null;
       if (booking && booking.patient) {
-        // patient in booking refers to PatientProfile
-        patient = await PatientProfile.findById(booking.patient._id || booking.patient);
+        // Children in booking refers to PatientProfile
+        Children = await PatientProfile.findById(booking.patient._id || booking.patient);
       }
 
       // Always generate a new unique orderId
@@ -77,8 +77,8 @@ class CashfreeController {
         customer_email = patient.parentEmail || '';
         customer_id = patient.patientId || `guest-${orderId}`;
       } else if (booking && booking.patient) {
-        // fallback: booking's patient field populated
-        if (typeof booking.patient === 'object') {
+        // fallback: booking's Children field populated
+        if (typeof booking.Children === 'object') {
           customer_name = booking.patient.name || '';
           customer_phone = booking.patient.mobile1 || '';
           customer_email = booking.patient.parentEmail || '';
