@@ -266,17 +266,17 @@ class AuthController {
       let sendEmailError = null, whatsappError = null;
       let sendEmailPromise = null, sendWhatsappPromise = null;
 
-      // if (email) {
-      //   sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
-      //     .catch((err) => { sendEmailError = err; });
-      // }
-      // if (phone) {
-      //   sendWhatsappPromise = WhatsappController.sendOtpVerification({
-      //     destination: phone,
-      //     userName: user.name || "",
-      //     otp
-      //   }).catch((err) => { whatsappError = err; });
-      // }
+      if (email) {
+        sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
+          .catch((err) => { sendEmailError = err; });
+      }
+      if (phone) {
+        sendWhatsappPromise = WhatsappController.sendOtpVerification({
+          destination: phone,
+          userName: user.name || "",
+          otp
+        }).catch((err) => { whatsappError = err; });
+      }
 
       // Await the sending (both in parallel)
       if (sendEmailPromise) await sendEmailPromise;
