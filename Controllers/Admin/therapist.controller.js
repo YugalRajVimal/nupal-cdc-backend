@@ -425,8 +425,8 @@ class TherapistAdminController {
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
 
-      const { email, phone, mobile1, ...profileFields } = req.body || {};
-      console.log("[editTherapist] Incoming profileFields:", profileFields, "email:", email, "phone:", phone, "mobile1:", mobile1);
+      const { email, phone, mobile1, name, ...profileFields } = req.body || {};
+      console.log("[editTherapist] Incoming profileFields:", profileFields, "email:", email, "phone:", phone, "mobile1:", mobile1, "name:", name);
 
       Object.keys(profileFields).forEach(
         (key) => profileFields[key] === undefined && delete profileFields[key]
@@ -506,9 +506,9 @@ class TherapistAdminController {
         }
       }
 
-      // Handle User (email/phone) updates separately; only include them if changed
+      // Handle User (email/phone/name) updates separately; only include them if changed
       let userChangedFields = {};
-      if (email || phone || mobile1) {
+      if (email || phone || mobile1 || name) {
         const therapist = await TherapistProfile.findById(id).session(session);
         if (therapist && therapist.userId) {
           const user = await User.findById(therapist.userId).session(session);
@@ -523,6 +523,10 @@ class TherapistAdminController {
           } else if (typeof mobile1 !== "undefined" && mobile1 !== user.phone) {
             userUpdate.phone = mobile1;
             userChangedFields.phone = { from: user.phone, to: mobile1 };
+          }
+          if (typeof name !== "undefined" && name !== user.name) {
+            userUpdate.name = name;
+            userChangedFields.name = { from: user.name, to: name };
           }
           if (Object.keys(userUpdate).length > 0) {
             console.log(`[editTherapist] Updating User (userId: ${therapist.userId}) with:`, userUpdate);
@@ -550,7 +554,6 @@ class TherapistAdminController {
 
       // === Mandatory Audit Log (must succeed for transaction) ===
       try {
-      
         await AuditLogService.addLog(
           {
             action: "THERAPIST_PROFILE_EDITED",
