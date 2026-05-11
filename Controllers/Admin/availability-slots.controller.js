@@ -410,17 +410,41 @@ class AavailabilitySlotsAdminController {
 
       // 5. Aggregate per date/therapist/slot
       const bookedSlotsByDate = {};
+      // for (const bk of bookings) {
+      //   const therapistObjId = String(bk.therapist);
+      //   const therapistId = therapistIdMap[therapistObjId];
+      //   if (!therapistId) continue;
+      //   if (!bk.sessions || !Array.isArray(bk.sessions)) continue;
+      //   for (const sess of bk.sessions) {
+      //     const sessDate = sess.date;
+      //     const slotId = sess.slotId || sess.id;
+      //     if (!sessDate || !slotId) continue;
+      //     if (!bookedSlotsByDate[sessDate]) bookedSlotsByDate[sessDate] = {};
+      //     if (!bookedSlotsByDate[sessDate][therapistId]) bookedSlotsByDate[sessDate][therapistId] = new Set();
+      //     bookedSlotsByDate[sessDate][therapistId].add(slotId);
+      //   }
+      // }
       for (const bk of bookings) {
-        const therapistObjId = String(bk.therapist);
-        const therapistId = therapistIdMap[therapistObjId];
-        if (!therapistId) continue;
         if (!bk.sessions || !Array.isArray(bk.sessions)) continue;
+      
         for (const sess of bk.sessions) {
           const sessDate = sess.date;
           const slotId = sess.slotId || sess.id;
           if (!sessDate || !slotId) continue;
+      
+          // ✅ Use session-level therapist, not booking-level
+          const sessTherapistObjId = sess.therapist
+            ? String(typeof sess.therapist === "object" && sess.therapist._id
+                ? sess.therapist._id
+                : sess.therapist)
+            : String(bk.therapist); // fallback to booking-level
+      
+          const therapistId = therapistIdMap[sessTherapistObjId];
+          if (!therapistId) continue;
+      
           if (!bookedSlotsByDate[sessDate]) bookedSlotsByDate[sessDate] = {};
-          if (!bookedSlotsByDate[sessDate][therapistId]) bookedSlotsByDate[sessDate][therapistId] = new Set();
+          if (!bookedSlotsByDate[sessDate][therapistId])
+            bookedSlotsByDate[sessDate][therapistId] = new Set();
           bookedSlotsByDate[sessDate][therapistId].add(slotId);
         }
       }
