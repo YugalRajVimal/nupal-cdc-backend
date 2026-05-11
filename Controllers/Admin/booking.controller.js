@@ -4126,6 +4126,8 @@ async getAllSessions(req, res) {
         })
         .lean();
 
+       
+
       // Fetch all therapy types (for filter options on frontend)
       const allTherapyTypes = await (typeof TherapyType.find === "function"
         ? TherapyType.find({}, "_id name").lean()
@@ -4199,11 +4201,10 @@ async getAllSessions(req, res) {
 
             // Prepare output fields
             let patientInfo = {
-              patientId: booking.Children && booking.patient.patientId ? booking.patient.patientId : undefined,
-              name: (booking.Children && booking.patient.name)
-                ? booking.patient.name
-                : undefined,
+              patientId: booking.patient && booking.patient.patientId ? booking.patient.patientId : undefined,
+              name: booking.patient && booking.patient.name ? booking.patient.name : undefined,
             };
+       
 
             let therapyTypePopulated = null;
             if (session.therapyTypeId && session.therapyTypeId._id && session.therapyTypeId.name) {

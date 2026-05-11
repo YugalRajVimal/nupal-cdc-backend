@@ -56,9 +56,11 @@ class AuditLogService {
       // Prepare sets for efficient lookups
       const userIdsToChildren = new Set();
       const userIdsToTherapist = new Set();
+      const userIdsToPatient = new Set();
       const userIdsToAdmin = new Set();
       const userIdsToSuperAdmin = new Set();
       const resourceIdsToChildren = new Set();
+      const resourceIdsToPatient = new Set();
       const resourceIdsToTherapist = new Set();
       const resourceIdsToBookingRequest = new Set();
       const resourceIdsToUserForAdmin = new Set(); // Only for admin and superadmin
