@@ -91,41 +91,59 @@ class FinancesSuperAdminController {
 
   getAllTherapistsSalarySessionComparison = async (req, res) => {
     /**
-     * GOAL:
+     * UPDATED GOAL (now for ACTIVE therapists only!):
      * For each therapist:
-     *   - Aggregate all their earnings and sessions in the given periods
-     *   - Return a merged object per therapist containing:
-     *     therapist info,
-     *     an array of earnings (with session/sum info for each),
-     *     total sessionDeliveredSumCost (all earnings),
-     *     total earningAmount (all earnings),
-     *     total difference (all earnings)
-     *
+     *   - If they have earnings, aggregate all their earnings and sessions in the given periods (as before)
+     *   - If they have NO earnings but have completed (checked-in) sessions, 
+     *     send a result object for them with earnings: [] but session details included in a separate field
+     *   - Every therapist should thus always have a result entry, including those with no earnings but with checked-in sessions
+     * 
      * NOTE: Only match therapist using session.therapist, not booking.therapist.
+     * ONLY include active therapists (user.status: 'active')!
      */
 
-    console.log("[getAllTherapistsSalarySessionComparison] Controller Called");
+    console.log("Step 1: [getAllTherapistsSalarySessionComparison] Controller Called");
 
     let Types;
     try {
       Types = (await import('mongoose')).Types;
-      console.log("[getAllTherapistsSalarySessionComparison] mongoose.Types imported OK");
+      console.log("Step 2: [getAllTherapistsSalarySessionComparison] mongoose.Types imported OK");
     } catch (e) {
-      console.log("[getAllTherapistsSalarySessionComparison] ERROR importing mongoose.Types", e);
+      console.log("Step 2: [getAllTherapistsSalarySessionComparison] ERROR importing mongoose.Types", e);
       return res.status(500).json({ error: "Error importing mongoose.Types in getAllTherapistsSalarySessionComparison" });
     }
 
+    // -- Step 3: Fetch ACTIVE therapists only --
     let therapists;
     try {
-      therapists = await TherapistProfile.find({}).lean();
+      // We must join TherapistProfile with User where user.status === "active".
+      // To do this efficiently, first find userIds of therapist users who are active.
+      // Assuming TherapistProfile.userId references User._id
+      const User = (await import('../../Schema/user.schema.js')).User;
+
+      // Find userIds for active therapist users
+      const activeTherapistUsers = await User.find({ 
+        role: 'therapist', 
+      }, { _id: 1 }).lean();
+ 
+
+      const activeTherapistUserIds = activeTherapistUsers.map(u => u._id);
+
+      therapists = await TherapistProfile.find({
+        userId: { $in: activeTherapistUserIds }
+      })
+        .populate({ path: 'userId', model: 'User', select: 'status name email' })
+        .lean();
+ 
+
       if (!Array.isArray(therapists)) {
-        console.log("[getAllTherapistsSalarySessionComparison] therapists not array");
+        console.log("Step 3: [getAllTherapistsSalarySessionComparison] therapists not array");
         return res.status(500).json({ error: "Could not fetch therapist profiles in getAllTherapistsSalarySessionComparison." });
       }
-      console.log(`[getAllTherapistsSalarySessionComparison] Fetched ${therapists.length} therapists`);
+      console.log(`Step 3: [getAllTherapistsSalarySessionComparison] Fetched ${therapists.length} ACTIVE therapists`);
     } catch (e) {
-      console.log("[getAllTherapistsSalarySessionComparison] ERROR fetching therapists", e);
-      return res.status(500).json({ error: "Error fetching therapists in getAllTherapistsSalarySessionComparison" });
+      console.log("Step 3: [getAllTherapistsSalarySessionComparison] ERROR fetching active therapists", e);
+      return res.status(500).json({ error: "Error fetching (active) therapists in getAllTherapistsSalarySessionComparison" });
     }
 
     let bookings;
@@ -133,11 +151,11 @@ class FinancesSuperAdminController {
       bookings = await Booking.find({})
         .populate({ path: "package", model: "Package" })
         .populate({ path: "patient", model: "PatientProfile", select: "name patientId" })
-        // Note: no need for .populate("therapist"), we will only use session.therapist
+        // No need for .populate("therapist"), we will only use session.therapist
         .lean();
-      console.log(`[getAllTherapistsSalarySessionComparison] Fetched ${bookings.length} bookings`);
+      console.log(`Step 4: [getAllTherapistsSalarySessionComparison] Fetched ${bookings.length} bookings`);
     } catch (e) {
-      console.log("[getAllTherapistsSalarySessionComparison] ERROR fetching bookings", e);
+      console.log("Step 4: [getAllTherapistsSalarySessionComparison] ERROR fetching bookings", e);
       return res.status(500).json({ error: "Error fetching bookings in getAllTherapistsSalarySessionComparison" });
     }
 
@@ -150,7 +168,7 @@ class FinancesSuperAdminController {
         try {
           therapistIdStr = therapist._id.toString();
         } catch (e) {
-          console.log(`[getAllTherapistsSalarySessionComparison] Error extracting therapistId for:`, therapist);
+          console.log(`Step 5: [getAllTherapistsSalarySessionComparison] Error extracting therapistId for:`, therapist);
           result.push({
             therapist: {
               _id: therapist._id,
@@ -166,7 +184,7 @@ class FinancesSuperAdminController {
         }
 
         if (!Types.ObjectId.isValid(therapistIdStr)) {
-          console.log(`[getAllTherapistsSalarySessionComparison] Invalid therapistId for therapist: ${therapistIdStr}`);
+          console.log(`Step 6: [getAllTherapistsSalarySessionComparison] Invalid therapistId for therapist: ${therapistIdStr}`);
           result.push({
             therapist: {
               _id: therapist._id,
@@ -181,13 +199,10 @@ class FinancesSuperAdminController {
           continue;
         }
 
-        // Skip if no earnings array at all
-        if (!Array.isArray(therapist.earnings)) {
-          console.log(`[getAllTherapistsSalarySessionComparison] Therapist (${therapistIdStr}) has no earnings array, skipped.`);
-          continue;
-        }
+        // Use empty array for earnings if missing or not an array
+        let earningsArr = Array.isArray(therapist.earnings) ? therapist.earnings : [];
 
-        // Structure: aggregate at therapist level
+        // Aggregate as before
         let therapistAggregate = {
           therapist: {
             _id: therapist._id,
@@ -199,12 +214,14 @@ class FinancesSuperAdminController {
           earnings: [],
           totalSessionDeliveredSumCost: 0,
           totalEarningAmount: 0,
-          totalDifference: 0
+          totalDifference: 0,
+          sessionsWithoutEarning: [] // <--- we will populate this if needed (see below)
         };
 
-        for (const earning of therapist.earnings) {
+        // 1. Handle earning ranges as before
+        for (const earning of earningsArr) {
           if (!earning.fromDate || !earning.toDate) {
-            console.log(`[getAllTherapistsSalarySessionComparison] Skipped earning for missing fromDate/toDate`, earning);
+            console.log(`Step 8: [getAllTherapistsSalarySessionComparison] Skipped earning for missing fromDate/toDate`, earning);
             continue;
           }
 
@@ -216,7 +233,7 @@ class FinancesSuperAdminController {
             earningFrom = new Date(earning.fromDate);
             earningTo = new Date(earning.toDate);
           } catch (e) {
-            console.log("[getAllTherapistsSalarySessionComparison] Error parsing earning date range", e, earning);
+            console.log("Step 9: [getAllTherapistsSalarySessionComparison] Error parsing earning date range", e, earning);
             sessionsMatched.push({
               warning: "Error parsing earning date range in getAllTherapistsSalarySessionComparison",
               earning,
@@ -225,7 +242,7 @@ class FinancesSuperAdminController {
             continue;
           }
 
-          // For this earning, scan ALL bookings, all sessions
+          // For this earning, scan ALL bookings, all sessions for this therapist
           for (const booking of bookings) {
             if (!Array.isArray(booking.sessions)) continue;
 
@@ -322,16 +339,90 @@ class FinancesSuperAdminController {
           therapistAggregate.totalDifference += difference;
         }
 
-        // Only push if there are earning records (otherwise a therapist with 0 earnings not shown)
-        if (therapistAggregate.earnings.length > 0) {
-          result.push(therapistAggregate);
+        // 2. If no earnings (or empty earnings), still check if there are completed sessions for this therapist
+        if (therapistAggregate.earnings.length === 0) {
+          // Find all checked-in sessions for this therapist
+          let therapistCheckedInSessions = [];
+          for (const booking of bookings) {
+            if (!Array.isArray(booking.sessions)) continue;
+
+            let sessionPrice = (booking.package && typeof booking.package.costPerSession === "number")
+              ? booking.package.costPerSession
+              : undefined;
+
+            for (const session of booking.sessions) {
+              try {
+                // Match therapist by session.therapist only!
+                if (!session.therapist) continue;
+
+                let sessionTherapistId;
+                if (typeof session.therapist === "object" && session.therapist.toString) {
+                  sessionTherapistId = session.therapist.toString();
+                } else if (typeof session.therapist === "string") {
+                  sessionTherapistId = session.therapist;
+                }
+
+                if (!Types.ObjectId.isValid(sessionTherapistId)) {
+                  continue;
+                }
+
+                if (sessionTherapistId !== therapistIdStr) {
+                  continue;
+                }
+
+                // Only consider checked-in sessions
+                if (!session.isCheckedIn) continue;
+                if (!session.date) continue;
+
+                let price = typeof session.price === "number"
+                  ? session.price
+                  : (typeof sessionPrice === "number" ? sessionPrice : 0);
+
+                therapistCheckedInSessions.push({
+                  date: session.date,
+                  sessionId: session.sessionId || undefined,
+                  slotId: session.slotId,
+                  isCheckedIn: session.isCheckedIn,
+                  price,
+                  bookingId: booking._id,
+                  package: booking.package
+                    ? {
+                        _id: booking.package._id,
+                        name: booking.package.name,
+                        costPerSession: booking.package.costPerSession,
+                        totalCost: booking.package.totalCost,
+                        sessionCount: booking.package.sessionCount,
+                      }
+                    : undefined,
+                  patient: booking.patient
+                    ? {
+                        _id: booking.patient._id,
+                        name: booking.patient.name,
+                        patientId: booking.patient.patientId,
+                      }
+                    : undefined,
+                });
+              } catch (e) {
+                continue;
+              }
+            }
+          }
+          therapistAggregate.sessionsWithoutEarning = therapistCheckedInSessions;
+          therapistAggregate.totalSessionDeliveredSumCost = therapistCheckedInSessions.reduce((acc, s) => acc + (s.price || 0), 0);
+          // earning amount and difference stay zero
+        } else {
+          // For therapists with earnings, optional: still include checked-in sessions NOT covered by any earning?
+          // For now, do not include additional sessions. All sessions relevant are with earnings range.
         }
+
+        // Always push (as per requirement: always send data for all therapists)
+        result.push(therapistAggregate);
       }
 
-      console.log(`[getAllTherapistsSalarySessionComparison] Build aggregated result complete. Therapist entries: ${result.length}`);
+      console.log(`Step 10: [getAllTherapistsSalarySessionComparison] Build aggregated result complete. Therapist entries: ${result.length}`);
       return res.json(result);
     } catch (e) {
-      console.log("[getAllTherapistsSalarySessionComparison] ERROR building result object", e);
+      console.log("Step 11: [getAllTherapistsSalarySessionComparison] ERROR building result object", e);
       return res.status(500).json({
         error: "Error building result in getAllTherapistsSalarySessionComparison",
       });
