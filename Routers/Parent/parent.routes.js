@@ -106,6 +106,7 @@ parentRouter.put('/consultation-bookings/:id', jwtAuth, (req, res) => parentCont
 
 
 
+parentRouter.get('/slot-availability', jwtAuth, parentController.getMonthlySlotAvailability.bind(parentController));
 
 
 

@@ -11,20 +11,8 @@
 // import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 // import WhatsappController from "../Whatsapp/whatsapp.js";
 
-
-
-
-
 // class ParentController {
 
-
-
-//   /**
-//    * POST /parent/signup
-//    * Body: { email: string, name: string }
-//    * Sends OTP to the given email, stores OTP record (now uses User.signUpOTP fields in DB)
-//    * Parent signup by OTP (role: "parent")
-//    */
 //   async parentSignUpSendOTP(req, res) {
 //     const session = await User.startSession();
 //     session.startTransaction();
@@ -43,20 +31,16 @@
 //         return res.status(400).json({ success: false, message: "Name is required." });
 //       }
 
-//       // Only check if a parent user exists with this email
 //       const userExists = await User.findOne({ email, role: "patient" }).session(session);
 //       if (userExists) {
 //         await session.abortTransaction();
 //         session.endSession();
-//         // If a parent user with this email already exists, no new OTP is sent.
 //         return res.status(409).json({ success: false, message: "A parent with this email already exists." });
 //       }
 
-//       // Generate 6-digit OTP
 //       const otp = Math.floor(100000 + Math.random() * 900000).toString();
-//       const expiresInMs = 1000 * 300; // 5 min
+//       const expiresInMs = 1000 * 300;
 
-//       // Always create a new temp User record for sign up (never update existing)
 //       const newUser = new User({
 //         email,
 //         name,
@@ -68,23 +52,16 @@
 //         signUpOTPAttempts: 0,
 //         signUpOTPLastUsedAt: null,
 //         status: "active",
-//         isDisabled: false, // default is enabled
+//         isDisabled: false,
 //         manualSignUp: true
 //       });
 //       await newUser.save({ session });
 
-//       // Do NOT create PatientProfile or patientId yet (done on completeProfile)
-
-//       // Send OTP to email (using sendMail instead of a console.log for demo parity)
 //       let sendEmailError = null;
 //       let sendEmailPromise = null;
 //       let whatsappStatus = null;
 
-//       // Lazy load sendMail to prevent circular dependency if necessary,
-//       // otherwise import sendMail at top of file.
 //       try {
-//         // Delay require for sendMail so import won't break for existing code
-//         // If you have sendMail already imported, you can remove the next two lines and just use sendMail directly.
 //         const sendMail = (await import('../../config/nodeMailer.config.js')).default;
 //         sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
 //           .catch((err) => { sendEmailError = err; });
@@ -92,20 +69,15 @@
 //         sendEmailError = err;
 //       }
 
-//       // For WhatsApp: Only send if phone exists (future-proof), for now skip
 //       try {
 //         whatsappStatus = '[Skipped WhatsApp OTP - only send if phone is available]';
-//         // If you want WhatsApp OTP for parent sign up, add logic here similar to WhatsAppController.sendOtpVerification
 //       } catch (waErr) {
 //         whatsappStatus = waErr?.message || "Failed to send OTP on WhatsApp";
-//         // Do not block signup on WhatsApp fail; just log
 //         console.error("ParentSignUp OTP WhatsApp error:", waErr);
 //       }
 
-//       // Await the sendMail promise if created
 //       if (sendEmailPromise) await sendEmailPromise;
 
-//       // If email failed, treat as error
 //       if (sendEmailError) {
 //         await session.abortTransaction();
 //         session.endSession();
@@ -116,7 +88,6 @@
 //         });
 //       }
 
-//       // ---- AUDIT LOG: Parent signup OTP sent ----
 //       try {
 //         await AuditLogService.addLog({
 //           action: 'PARENT_SIGNUP_OTP_SENT',
@@ -135,7 +106,6 @@
 //           userAgent: req.headers['user-agent']
 //         });
 //       } catch (logErr) {
-//         // Still commit the transaction, but log the error
 //         console.error('Failed to write audit log (PARENT_SIGNUP_OTP_SENT) in parentSignUpSendOTP:', logErr);
 //       }
 
@@ -151,11 +121,6 @@
 //     }
 //   }
 
-//   /**
-//    * POST /parent/verify-otp
-//    * Body: { email: string, otp: string }
-//    * Verifies OTP and creates/activates the parent user (using User.signUpOTP fields)
-//    */
 //   async parentSignUpVerifyOTP(req, res) {
 //     try {
 //       const { email, otp } = req.body;
@@ -164,16 +129,13 @@
 //         return res.status(400).json({ success: false, message: "Email and OTP are required." });
 //       }
 
-//       // Find the user-in-signup (either existing with pending signUpOTP, or never started)
 //       const signupUser = await User.findOne({ email, role: "patient" });
 
 //       if (!signupUser || (!signupUser.signUpOTP || !signupUser.signUpOTPExpiresAt)) {
 //         return res.status(400).json({ success: false, message: "No OTP request found or OTP expired." });
 //       }
 
-//       // Check expiration
 //       if (Date.now() > new Date(signupUser.signUpOTPExpiresAt).getTime()) {
-//         // Optionally clear the OTP fields (cleanup)
 //         signupUser.signUpOTP = null;
 //         signupUser.signUpOTPExpiresAt = null;
 //         signupUser.signUpOTPSentAt = null;
@@ -183,7 +145,6 @@
 //         return res.status(400).json({ success: false, message: "OTP has expired. Please request a new one." });
 //       }
 
-//       // Increment attempts
 //       signupUser.signUpOTPAttempts = (signupUser.signUpOTPAttempts || 0) + 1;
 //       await signupUser.save();
 
@@ -191,15 +152,12 @@
 //         return res.status(401).json({ success: false, message: "Invalid OTP." });
 //       }
 
-//       // OTP is valid
-//       // Mark signUpOTPLastUsedAt and clear OTP fields
 //       signupUser.signUpOTPLastUsedAt = new Date();
 //       signupUser.signUpOTP = null;
 //       signupUser.signUpOTPExpiresAt = null;
 //       signupUser.signUpOTPSentAt = null;
 //       signupUser.signUpOTPAttempts = 0;
 
-//       // Set identity fields, redundantly
 //       if (!signupUser.role) signupUser.role = "patient";
 //       if (!signupUser.authProvider) signupUser.authProvider = "otp";
 //       signupUser.status = "active";
@@ -207,7 +165,6 @@
 
 //       await signupUser.save();
 
-//       // ---- AUDIT LOG: Parent signup OTP verified ----
 //       try {
 //         await AuditLogService.addLog({
 //           action: 'PARENT_SIGNUP_OTP_VERIFIED',
@@ -228,7 +185,6 @@
 //         console.error('Failed to write audit log (PARENT_SIGNUP_OTP_VERIFIED) in parentSignUpVerifyOTP:', logErr);
 //       }
 
-//       // No separate ParentProfile collection -- parent is done upon user creation.
 //       return res.json({ success: true, message: "Parent account created. You may now login." });
 //     } catch (e) {
 //       console.error("Error in parentSignUpVerifyOTP:", e);
@@ -236,13 +192,9 @@
 //     }
 //   }
 
-//   // Parent complete profile (now also creates patientId ONCE for their child profile)
-//   // PATCH /api/parent/complete-profile
-//   // Expects (optionally) phone in body to patch onto User profile, and creates PatientProfile with unique patientId
 //   async completeParentProfile(req, res) {
 //     try {
 //       console.log("Step 1: Starting completeParentProfile");
-//       // Expect parent user is authenticated (from JWT) and userId is req.user.id
 //       const parentUserId = req.user?.id;
 //       console.log("Step 2: parentUserId:", parentUserId);
 //       if (!parentUserId) {
@@ -250,7 +202,6 @@
 //         return res.status(401).json({ error: "Unauthorized: No user ID found." });
 //       }
 
-//       // Find user
 //       const user = await User.findById(parentUserId);
 //       console.log("Step 3: Found user:", !!user, "Role:", user?.role);
 //       if (!user || user.role !== "patient") {
@@ -258,9 +209,8 @@
 //         return res.status(404).json({ error: "No parent user found." });
 //       }
 
-//       // Save mobile1 in phone field of User schema, with uniqueness check
-//       const { 
-//         mobile1, 
+//       const {
+//         mobile1,
 //         childFullName,
 //         gender,
 //         childDOB,
@@ -274,7 +224,7 @@
 //         diagnosisInfo,
 //         childReference,
 //         parentOccupation,
-//         motherOccupation, // <-- Add motherOccupation field
+//         motherOccupation,
 //         remarks,
 //         otherDocument
 //       } = req.body;
@@ -288,7 +238,6 @@
 //       console.log("Step 5: Phone for user will be:", phone);
 
 //       if (phone && typeof phone === "string" && phone.trim() !== "") {
-//         // Check whether another user has this phone
 //         const existingUser = await User.findOne({
 //           phone: phone.trim(),
 //           _id: { $ne: parentUserId }
@@ -307,20 +256,17 @@
 //       await user.save();
 //       console.log("Step 6: User saved.");
 
-//       // Only create PatientProfile (and patientId) if not already present
 //       let existingProfile = await PatientProfile.findOne({ userId: user._id });
 //       let createdProfile = null;
 //       let patientId = null;
 //       console.log("Step 7: existingProfile?", !!existingProfile);
 
 //       if (!existingProfile) {
-//         // Require childFullName to create PatientProfile
 //         if (!childFullName || typeof childFullName !== "string" || !childFullName.trim()) {
 //           console.log("Step 7.1: Child full name missing on first profile creation");
 //           return res.status(400).json({ error: "Child name (childFullName) is required to complete profile for the first time." });
 //         }
 
-//         // Generate next unique patientId
 //         let seq;
 //         try {
 //           const counter = await counterSchema.findOneAndUpdate(
@@ -337,7 +283,6 @@
 //         patientId = `P${seq.toString().padStart(4, "0")}`;
 //         console.log("Step 7.3: Generated patientId:", patientId);
 
-//         // Save all details including motherOccupation
 //         createdProfile = new PatientProfile({
 //           userId: user._id,
 //           name: childFullName ? childFullName.trim() : "",
@@ -355,15 +300,13 @@
 //           diagnosisInfo: diagnosisInfo || "",
 //           childReference: childReference || "",
 //           parentOccupation: parentOccupation || "",
-//           motherOccupation: motherOccupation || "", // <-- Save motherOccupation
+//           motherOccupation: motherOccupation || "",
 //           remarks: remarks || "",
 //           otherDocument: otherDocument || undefined,
-//           // Add other profile fields here as needed
 //         });
 //         await createdProfile.save();
 //         console.log("Step 7.4: PatientProfile created:", createdProfile._id);
 
-//         // ---- Whatsapp Notification: Children Profile Completed ----
 //         try {
 //           console.log("Step 8: Sending Children Profile Completed WhatsApp notification:", {
 //             destination: user.phone || user.phoneNumber || mobile1 || "",
@@ -385,13 +328,12 @@
 //         console.log("Step 7.5: PatientProfile already exists, not creating again.");
 //       }
 
-//       // ---- AUDIT LOG: Parent profile completed ----
 //       try {
 //         console.log("Step 9: Writing audit log for PARENT_PROFILE_COMPLETED.");
 //         await AuditLogService.addLog({
 //           action: 'PARENT_PROFILE_COMPLETED',
 //           user: user._id,
-//           role:  'parent',
+//           role: 'parent',
 //           resource: 'Parent',
 //           resourceId: createdProfile?._id || existingProfile?._id,
 //           details: {
@@ -400,7 +342,7 @@
 //             fieldsSubmitted: {
 //               childFullName, gender, childDOB, fatherFullName, motherFullName, parentEmail,
 //               mobile1, mobile2, address, areaName, pincode, diagnosisInfo, childReference,
-//               parentOccupation, motherOccupation, // <-- Add motherOccupation here
+//               parentOccupation, motherOccupation,
 //               remarks, otherDocument
 //             },
 //             createdProfile: !!createdProfile,
@@ -443,7 +385,7 @@
 //               diagnosisInfo: createdProfile.diagnosisInfo,
 //               childReference: createdProfile.childReference,
 //               parentOccupation: createdProfile.parentOccupation,
-//               motherOccupation: createdProfile.motherOccupation, // <-- Add motherOccupation here
+//               motherOccupation: createdProfile.motherOccupation,
 //               remarks: createdProfile.remarks,
 //               otherDocument: createdProfile.otherDocument,
 //             }
@@ -457,23 +399,19 @@
 
 //   async getDashboardDetails(req, res) {
 //     try {
-//       // 1. Extract parentId from token/user
 //       const parentId = req.user.id;
 //       if (!parentId) {
 //         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
 //       }
 
-//       // 2. Fetch user
 //       const user = await User.findById(parentId).lean();
 //       if (!user) {
 //         return res.status(404).json({ success: false, message: "Parent user not found." });
 //       }
 
-//       // 3. Fetch children (PatientProfiles)
 //       const children = await PatientProfile.find({ userId: user._id }).lean();
 //       const childIds = children.map(child => child._id);
 
-//       // 4. Find all Therapy Bookings (Booking collection, i.e. therapy appointments)
 //       const appointments = await Booking.find({ patient: { $in: childIds } })
 //         .populate({
 //           path: "patient",
@@ -497,10 +435,6 @@
 //         })
 //         .lean();
 
-//       // 5. Find all Consultation Bookings (consultation-booking collection, i.e. nupal-cdc-software-backend/Schema/consultation-booking.schema.js)
-//       // Consultations are stored by "client" field which refers to PatientProfile
-//       // (consultation-booking.schema.js: client: { type: ObjectId, ref: 'PatientProfile', required: true })
-
 //       const consultationBookings = await ConsultationBooking.find({ client: { $in: childIds } })
 //         .populate({
 //           path: "client",
@@ -519,17 +453,16 @@
 //         })
 //         .lean();
 
-//       // 6. Count total appointments
 //       const totalAppointments = appointments.length;
 
-//       // 7. Build unchecked sessions (from therapy appointments)
+//       // Build unchecked sessions — response keys use "children" terminology
 //       const uncheckedSessions = [];
 //       appointments.forEach(booking => {
 //         if (Array.isArray(booking.sessions)) {
 //           for (const session of booking.sessions) {
 //             if (!session.isCheckedIn) {
 //               uncheckedSessions.push({
-//                 patientId: booking.patient.patientId,
+//                 childrenId: booking.patient.patientId,
 //                 name: booking.patient.name,
 //                 notCheckedInSession: session
 //               });
@@ -538,7 +471,6 @@
 //         }
 //       });
 
-//       // 8. Fetch payments for therapy bookings (populate payment field)
 //       const populatedBookings = await Booking.find({ patient: { $in: childIds } })
 //         .populate({
 //           path: "patient",
@@ -554,7 +486,7 @@
 //         })
 //         .lean({ virtuals: true });
 
-//       // 9. Process and collect pending payment details
+//       // Pending payments — response keys use "children" terminology
 //       const pendingPayments = [];
 //       for (const booking of populatedBookings) {
 //         let payments = [];
@@ -567,23 +499,23 @@
 //           if (!pay) continue;
 //           const status = pay.status || "Unknown";
 //           if (status.toLowerCase() === "pending") {
-//             let patientName = "";
+//             let childrenName = "";
 //             if (
 //               booking.Children &&
 //               booking.patient.userId &&
 //               booking.patient.userId.name
 //             ) {
-//               patientName = booking.patient.name;
+//               childrenName = booking.patient.name;
 //             } else if (booking.Children && booking.patient.name) {
-//               patientName = booking.patient.name;
+//               childrenName = booking.patient.name;
 //             }
-//             const patientId = booking.patient?.patientId;
-//             if (!patientName && user && user.name) patientName = user.name;
+//             const childrenId = booking.patient?.patientId;
+//             if (!childrenName && user && user.name) childrenName = user.name;
 //             pendingPayments.push({
 //               InvoiceId: pay.paymentId ? pay.paymentId.toString() : "",
 //               date: pay.createdAt || pay.date || booking.createdAt,
-//               patientName: patientName,
-//               patientId,
+//               childrenName: childrenName,
+//               childrenId,
 //               amount: pay.amount || booking.totalAmount || 0,
 //               status: status
 //             });
@@ -591,13 +523,12 @@
 //         }
 //       }
 
-//       // 10. Compose dashboard data (now including consultationBookings)
 //       const dashboardData = {
 //         childrenCount: children.length,
 //         totalAppointments,
 //         pendingPayments,
 //         uncheckedSessions,
-//         consultationBookings // <-- all their children's consultation bookings
+//         consultationBookings
 //       };
 
 //       res.json({ success: true, data: dashboardData });
@@ -609,8 +540,6 @@
 //     }
 //   }
 
-
-//   // Returns a paginated & searchable list of all children assigned to the parent
 //   async getAllChildrens(req, res) {
 //     try {
 //       const parentId = req.user.id;
@@ -619,22 +548,18 @@
 //       }
 //       const userId = parentId;
 
-//       // Fetch the user using the given id (parentId)
 //       const user = await User.findById(userId).lean();
 //       if (!user) {
 //         return res.status(404).json({ success: false, message: "User not found." });
 //       }
 
-//       // --- Pagination & Search Setup ---
 //       let { page = 1, limit = 10, search = "" } = req.query;
 //       page = Math.max(parseInt(page) || 1, 1);
 //       limit = Math.max(parseInt(limit) || 10, 1);
 //       search = (search || "").trim();
 
-//       // Build query
 //       const dbQuery = { userId: user._id };
 //       if (search) {
-//         // Searching by child name, patientId, or father's/mother's name (case-insensitive)
 //         dbQuery.$or = [
 //           { name: { $regex: search, $options: "i" } },
 //           { patientId: { $regex: search, $options: "i" } },
@@ -643,10 +568,8 @@
 //         ];
 //       }
 
-//       // Get total for pagination
 //       const total = await PatientProfile.countDocuments(dbQuery);
 
-//       // Fetch paginated results
 //       const children = await PatientProfile.find(dbQuery)
 //         .skip((page - 1) * limit)
 //         .limit(limit)
@@ -667,7 +590,6 @@
 //     }
 //   }
 
-//   // Returns all appointments for the parent's children with proper search & pagination (search/pagination handled at DB, not table, so table refresh does not affect search state)
 //   async getAllAppointments(req, res) {
 //     try {
 //       const parentId = req.user.id;
@@ -675,41 +597,25 @@
 //         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
 //       }
 
-//       // Fetch parent user
 //       const user = await User.findById(parentId).lean();
 //       if (!user) {
 //         return res.status(404).json({ success: false, message: "Parent user not found." });
 //       }
 
-//       // Fetch all child PatientProfiles for parent
 //       const children = await PatientProfile.find({ userId: user._id }).lean();
 //       if (!children || children.length === 0) {
 //         return res.json({ success: true, data: [], page: 1, limit: 10, total: 0, totalPages: 1 });
 //       }
 //       const childIds = children.map(child => child._id);
 
-//       // --- Pagination & Search ---
 //       let { page = 1, limit = 10, search = "" } = req.query;
 //       page = Math.max(parseInt(page) || 1, 1);
 //       limit = Math.max(parseInt(limit) || 10, 1);
 //       search = (search || "").trim();
 
-//       // Build the booking query: all bookings for the parent's children
 //       const bookingQuery = { patient: { $in: childIds } };
 
 //       if (search) {
-//         // Build search $or clause, searching by:
-//         //   - Booking requestId/appointmentId
-//         //   - Children name/patientId
-//         //   - Therapy name
-//         //   - Status/RequestStatus
-//         //   - Coupon Code
-//         //   - Session date/slotId
-//         // To efficiently search, we will fetch booking IDs filtered by search then fetch details
-//         // Otherwise, we'd need to populate to search across referenced fields.
-//         // We'll use aggregation for more sophisticated search
-
-//         // Step 1: Build $lookup and $match stages
 //         const orConditions = [
 //           { requestId: { $regex: search, $options: "i" } },
 //           { appointmentId: { $regex: search, $options: "i" } },
@@ -717,40 +623,25 @@
 //           { requestStatus: { $regex: search, $options: "i" } }
 //         ];
 
-//         // For Children fields (name, patientId)
 //         orConditions.push(
-//           { 
-//             // Must cast to string for aggregation: look up Children name
-//             // We'll look up on PatientProfile as joined
-//             "patientProfile.name": { $regex: search, $options: "i" } 
-//           },
-//           { 
-//             "patientProfile.patientId": { $regex: search, $options: "i" } 
-//           }
+//           { "patientProfile.name": { $regex: search, $options: "i" } },
+//           { "patientProfile.patientId": { $regex: search, $options: "i" } }
 //         );
 
-//         // For therapy name
 //         orConditions.push(
-//           {
-//             "therapyProfile.name": { $regex: search, $options: "i" }
-//           }
+//           { "therapyProfile.name": { $regex: search, $options: "i" } }
 //         );
 
-//         // For coupon code (discountInfo.coupon.couponCode)
 //         orConditions.push(
 //           { "discountInfo.coupon.couponCode": { $regex: search, $options: "i" } }
 //         );
-//         // For session date and session slotId
 //         orConditions.push(
-
 //           { "sessions.date": { $regex: search, $options: "i" } },
 //           { "sessions.slotId": { $regex: search, $options: "i" } }
 //         );
 
-//         // Setup aggregation pipeline for search+pagination
 //         const pipeline = [
 //           { $match: bookingQuery },
-//           // Join for patientProfile on patient
 //           {
 //             $lookup: {
 //               from: 'patientprofiles',
@@ -760,7 +651,6 @@
 //             }
 //           },
 //           { $unwind: { path: "$patientProfile", preserveNullAndEmptyArrays: true } },
-//           // Join for therapy name
 //           {
 //             $lookup: {
 //               from: 'therapytypes',
@@ -770,11 +660,9 @@
 //             }
 //           },
 //           { $unwind: { path: "$therapyProfile", preserveNullAndEmptyArrays: true } },
-//           // $match with $or search on all keys above
 //           { $match: { $or: orConditions } }
 //         ];
 
-//         // For pagination/total count
 //         const pipelineCount = [...pipeline, { $count: "total" }];
 //         const pipelineData = [
 //           ...pipeline,
@@ -783,18 +671,15 @@
 //           { $limit: limit }
 //         ];
 
-//         // Find total count
 //         const countResult = await Booking.aggregate(pipelineCount);
 //         const total = countResult?.[0]?.total || 0;
 
-//         // Get booking _ids for the paginated result
 //         const pagedDocs = await Booking.aggregate([
 //           ...pipelineData,
 //           { $project: { _id: 1 } }
 //         ]);
 //         const pagedBookingIds = pagedDocs.map(doc => doc._id);
 
-//         // Now fetch/populate the actual paged bookings (full objects with populations)
 //         let appointments = [];
 //         if (pagedBookingIds.length > 0) {
 //           appointments = await Booking.find({ _id: { $in: pagedBookingIds } })
@@ -812,18 +697,13 @@
 //             })
 //             .populate({ path: 'therapy', model: 'TherapyType' })
 //             .populate({ path: 'payment' })
-//             // preserve order
 //             .lean();
 
-//           // Restore sort order (Mongo may rearrange order on $in)
 //           const orderMap = {};
 //           pagedBookingIds.forEach((id, i) => { orderMap[String(id)] = i; });
 //           appointments.sort((a, b) => (orderMap[String(a._id)] ?? 0) - (orderMap[String(b._id)] ?? 0));
 //         }
 
-//         // --- [continue after population below...]
-
-//         // Gather all therapist ids and therapy ids used in all sessions
 //         const therapistIds = [];
 //         appointments.forEach((appointment) => {
 //           if (Array.isArray(appointment.sessions)) {
@@ -834,17 +714,12 @@
 //         });
 //         const uniqueTherapistIds = [...new Set(therapistIds.map(id => id?.toString()).filter(Boolean))];
 //         const therapists = await TherapistProfile.find({ _id: { $in: uniqueTherapistIds } })
-//           .populate({
-//             path: 'userId',
-//             model: 'User',
-//             select: 'name'
-//           })
+//           .populate({ path: 'userId', model: 'User', select: 'name' })
 //           .select('userId name therapistId')
 //           .lean();
 //         const therapistMap = {};
 //         therapists.forEach(t => { therapistMap[String(t._id)] = t; });
 
-//         // Attach therapist object on sessions
 //         for (const appointment of appointments) {
 //           if (Array.isArray(appointment.sessions)) {
 //             appointment.sessions = appointment.sessions.map((session) => {
@@ -857,18 +732,10 @@
 //           }
 //         }
 
-//         // Fetch and attach edit requests
 //         const appointmentIds = appointments.map(a => a._id);
-//         // Since sessions is an array, we need to populate each session's sessionId in the sessions array
-//         // The mongoose population syntax will still work as written, as it goes inside the array
 //         const sessionEditRequests = await SessionEditRequest.find({ appointmentId: { $in: appointmentIds } })
-//           .populate({
-//             path: 'sessions.sessionId',
-//             model: 'Session' // If your sessions array contains session objects with { sessionId }, this works
-//           })
+//           .populate({ path: 'sessions.sessionId', model: 'Session' })
 //           .lean();
-//         // Note: If your sessions array has sessionId fields as references, this is correct.
-//         // If you need to map or process further, do so after the query.
 //         const editRequestsByAppointment = {};
 //         sessionEditRequests.forEach(er => {
 //           const apptId = er.appointmentId?.toString?.() || er.appointmentId;
@@ -893,11 +760,8 @@
 //         return;
 //       }
 
-//       // --- No search filter: paginate ALL for parent's children ---
-//       // Get total
 //       const total = await Booking.countDocuments(bookingQuery);
 
-//       // Get paginated result
 //       let appointments = await Booking.find(bookingQuery)
 //         .sort({ createdAt: -1, _id: -1 })
 //         .skip((page - 1) * limit)
@@ -908,17 +772,12 @@
 //           path: 'therapist',
 //           model: 'TherapistProfile',
 //           select: "therapistId",
-//           populate: {
-//             path: 'userId',
-//             model: 'User',
-//             select: 'name'
-//           }
+//           populate: { path: 'userId', model: 'User', select: 'name' }
 //         })
 //         .populate({ path: 'therapy', model: 'TherapyType' })
 //         .populate({ path: 'payment' })
 //         .lean();
 
-//       // Therapist for sessions
 //       const therapistIds = [];
 //       appointments.forEach((appointment) => {
 //         if (Array.isArray(appointment.sessions)) {
@@ -929,17 +788,12 @@
 //       });
 //       const uniqueTherapistIds = [...new Set(therapistIds.map(id => id?.toString()).filter(Boolean))];
 //       const therapists = await TherapistProfile.find({ _id: { $in: uniqueTherapistIds } })
-//         .populate({
-//           path: 'userId',
-//           model: 'User',
-//           select: 'name'
-//         })
+//         .populate({ path: 'userId', model: 'User', select: 'name' })
 //         .select('userId name therapistId')
 //         .lean();
 //       const therapistMap = {};
 //       therapists.forEach(t => { therapistMap[String(t._id)] = t; });
 
-//       // Attach therapist object on sessions
 //       for (const appointment of appointments) {
 //         if (Array.isArray(appointment.sessions)) {
 //           appointment.sessions = appointment.sessions.map((session) => {
@@ -952,7 +806,6 @@
 //         }
 //       }
 
-//       // Fetch and attach edit requests
 //       const appointmentIds = appointments.map(a => a._id);
 //       const sessionEditRequests = await SessionEditRequest.find({ appointmentId: { $in: appointmentIds } }).lean();
 //       const editRequestsByAppointment = {};
@@ -983,7 +836,6 @@
 //     }
 //   }
 
-//   // Returns profile details for the parent user, and also returns all children assigned to the parent
 //   async getProfileDetails(req, res) {
 //     try {
 //       const parentId = req.user.id;
@@ -991,13 +843,11 @@
 //         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
 //       }
 
-//       // Get the parent user profile
 //       const parent = await User.findById(parentId).lean();
 //       if (!parent) {
 //         return res.status(404).json({ success: false, message: "Parent profile not found." });
 //       }
 
-//       // Get all children/Children profiles for this parent
 //       const childrens = await PatientProfile.find({ userId: parentId }).lean();
 
 //       res.json({ success: true, data: { parent, childrens } });
@@ -1010,7 +860,6 @@
 //     try {
 //       const parentId = req.user.id;
 
-//       // Pagination & Search setup for patients dropdown
 //       let {
 //         patientPage = 1,
 //         patientLimit = 25,
@@ -1029,10 +878,8 @@
 //         ];
 //       }
 
-//       // Find total patients for pagination
 //       const totalPatients = await PatientProfile.countDocuments(patientQuery);
 
-//       // Search & paginated fetch of Children profiles
 //       const patientProfiles = await PatientProfile.find(
 //         patientQuery,
 //         "name userId patientId mobile1"
@@ -1049,7 +896,6 @@
 //         phoneNo: profile.mobile1 || "",
 //       }));
 
-//       // Therapy Types: pagination/search support
 //       let {
 //         therapyPage = 1,
 //         therapyLimit = 100,
@@ -1069,7 +915,6 @@
 //         .limit(therapyLimit)
 //         .lean();
 
-//       // Packages: pagination/search support
 //       let {
 //         packagePage = 1,
 //         packageLimit = 100,
@@ -1094,7 +939,6 @@
 //         .limit(packageLimit)
 //         .lean();
 
-//       // Therapists: pagination/search support
 //       let {
 //         therapistPage = 1,
 //         therapistLimit = 50,
@@ -1104,7 +948,6 @@
 //       therapistLimit = Math.max(parseInt(therapistLimit) || 50, 1);
 //       therapistSearch = (therapistSearch || "").trim();
 
-//       // Therapist text search applies on user's name and therapistId
 //       const therapistLookupPipeline = [
 //         {
 //           $lookup: {
@@ -1137,12 +980,7 @@
 //         }
 //       });
 
-//       // Count for therapists
-//       const totalTherapistsAgg = [
-//         ...therapistLookupPipeline,
-//         { $count: "total" }
-//       ];
-//       // Paginated therapists fetch (pipeline)
+//       const totalTherapistsAgg = [...therapistLookupPipeline, { $count: "total" }];
 //       const therapistAggPaginated = [
 //         ...therapistLookupPipeline,
 //         { $skip: (therapistPage - 1) * therapistLimit },
@@ -1156,8 +994,6 @@
 //       ]);
 //       const totalTherapists = totalTherapistsResult && totalTherapistsResult[0]?.total ? totalTherapistsResult[0].total : 0;
 
-//       // Get bookings count per therapist grouped by date
-//       // (not paginated; assumes all for calendar display)
 //       const bookingCounts = await Booking.aggregate([
 //         { $unwind: "$sessions" },
 //         {
@@ -1181,7 +1017,6 @@
 //         return { ...t, bookingsByDate };
 //       });
 
-//       // Coupons: search & paginated
 //       let {
 //         couponPage = 1,
 //         couponLimit = 50,
@@ -1208,7 +1043,6 @@
 //         .limit(couponLimit)
 //         .lean();
 
-//       // Compose final response, with pagination info for each section
 //       return res.json({
 //         success: true,
 //         patients,
@@ -1258,7 +1092,6 @@
 //     }
 //   }
 
-//   // Create a booking request (not a confirmed booking)
 //   async createBookingRequest(req, res) {
 //     const mongoose = (await import('mongoose')).default;
 //     const session = await mongoose.startSession();
@@ -1273,10 +1106,8 @@
 //         sessions
 //       } = req.body;
 
-//       // Log incoming request for audit
 //       console.log("[CREATE BOOKING REQUEST] Incoming body:", req.body);
 
-//       // Validate required fields
 //       if (
 //         !packageId ||
 //         !patientId ||
@@ -1301,7 +1132,6 @@
 //         });
 //       }
 
-//       // Generate a unique requestId (using 'request' sequence)
 //       const counter = await counterSchema.findOneAndUpdate(
 //         { name: "request" },
 //         { $inc: { seq: 1 } },
@@ -1321,13 +1151,10 @@
 //         k => bookingRequestPayload[k] === undefined && delete bookingRequestPayload[k]
 //       );
 
-//       // Save booking request in DB (but commit transaction only after log)
 //       const bookingRequest = new BookingRequests(bookingRequestPayload);
 //       await bookingRequest.save({ session });
 //       console.log("[CREATE BOOKING REQUEST] BookingRequest saved. _id:", bookingRequest._id);
 
-//       // --- Audit Log (must succeed for booking to exist) ---
-      
 //       try {
 //         await AuditLogService.addLog(
 //           {
@@ -1352,7 +1179,6 @@
 //           { session }
 //         );
 //       } catch (auditErr) {
-//         // If log fails, revert booking request (abort transaction)
 //         await session.abortTransaction();
 //         session.endSession();
 //         console.error("[CREATE BOOKING REQUEST] Audit log failed, reverted booking request:", auditErr);
@@ -1366,16 +1192,12 @@
 //       await session.commitTransaction();
 //       session.endSession();
 
-//       // Populate returned fields
 //       const populatedRequest = await BookingRequests.findById(bookingRequest._id)
 //         .populate("package")
 //         .populate({
 //           path: "patient",
 //           model: "PatientProfile",
-//           populate: {
-//             path: "userId",
-//             model: "User"
-//           }
+//           populate: { path: "userId", model: "User" }
 //         })
 //         .populate({ path: "therapy", model: "TherapyType" });
 
@@ -1386,9 +1208,7 @@
 //     } catch (error) {
 //       try {
 //         await session.abortTransaction();
-//       } catch (abortErr) {
-//         // Ignore abort errors (may occur if already committed)
-//       }
+//       } catch (abortErr) {}
 //       session.endSession();
 //       console.error("[CREATE BOOKING REQUEST] Error encountered:", error);
 //       res.status(500).json({
@@ -1401,29 +1221,18 @@
 
 //   // INSERT_YOUR_CODE
 
-//   // Fetch all booking requests for the logged-in parent (optionally can filter as needed)
-//   /**
-//    * Fetch all booking requests for the logged-in parent, with server-side search and pagination.
-//    * Query Params:
-//    *   - search: string (optional, search by Children name/id, therapist name/id, therapy/package, requestId)
-//    *   - page: number (1-based)
-//    *   - limit: number (default 10)
-//    */
 //   async getAllBookingRequests(req, res) {
 //     try {
 //       const parentUserId = req.user?.id;
 
-//       // --- Server-side Pagination ---
 //       let page = Number(req.query.page) || 1;
-//       let limit = Math.max(1, Math.min(Number(req.query.limit) || 10, 100)); // Max 100 per page
+//       let limit = Math.max(1, Math.min(Number(req.query.limit) || 10, 100));
 //       const skip = (page - 1) * limit;
 
-//       // --- Server-side Search ---
 //       const search = (req.query.search || "").trim();
 //       let filter = {};
 
 //       if (parentUserId) {
-//         // Step 1: Find user and all their PatientProfiles (children)
 //         const user = await User.findById(parentUserId).lean();
 //         if (!user) {
 //           return res.status(404).json({ success: false, message: "User not found" });
@@ -1434,16 +1243,12 @@
 //         if (myPatientIds.length > 0) {
 //           filter.Children = { $in: myPatientIds };
 //         } else {
-//           // Parent has no children, nothing to return
 //           return res.json({ success: true, bookingRequests: [], total: 0, page, totalPages: 1 });
 //         }
 //       }
 
-//       // Prepare aggregate pipeline for search on patient/therapist/therapy fields
 //       const aggregatePipeline = [
-//         // Filter: matching this parent
 //         { $match: filter },
-//         // Lookup: PatientProfile
 //         {
 //           $lookup: {
 //             from: "patientprofiles",
@@ -1453,7 +1258,6 @@
 //           }
 //         },
 //         { $unwind: "$patient" },
-//         // Lookup: userId in patient
 //         {
 //           $lookup: {
 //             from: "users",
@@ -1467,7 +1271,6 @@
 //             "patient.user": { $arrayElemAt: ["$patient.userObj", 0] }
 //           }
 //         },
-//         // Lookup: therapy
 //         {
 //           $lookup: {
 //             from: "therapytypes",
@@ -1477,7 +1280,6 @@
 //           }
 //         },
 //         { $unwind: { path: "$therapy", preserveNullAndEmptyArrays: true } },
-//         // Lookup: package
 //         {
 //           $lookup: {
 //             from: "packages",
@@ -1489,7 +1291,6 @@
 //         { $unwind: { path: "$package", preserveNullAndEmptyArrays: true } },
 //       ];
 
-//       // If search present, add $match with OR on relevant fields
 //       if (search) {
 //         const regex = new RegExp(search, "i");
 //         aggregatePipeline.push({
@@ -1502,13 +1303,11 @@
 //               { "package.name": regex },
 //               { "requestId": regex },
 //               { "appointmentId": regex }
-//               // Add more fields as needed
 //             ]
 //           }
 //         });
 //       }
 
-//       // --- For total count (before paginating) ---
 //       const countPipeline = [...aggregatePipeline, { $count: "total" }];
 //       const countResult = await BookingRequests.aggregate(countPipeline).allowDiskUse(true);
 //       const total = countResult[0]?.total || 0;
@@ -1516,19 +1315,14 @@
 //       if (page > totalPages) page = totalPages;
 //       const newSkip = (page - 1) * limit;
 
-//       // --- Pagination + sorting (after search/filter) ---
 //       aggregatePipeline.push({ $sort: { createdAt: -1 } });
 //       aggregatePipeline.push({ $skip: newSkip });
 //       aggregatePipeline.push({ $limit: limit });
 
-//       // Clean up embedded "userObj" after joins
 //       aggregatePipeline.push({
-//         $project: {
-//           "patient.userObj": 0,
-//         }
+//         $project: { "patient.userObj": 0 }
 //       });
 
-//       // Run aggregate
 //       const requests = await BookingRequests.aggregate(aggregatePipeline).allowDiskUse(true);
 
 //       res.json({
@@ -1552,7 +1346,6 @@
 //     }
 //   }
 
-//   // Fetch a single booking request by ID (for view/edit)
 //   async getBookingRequestById(req, res) {
 //     try {
 //       const { id } = req.params;
@@ -1564,10 +1357,7 @@
 //         .populate({
 //           path: "patient",
 //           model: "PatientProfile",
-//           populate: {
-//             path: "userId",
-//             model: "User"
-//           }
+//           populate: { path: "userId", model: "User" }
 //         })
 //         .populate({ path: "therapy", model: "Therapy" });
 
@@ -1586,7 +1376,6 @@
 //     }
 //   }
 
-//   // Edit/Update a booking request by ID
 //   async updateBookingRequest(req, res) {
 //     const mongoose = (await import('mongoose')).default;
 //     const session = await mongoose.startSession();
@@ -1601,7 +1390,6 @@
 //         return res.status(400).json({ success: false, message: "Booking request ID required" });
 //       }
 
-//       // Only update allowed fields
 //       const updateFields = {};
 //       if (req.body.package) updateFields.package = req.body.package;
 //       if (req.body.patient) updateFields.Children = req.body.patient;
@@ -1616,8 +1404,7 @@
 
 //       const bookingRequestBefore = await BookingRequests.findById(id).lean();
 
-//            // INSERT_YOUR_CODE
-//       // Check if booking request is already approved; if so, do not allow edits
+//       // INSERT_YOUR_CODE
 //       if (bookingRequestBefore && bookingRequestBefore.status === 'approved') {
 //         await session.abortTransaction();
 //         session.endSession();
@@ -1636,14 +1423,9 @@
 //         .populate({
 //           path: "patient",
 //           model: "PatientProfile",
-//           populate: {
-//             path: "userId",
-//             model: "User"
-//           }
+//           populate: { path: "userId", model: "User" }
 //         })
 //         .populate({ path: "therapy", model: "TherapyType" });
-
-
 
 //       if (!bookingRequest) {
 //         await session.abortTransaction();
@@ -1651,8 +1433,6 @@
 //         return res.status(404).json({ success: false, message: "Booking request not found" });
 //       }
 
- 
-//       // --- Audit Log (must succeed for booking to be updated) ---
 //       try {
 //         await AuditLogService.addLog(
 //           {
@@ -1673,7 +1453,6 @@
 //           { session }
 //         );
 //       } catch (auditErr) {
-//         // If log fails, revert the update (abort transaction)
 //         await session.abortTransaction();
 //         session.endSession();
 //         console.error("[UPDATE BOOKING REQUEST] Audit log failed, reverted update:", auditErr);
@@ -1691,9 +1470,7 @@
 //     } catch (error) {
 //       try {
 //         await session.abortTransaction();
-//       } catch (abortErr) {
-//         // Ignore abort errors
-//       }
+//       } catch (abortErr) {}
 //       session.endSession();
 //       console.error("[UPDATE BOOKING REQUEST]", error);
 //       res.status(500).json({
@@ -1704,7 +1481,6 @@
 //     }
 //   }
 
-//   // Delete a booking request by ID
 //   async deleteBookingRequest(req, res) {
 //     const mongoose = (await import('mongoose')).default;
 //     const session = await mongoose.startSession();
@@ -1718,7 +1494,6 @@
 //         return res.status(400).json({ success: false, message: "Booking request ID required" });
 //       }
 
-//       // Find the booking request first
 //       const bookingRequest = await BookingRequests.findById(id).session(session);
 //       if (!bookingRequest) {
 //         await session.abortTransaction();
@@ -1726,7 +1501,6 @@
 //         return res.status(404).json({ success: false, message: "Booking request not found" });
 //       }
 
-//       // If booking is already approved, don't allow deletion
 //       if (bookingRequest.status === "approved") {
 //         await session.abortTransaction();
 //         session.endSession();
@@ -1736,7 +1510,6 @@
 //         });
 //       }
 
-//       // --- Audit log before deletion ---
 //       try {
 //         await AuditLogService.addLog(
 //           {
@@ -1755,7 +1528,6 @@
 //           { session }
 //         );
 //       } catch (auditErr) {
-//         // If log fails, revert deletion (abort transaction)
 //         await session.abortTransaction();
 //         session.endSession();
 //         console.error("[DELETE BOOKING REQUEST] Audit log failed, reverted delete:", auditErr);
@@ -1766,7 +1538,6 @@
 //         });
 //       }
 
-//       // Otherwise, delete it
 //       await BookingRequests.findByIdAndDelete(id, { session });
 
 //       await session.commitTransaction();
@@ -1785,25 +1556,16 @@
 //     }
 //   }
 
-
-//   // --- Session Edit Request CRUD ---
-
-//   // Import Counter at top (assuming it is available/registered elsewhere in your module)
-
-//   // Helper function to generate session-edit-requestId
 //   async generateSessionEditRequestId() {
-//     // The counter for "session-edit-request" will just use a sequential format like "SER00001"
 //     const counterDoc = await counterSchema.findOneAndUpdate(
 //       { name: "session-edit-request" },
 //       { $inc: { seq: 1 } },
 //       { new: true, upsert: true }
 //     );
 //     const seqNum = counterDoc.seq;
-//     // Format for example: "SER00001"
 //     return `SER${seqNum.toString().padStart(5, "0")}`;
 //   }
 
-//   // Create a new session edit request (supports bulk sessions for one appointmentId)
 //   async createSessionEditRequest(req, res) {
 //     const mongoose = (await import('mongoose')).default;
 //     const session = await mongoose.startSession();
@@ -1816,23 +1578,17 @@
 //         !patientId ||
 //         !Array.isArray(sessions) ||
 //         sessions.length === 0 ||
-//         !sessions.every(
-//           s =>
-//             s.sessionId &&
-//             s.newDate &&
-//             s.newSlotId
-//         )
+//         !sessions.every(s => s.sessionId && s.newDate && s.newSlotId)
 //       ) {
 //         await session.abortTransaction();
 //         session.endSession();
 //         return res.status(400).json({
 //           success: false,
 //           message:
-//             "Missing required fields. appointmentId, patientId, and sessions (with sessionId, newDate, newSlotId) are required.",
+//             "Missing required fields. appointmentId, childrenId, and sessions (with sessionId, newDate, newSlotId) are required.",
 //         });
 //       }
 
-//       // Check if a pending request for this appointment already exists
 //       const existingPendingRequest = await SessionEditRequest.findOne({
 //         appointmentId: appointmentId,
 //         status: "pending"
@@ -1848,7 +1604,6 @@
 //         });
 //       }
 
-//       // Generate custom session-edit-request Id
 //       const requestId = await this.generateSessionEditRequestId();
 
 //       const requestPayload = {
@@ -1885,8 +1640,7 @@
 //         ipAddress: req.ip,
 //         userAgent: req.headers["user-agent"]
 //       });
-      
-//       // AUDIT LOG (must succeed or abort)
+
 //       try {
 //         await AuditLogService.addLog(
 //           {
@@ -1925,16 +1679,13 @@
 //     } catch (error) {
 //       try {
 //         await session.abortTransaction();
-//       } catch (abortErr) {
-//         // Ignore abort error
-//       }
+//       } catch (abortErr) {}
 //       session.endSession();
 //       console.error("[CREATE SESSION EDIT REQUEST]", error);
 //       res.status(500).json({ success: false, message: "Failed to create session edit request", error: error.message });
 //     }
 //   }
 
-//   // Edit/update a session edit request (only updatable: sessions array, status)
 //   async updateSessionEditRequest(req, res) {
 //     const mongoose = (await import('mongoose')).default;
 //     const session = await mongoose.startSession();
@@ -1948,7 +1699,6 @@
 //         return res.status(400).json({ success: false, message: "Request ID required" });
 //       }
 
-//       // Only allow updating sessions and/or status
 //       const updates = {};
 //       if (req.body.sessions && Array.isArray(req.body.sessions)) {
 //         updates.sessions = req.body.sessions;
@@ -1978,7 +1728,6 @@
 //         return res.status(404).json({ success: false, message: "Session edit request not found" });
 //       }
 
-//       // AUDIT LOG (must succeed or abort)
 //       try {
 //         await AuditLogService.addLog(
 //           {
@@ -2016,16 +1765,13 @@
 //     } catch (error) {
 //       try {
 //         await session.abortTransaction();
-//       } catch (abortErr) {
-//         // ignore
-//       }
+//       } catch (abortErr) {}
 //       session.endSession();
 //       console.error("[UPDATE SESSION EDIT REQUEST]", error);
 //       res.status(500).json({ success: false, message: "Failed to update session edit request", error: error.message });
 //     }
 //   }
 
-//   // Delete a session edit request
 //   async deleteSessionEditRequest(req, res) {
 //     const mongoose = (await import('mongoose')).default;
 //     const session = await mongoose.startSession();
@@ -2045,7 +1791,6 @@
 //         return res.status(404).json({ success: false, message: "Session edit request not found" });
 //       }
 
-//       // AUDIT LOG (must succeed or abort)
 //       try {
 //         await AuditLogService.addLog(
 //           {
@@ -2090,7 +1835,6 @@
 //     }
 //   }
 
-//   // Fetch all session edit requests (queryable by appointmentId, status)
 //   async getSessionEditRequests(req, res) {
 //     try {
 //       const { appointmentId, status } = req.query;
@@ -2108,9 +1852,6 @@
 //     }
 //   }
 
-
-
-
 //   async allBookings(req, res) {
 //     try {
 //       const bookings = await Booking.find()
@@ -2118,31 +1859,16 @@
 //         .populate({
 //           path: "patient",
 //           model: "PatientProfile",
-//           populate: {
-//             path: "userId",
-//             model: "User"
-//           }
+//           populate: { path: "userId", model: "User" }
 //         })
-//         .populate({
-//           path: "therapy",
-//           model: "TherapyType"
-//         })
+//         .populate({ path: "therapy", model: "TherapyType" })
 //         .populate({
 //           path: "therapist",
 //           model: "TherapistProfile",
-//           populate: {
-//             path: "userId",
-//             model: "User"
-//           }
+//           populate: { path: "userId", model: "User" }
 //         })
-//         .populate({
-//           path: "discountInfo.coupon",
-//           model: "Discount"
-//         });
-//       res.json({
-//         success: true,
-//         bookings,
-//       });
+//         .populate({ path: "discountInfo.coupon", model: "Discount" });
+//       res.json({ success: true, bookings });
 //     } catch (error) {
 //       console.error(error);
 //       res.status(500).json({
@@ -2153,27 +1879,14 @@
 //     }
 //   }
 
-//   /**
-//    * Get invoice and payment details for a given booking or appointment
-//    * Expects bookingId or appointmentId in req.params or req.query
-//    */
-//   /**
-//    * Fetch User, then Children Profiles, then all their Bookings, and populate payments for each Booking.
-//    */
-//   /**
-//    * Get invoice and payment details for this parent's children
-//    * Supports: search (by Children name/ID, paymentId), pagination (?page, ?limit)
-//    */
 //   async getInvoiceAndPayment(req, res) {
 //     try {
 //       const userId = req.user.id;
 
-//       // Parse query parameters for search & pagination
 //       const search = (req.query.search || "").trim();
 //       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
 //       const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 10, 100));
 
-//       // 1. Fetch User
 //       const user = await User.findById(userId);
 //       if (!user) {
 //         return res.status(404).json({
@@ -2182,7 +1895,6 @@
 //         });
 //       }
 
-//       // 2. Fetch all Children Profiles linked to this user
 //       const patientProfiles = await PatientProfile.find({ userId });
 //       if (!patientProfiles || patientProfiles.length === 0) {
 //         return res.status(404).json({
@@ -2192,30 +1904,20 @@
 //       }
 //       const patientProfileIds = patientProfiles.map((p) => p._id);
 
-//       // 3. Build Booking query (with search if provided)
 //       let bookingQuery = { patient: { $in: patientProfileIds } };
 //       if (search.length > 0) {
-//         // build a regex for "Children name", "patientId", or paymentId on payment subdocs
-//         const patientProfileIdObj = {}; // for $elemMatch on populate
 //         bookingQuery = {
 //           ...bookingQuery,
 //           $or: [
-//             // try Children name or patientId
-//             { 'patientNameForSearch': { $regex: search, $options: "i" } }, // fallback if you set this field
-//             // fallback: support searching via $lookup on Children model (patient.name matching)
-//             // But since we do not have $lookup directly, we filter after population below
+//             { 'patientNameForSearch': { $regex: search, $options: "i" } },
 //           ]
 //         };
 //       }
 
-//       // 4. Count matching bookings (for pagination)
-//       // We'll fetch all, but filter by populated patient/payment for search after pop if needed
 //       const totalCount = await Booking.countDocuments({ patient: { $in: patientProfileIds } });
 
-//       // 5. Pagination: skip/limit
 //       const skip = (page - 1) * limit;
 
-//       // 6. Fetch and populate bookings for this parent, sorted by most recent
 //       let bookings = await Booking.find({ patient: { $in: patientProfileIds } })
 //         .sort({ createdAt: -1 })
 //         .skip(skip)
@@ -2224,48 +1926,28 @@
 //         .populate({
 //           path: "patient",
 //           model: "PatientProfile",
-//           populate: {
-//             path: "userId",
-//             model: "User",
-//           },
+//           populate: { path: "userId", model: "User" },
 //         })
-//         .populate({
-//           path: "therapy",
-//           model: "TherapyType"
-//         })
+//         .populate({ path: "therapy", model: "TherapyType" })
 //         .populate({
 //           path: "therapist",
 //           model: "TherapistProfile",
-//           populate: {
-//             path: "userId",
-//             model: "User"
-//           }
+//           populate: { path: "userId", model: "User" }
 //         })
-//         .populate({
-//           path: "discountInfo.coupon",
-//           model: "Discount"
-//         })
-//         .populate({
-//           path: "payment",
-//           model: "Payment"
-//         });
+//         .populate({ path: "discountInfo.coupon", model: "Discount" })
+//         .populate({ path: "payment", model: "Payment" });
 
-//       // 7. Search filtering for Children name/ID & paymentId (since not in root doc, filter after populate)
 //       if (search.length > 0) {
 //         const searchLower = search.toLowerCase();
 //         bookings = bookings.filter(b => {
-//           // Check Children name
 //           let found = false;
 //           if (b.patient?.name && b.patient.name.toLowerCase().includes(searchLower)) {
 //             found = true;
 //           }
-//           // Check patientId
 //           if (!found && b.patient?.patientId && (b.patient.patientId + "").toLowerCase().includes(searchLower)) {
 //             found = true;
 //           }
-//           // Check paymentId inside payment(s)
 //           if (!found && b.payment) {
-//             // Either is array or single
 //             let payments = Array.isArray(b.payment) ? b.payment : [b.payment];
 //             for (let pay of payments) {
 //               if (!pay) continue;
@@ -2275,15 +1957,13 @@
 //               }
 //             }
 //           }
-//           // Optionally could also add search for InvoiceId, status, or other fields
 //           return found;
 //         });
 //       }
 
-//       // 8. Structure all payments for these filtered bookings
+//       // Payment details — response keys use "children" terminology
 //       const paymentDetails = [];
 //       for (const booking of bookings) {
-//         // May be a single payment, or potentially an array (if ref type is array), handle both
 //         let payments = [];
 //         if (Array.isArray(booking.payment)) {
 //           payments = booking.payment;
@@ -2294,30 +1974,25 @@
 //           if (!pay) continue;
 //           let invoiceId = pay.paymentId ? pay.paymentId.toString() : "";
 //           let date = pay.createdAt || pay.date || booking.createdAt;
-//           let patientName = "";
-//           // Children name from populated booking
+//           let childrenName = "";
 //           if (
 //             booking.Children &&
 //             booking.patient.userId &&
 //             booking.patient.userId.name
 //           ) {
-//             patientName = booking.patient.name;
+//             childrenName = booking.patient.name;
 //           } else if (booking.Children && booking.patient.name) {
-//             patientName = booking.patient.name;
+//             childrenName = booking.patient.name;
 //           }
-//           let patientId = booking.Children ? booking.patient.patientId : undefined;
-//           // Fallback: user field
-//           if (!patientName && user && user.name) patientName = user.name;
+//           let childrenId = booking.Children ? booking.patient.patientId : undefined;
+//           if (!childrenName && user && user.name) childrenName = user.name;
 
 //           paymentDetails.push({
 //             InvoiceId: invoiceId,
 //             date: date,
-//             patientName: patientName,
-//             patientId,
-//             amount:
-//               pay.amount ||
-//               // fallback to amount in booking if not in payment
-//               booking.totalAmount || 0,
+//             childrenName: childrenName,
+//             childrenId,
+//             amount: pay.amount || booking.totalAmount || 0,
 //             status: pay.status || "Unknown",
 //           });
 //         }
@@ -2340,30 +2015,14 @@
 //       });
 //     }
 //   }
-  
 
-//   /**
-//    * POST /parent/tickets/raise
-//    * Allows a parent to raise a support ticket
-//    * Body: { subject, description, priority, tags }
-//    * Raises a ticket as the logged-in parent user.
-//    */
-//   /**
-//    * POST /parent/tickets/raise
-//    * Allows a parent to raise a support ticket
-//    * Body: { subject, description, priority, tags }
-//    * Raises a ticket as the logged-in parent user.
-//    */
 //   async raiseTicket(req, res) {
 //     try {
-//       // Ensure the user is authenticated and has the correct role
 //       const id = req.user.id;
 
 //       // INSERT_YOUR_CODE
-//       // Fetch the parent (patient) user from DB to ensure it's up-to-date
 //       const user = await User.findById(id);
 
-//       // Accept both 'patient' and 'parent', since frontend refers as parent, backend as patient
 //       if (!user || user.role !== "patient") {
 //         return res.status(401).json({
 //           success: false,
@@ -2373,7 +2032,6 @@
 
 //       const { subject, description, priority, tags } = req.body;
 
-//       // Validate required fields
 //       if (!subject || typeof subject !== "string" || subject.trim().length === 0) {
 //         return res.status(400).json({
 //           success: false,
@@ -2387,18 +2045,14 @@
 //         });
 //       }
 
-//       // Attempt to use both _id (default for Mongo) and patientId (if available from JWT)
-//       // Use _id always, but fallback/alias if needed
 //       const raisedById = user._id || user.patientId;
 //       if (!raisedById) {
-//         // This can happen if JWT is misconfigured for parent objects
 //         return res.status(400).json({
 //           success: false,
 //           message: "Parent user ID not found in authentication. Please log in again.",
 //         });
 //       }
 
-//       // Build ticket data to match ticket.schema.js: raisedByRole: "parent", raisedById
 //       const ticketData = {
 //         raisedByRole: "parent",
 //         raisedById,
@@ -2410,8 +2064,6 @@
 //           : [],
 //       };
 
-//       // Status and other default fields (like createdAt) handled by schema
-
 //       const ticket = new TicketModel(ticketData);
 //       await ticket.save();
 
@@ -2421,7 +2073,6 @@
 //         message: "Ticket raised successfully.",
 //       });
 //     } catch (error) {
-//       // Mongoose validation errors reported nicely
 //       if (error.name === "ValidationError") {
 //         return res.status(400).json({
 //           success: false,
@@ -2439,17 +2090,11 @@
 //   }
 
 // // INSERT_YOUR_CODE
-//   /**
-//    * GET /parent/tickets
-//    * Retrieves all tickets raised by the authenticated parent.
-//    * Can support pagination with query params ?page=1&limit=20
-//    */
 //   async getAllPatientTickets(req, res) {
 //     try {
 //       const id = req.user.id;
 
 //       // INSERT_YOUR_CODE
-//       // Fetch the user (parent) from the database to ensure user exists and get full doc
 //       const user = await User.findById(id);
 
 //       if (!user || user.role !== "patient") {
@@ -2496,19 +2141,6 @@
 //   }
 // // INSERT_YOUR_CODE
 
-//   /**
-//    * POST /parent/consultation-booking
-//    * Allows a parent to create a new consultation booking (the authenticated parent is the client).
-//    * Required body: {
-//    *   consultant: ObjectId (therapist id),
-//    *   therapy: ObjectId (therapyType id),
-//    *   scheduledAt: Date,
-//    *   durationMinutes: Number (optional, defaults to 60),
-//    *   sessionType: 'online'|'in-person',
-//    *   remark: String (optional)
-//    * }
-//    * Protected: requires authentication (parent)
-//    */
 //   async createConsultationBooking(req, res) {
 //     try {
 //       const clientId = req.user.id;
@@ -2516,7 +2148,7 @@
 //         patient,
 //         therapyType,
 //         scheduledAt,
-//         time, // extract time as part of booking
+//         time,
 //         sessionType,
 //         reason
 //       } = req.body;
@@ -2525,7 +2157,6 @@
 
 //       const durationMinutes = 15;
 
-//       // Validate required fields
 //       if (!therapyType || !scheduledAt || !sessionType) {
 //         return res.status(400).json({
 //           success: false,
@@ -2533,14 +2164,11 @@
 //         });
 //       }
 
-//       // Use Counter model to generate a unique consultationAppointmentId
-//       // Import Counter at the top if not already: import Counter from '../../Schema/counter.schema.js';
 //       let seqDoc = await counterSchema.findOneAndUpdate(
 //         { name: "consultationAppointmentId" },
 //         { $inc: { seq: 1 } },
 //         { new: true, upsert: true }
 //       );
-//       // Format: CONSULT-yyyy-00001
 //       const year = new Date().getFullYear();
 //       const seqStr = String(seqDoc.seq).padStart(5, '0');
 //       const consultationAppointmentId = `C-${year}-${seqStr}`;
@@ -2548,13 +2176,13 @@
 //       const booking = await ConsultationBooking.create({
 //         consultationAppointmentId,
 //         client: patient,
-//         therapy:therapyType,
+//         therapy: therapyType,
 //         scheduledAt,
-//         time: time || undefined, // set if present; could validate "HH:mm"
-//         durationMinutes: durationMinutes ? +durationMinutes : 15, // default to 15 minutes
+//         time: time || undefined,
+//         durationMinutes: durationMinutes ? +durationMinutes : 15,
 //         sessionType,
 //         status: "pending",
-//         remark:reason
+//         remark: reason
 //       });
 
 //       return res.status(201).json({
@@ -2571,36 +2199,22 @@
 //     }
 //   }
 
-//   /**
-//    * GET /parent/consultation-bookings
-//    * Fetch consultation bookings for the authenticated parent (optionally by client, but here client is always the authenticated parent).
-//    * Query params: ?page=<number>&limit=<number>
-//    * Protected: requires authentication (parent)
-//    */
 //   async getConsultationBookings(req, res) {
 //     try {
-//       // Fetch the authenticated parent's children (PatientProfiles)
 //       const parentId = req.user.id;
 //       if (!parentId) {
 //         return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
 //       }
 
-//       // Find children profiles for this parent
 //       const children = await PatientProfile.find({ userId: parentId }).lean();
 //       const childIds = children.map(child => child._id);
 
-//       // Pagination
 //       const page = parseInt(req.query.page) > 0 ? parseInt(req.query.page) : 1;
 //       const limit = parseInt(req.query.limit) > 0 ? parseInt(req.query.limit) : 20;
 //       const skip = (page - 1) * limit;
 
-//       // Query for consultation bookings where "client" is any of the parent's children
 //       const query = { client: { $in: childIds } };
 
-//       // Populate: 
-//       // - client: (PatientProfile) patientId, name, AND their 'userId' (User) name
-//       // - consultant: (TherapistProfile) therapistId, AND their 'userId' (User) name
-//       // - therapy: (TherapyType) name
 //       const [bookings, total] = await Promise.all([
 //         ConsultationBooking.find(query)
 //           .sort({ scheduledAt: -1 })
@@ -2610,27 +2224,15 @@
 //             path: "client",
 //             model: "PatientProfile",
 //             select: "patientId name",
-//             populate: {
-//               path: "userId",
-//               model: "User",
-//               select: "name"
-//             }
+//             populate: { path: "userId", model: "User", select: "name" }
 //           })
 //           .populate({
 //             path: "consultant",
 //             model: "TherapistProfile",
 //             select: "therapistId",
-//             populate: {
-//               path: "userId",
-//               model: "User",
-//               select: "name"
-//             }
+//             populate: { path: "userId", model: "User", select: "name" }
 //           })
-//           .populate({
-//             path: "therapy",
-//             model: "TherapyType",
-//             select: "name"
-//           })
+//           .populate({ path: "therapy", model: "TherapyType", select: "name" })
 //           .lean(),
 //         ConsultationBooking.countDocuments(query)
 //       ]);
@@ -2652,29 +2254,20 @@
 //     }
 //   }
 
-//   /**
-//    * PUT /parent/consultation-bookings/:id
-//    * Allows parent to update a consultation booking (cancel or reschedule).
-//    * Body: { status: 'cancelled' | ..., scheduledAt?: Date, time?: string, remark?: string }
-//    * Protected: requires authentication (parent)
-//    */
 //   async updateConsultationBooking(req, res) {
 //     try {
-//       const parentId = req.user.id; // Use parentId to match terminology and usage in rest of controller
+//       const parentId = req.user.id;
 //       const bookingId = req.params.id;
 //       const { status, scheduledAt, time, reason, therapyType, sessionType } = req.body;
 
-//       // Validate bookingId
 //       if (!bookingId) {
 //         return res.status(400).json({ success: false, message: "Booking ID is required." });
 //       }
 
-//       // Ensure only allowed status values can be set
 //       if (status && !['pending', 'confirmed', 'completed', 'cancelled'].includes(status)) {
 //         return res.status(400).json({ success: false, message: "Invalid status value." });
 //       }
 
-//       // Find the parent's patients
 //       const parentUser = await User.findById(parentId).lean();
 //       if (!parentUser) {
 //         return res.status(401).json({ success: false, message: "Unauthorized: parent not found." });
@@ -2682,7 +2275,6 @@
 //       const children = await PatientProfile.find({ userId: parentUser._id }).lean();
 //       const childIds = children.map(child => child._id);
 
-//       // Find consultation booking ONLY if it is for parent's child
 //       const booking = await ConsultationBooking.findOne({ _id: bookingId, client: { $in: childIds } });
 //       if (!booking) {
 //         return res.status(404).json({
@@ -2691,32 +2283,16 @@
 //         });
 //       }
 
-//       // Patch only allowed fields
-//       if (typeof status !== "undefined") {
-//         booking.status = status;
-//       }
-//       if (typeof scheduledAt !== "undefined" && scheduledAt) {
-//         booking.scheduledAt = scheduledAt;
-//       }
-//       if (typeof time !== "undefined") {
-//         booking.time = time;
-//       }
-//       if (typeof reason !== "undefined") {
-//         booking.remark = reason;
-//       }
-//       if (typeof therapyType !== "undefined" && therapyType) {
-//         booking.therapy = therapyType;
-//       }
-//       if (typeof sessionType !== "undefined" && sessionType) {
-//         booking.sessionType = sessionType;
-//       }
+//       if (typeof status !== "undefined") booking.status = status;
+//       if (typeof scheduledAt !== "undefined" && scheduledAt) booking.scheduledAt = scheduledAt;
+//       if (typeof time !== "undefined") booking.time = time;
+//       if (typeof reason !== "undefined") booking.remark = reason;
+//       if (typeof therapyType !== "undefined" && therapyType) booking.therapy = therapyType;
+//       if (typeof sessionType !== "undefined" && sessionType) booking.sessionType = sessionType;
 
 //       await booking.save();
 
-//       res.json({
-//         success: true,
-//         booking
-//       });
+//       res.json({ success: true, booking });
 //     } catch (error) {
 //       console.error("[UPDATE CONSULTATION BOOKING]", error);
 //       res.status(500).json({
@@ -2726,16 +2302,9 @@
 //       });
 //     }
 //   }
-
-
-  
-
-
 // }
 
 // export default ParentController;
-
-// Patient -> Children
 
 import BookingRequests from '../../Schema/booking-request.schema.js';
 import Booking from '../../Schema/booking.schema.js';
@@ -4989,6 +4558,288 @@ class ParentController {
         success: false,
         message: "Failed to retrieve consultation bookings.",
         error: error.message
+      });
+    }
+  }
+
+  /**
+   * GET /api/parent/slot-availability?year=2025&month=5
+   *
+   * Returns slot-level availability for every day in the requested month,
+   * aggregated across ALL active therapists — no therapist names or IDs are
+   * exposed to the patient panel.
+   *
+   * Availability rules (mirrors the admin-panel frontend logic exactly):
+   *   • Each active therapist contributes 10 normal + 5 limited slots per day.
+   *   • A full-day holiday removes that therapist's entire contribution for that day.
+   *   • A partial holiday (isFullDay=false) removes specific slots from that
+   *     therapist's pool for that day.
+   *   • A slot is "booked" when it appears in sessions.slotId for that therapist
+   *     on that date in the Booking collection.
+   *
+   * Response shape:
+   * {
+   *   success: true,
+   *   year: 2025,
+   *   month: 5,          // 1-based
+   *   days: {
+   *     "2025-05-01": {
+   *       slots: {
+   *         "0830-0915": { label: "08:30 to 09:15", limited: true,  totalCapacity: 4, booked: 2, available: 2 },
+   *         "1000-1045": { label: "10:00 to 10:45", limited: false, totalCapacity: 7, booked: 5, available: 2 },
+   *         ...
+   *       },
+   *       summary: {
+   *         totalNormalCapacity: 70, normalBooked: 50, normalAvailable: 20,
+   *         totalLimitedCapacity: 20, limitedBooked: 10, limitedAvailable: 10,
+   *       }
+   *     },
+   *     ...
+   *   }
+   * }
+   */
+  async getMonthlySlotAvailability(req, res) {
+    console.log("hit");
+    try {
+      // ── 1. Parse & validate query params ─────────────────────────────────────
+      const now = new Date();
+      const year  = parseInt(req.query.year,  10) || now.getFullYear();
+      const month = parseInt(req.query.month, 10) || (now.getMonth() + 1); // 1-based
+
+      if (month < 1 || month > 12) {
+        return res.status(400).json({ success: false, message: "month must be between 1 and 12." });
+      }
+
+      // ── 2. Slot master list (mirrors SESSION_TIME_OPTIONS in types.ts) ───────
+      const SESSION_TIME_OPTIONS = [
+        { id: '1000-1045', label: '10:00 to 10:45', limited: false },
+        { id: '1045-1130', label: '10:45 to 11:30', limited: false },
+        { id: '1130-1215', label: '11:30 to 12:15', limited: false },
+        { id: '1215-1300', label: '12:15 to 13:00', limited: false },
+        { id: '1300-1345', label: '13:00 to 13:45', limited: false },
+        { id: '1415-1500', label: '14:15 to 15:00', limited: false },
+        { id: '1500-1545', label: '15:00 to 15:45', limited: false },
+        { id: '1545-1630', label: '15:45 to 16:30', limited: false },
+        { id: '1630-1715', label: '16:30 to 17:15', limited: false },
+        { id: '1715-1800', label: '17:15 to 18:00', limited: false },
+        { id: '0830-0915', label: '08:30 to 09:15', limited: true  },
+        { id: '0915-1000', label: '09:15 to 10:00', limited: true  },
+        { id: '1800-1845', label: '18:00 to 18:45', limited: true  },
+        { id: '1845-1930', label: '18:45 to 19:30', limited: true  },
+        { id: '1930-2015', label: '19:30 to 20:15', limited: true  },
+      ];
+      const NORMAL_SLOTS_PER_THERAPIST  = 10;
+      const LIMITED_SLOTS_PER_THERAPIST = 5;
+
+      // Build a quick lookup: slotId → slot meta
+      const slotMeta = {};
+      for (const s of SESSION_TIME_OPTIONS) slotMeta[s.id] = s;
+
+      // ── 3. Build all date strings for the requested month (YYYY-MM-DD) ───────
+      const pad2 = (n) => (n < 10 ? `0${n}` : `${n}`);
+      const daysInMonth = new Date(year, month, 0).getDate(); // month is 1-based here
+      const allDates = [];
+      for (let d = 1; d <= daysInMonth; d++) {
+        allDates.push(`${year}-${pad2(month)}-${pad2(d)}`);
+      }
+
+      // ── 4. Fetch all active therapists (with their holidays) ─────────────────
+      const activeTherapists = await TherapistProfile.aggregate([
+        {
+          $lookup: {
+            from: "users",
+            localField: "userId",
+            foreignField: "_id",
+            as: "user",
+          },
+        },
+        { $unwind: "$user" },
+        {
+          $match: {
+            "user.status": "active",
+            "user.isDisabled": { $ne: true },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            holidays: 1,   // needed for holiday exclusion
+            // no name, no therapistId — patient panel must not see these
+          },
+        },
+      ]);
+
+      if (activeTherapists.length === 0) {
+        // Return all-zero availability — no therapists means no slots
+        const days = {};
+        for (const dateStr of allDates) {
+          const slots = {};
+          for (const s of SESSION_TIME_OPTIONS) {
+            slots[s.id] = { label: s.label, limited: s.limited, totalCapacity: 0, booked: 0, available: 0 };
+          }
+          days[dateStr] = {
+            slots,
+            summary: { totalNormalCapacity: 0, normalBooked: 0, normalAvailable: 0,
+                        totalLimitedCapacity: 0, limitedBooked: 0, limitedAvailable: 0 },
+          };
+        }
+        return res.json({ success: true, year, month, days });
+      }
+
+      // ── 5. Fetch all bookings for this month in one query ────────────────────
+      // We only need sessions inside the month window — unwind + match is efficient.
+      const monthStart = `${year}-${pad2(month)}-01`;
+      const monthEnd   = `${year}-${pad2(month)}-${pad2(daysInMonth)}`;
+
+      const bookedSessionRows = await Booking.aggregate([
+        { $unwind: "$sessions" },
+        {
+          $match: {
+            "sessions.date": { $gte: monthStart, $lte: monthEnd },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            date:       "$sessions.date",
+            slotId:     "$sessions.slotId",
+            therapist:  "$sessions.therapist",  // ObjectId
+          },
+        },
+      ]);
+
+      // Build: bookedSlotsByTherapistDate[therapistId][date] = Set<slotId>
+      // Using Sets prevents double-counting if the same slot somehow appears twice.
+      const bookedSlotsByTherapistDate = {};
+      for (const row of bookedSessionRows) {
+        const tId = row.therapist?.toString();
+        if (!tId || !row.date || !row.slotId) continue;
+        if (!bookedSlotsByTherapistDate[tId]) bookedSlotsByTherapistDate[tId] = {};
+        if (!bookedSlotsByTherapistDate[tId][row.date]) bookedSlotsByTherapistDate[tId][row.date] = new Set();
+        bookedSlotsByTherapistDate[tId][row.date].add(row.slotId);
+      }
+
+      // ── 6. Compute availability per day, per slot ─────────────────────────────
+      const days = {};
+
+      for (const dateStr of allDates) {
+        // Per-slot accumulators across all therapists for this day
+        // slotCapacity[slotId] = number of therapists who can take that slot
+        // slotBooked[slotId]   = number of therapists who already have it booked
+        const slotCapacity = {};  // total capacity contributed by active therapists
+        const slotBooked   = {};  // booked count across all therapists
+        for (const s of SESSION_TIME_OPTIONS) {
+          slotCapacity[s.id] = 0;
+          slotBooked[s.id]   = 0;
+        }
+
+        for (const therapist of activeTherapists) {
+          const tId = therapist._id.toString();
+
+          // ── 6a. Full-day holiday → therapist contributes nothing today ────
+          const isFullDayHoliday = (therapist.holidays || []).some(
+            (h) => h.date === dateStr && (h.isFullDay === true || h.isFullDay === undefined)
+          );
+          if (isFullDayHoliday) continue;
+
+          // ── 6b. Partial holidays → collect blocked slotIds for this therapist ─
+          const blockedSlotIds = new Set();
+          for (const h of therapist.holidays || []) {
+            if (h.date === dateStr && h.isFullDay === false && Array.isArray(h.slots)) {
+              for (const sl of h.slots) {
+                if (sl.slotId) blockedSlotIds.add(sl.slotId);
+              }
+            }
+          }
+
+          // ── 6c. Remaining capacity for this therapist after partial holidays ─
+          // A partial holiday reduces the therapist's normal/limited pool exactly
+          // like the admin frontend does (mirrors lines 163-169 of AppointmentBookingSystemMain.tsx).
+          let normalLeft  = NORMAL_SLOTS_PER_THERAPIST;
+          let limitedLeft = LIMITED_SLOTS_PER_THERAPIST;
+          for (const blockedId of blockedSlotIds) {
+            const meta = slotMeta[blockedId];
+            if (!meta) continue;
+            if (meta.limited) limitedLeft = Math.max(0, limitedLeft - 1);
+            else              normalLeft  = Math.max(0, normalLeft  - 1);
+          }
+
+          // ── 6d. Booked slots for this therapist on this date ──────────────
+          const bookedSet = bookedSlotsByTherapistDate[tId]?.[dateStr] || new Set();
+
+          // ── 6e. For each slot: decide if this therapist adds 1 capacity ───
+          // A therapist "offers" a slot if:
+          //   • it is not blocked by a partial holiday, AND
+          //   • the category (normal/limited) still has room after holiday reductions
+          // A therapist has the slot "booked" if it appears in bookedSet.
+          for (const slot of SESSION_TIME_OPTIONS) {
+            // Slot blocked by partial holiday → skip entirely (no capacity, no booking counted)
+            if (blockedSlotIds.has(slot.id)) continue;
+
+            // Category exhausted by holidays → this therapist can't offer this slot
+            if ( slot.limited && limitedLeft  <= 0) continue;
+            if (!slot.limited && normalLeft   <= 0) continue;
+
+            // Therapist can offer this slot → add 1 to capacity
+            slotCapacity[slot.id] += 1;
+
+            // Is this specific slot already taken by this therapist?
+            if (bookedSet.has(slot.id)) {
+              slotBooked[slot.id] += 1;
+            }
+          }
+        }
+
+        // ── 6f. Build the per-slot response object & day summary ─────────────
+        const slots = {};
+        let totalNormalCapacity = 0, normalBooked = 0;
+        let totalLimitedCapacity = 0, limitedBooked = 0;
+
+        for (const s of SESSION_TIME_OPTIONS) {
+          const capacity  = slotCapacity[s.id];
+          const booked    = slotBooked[s.id];
+          const available = Math.max(0, capacity - booked);
+
+          slots[s.id] = {
+            label:         s.label,
+            limited:       s.limited,
+            totalCapacity: capacity,
+            booked,
+            available,
+          };
+
+          if (s.limited) {
+            totalLimitedCapacity += capacity;
+            limitedBooked        += booked;
+          } else {
+            totalNormalCapacity  += capacity;
+            normalBooked         += booked;
+          }
+        }
+
+        days[dateStr] = {
+          slots,
+          summary: {
+            totalNormalCapacity,
+            normalBooked,
+            normalAvailable:   Math.max(0, totalNormalCapacity  - normalBooked),
+            totalLimitedCapacity,
+            limitedBooked,
+            limitedAvailable:  Math.max(0, totalLimitedCapacity - limitedBooked),
+          },
+        };
+      }
+
+
+
+      return res.json({ success: true, year, month, days });
+
+    } catch (error) {
+      console.error("[GET_MONTHLY_SLOT_AVAILABILITY]", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch slot availability.",
+        error: error.message,
       });
     }
   }

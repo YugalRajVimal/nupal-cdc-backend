@@ -437,6 +437,73 @@ class BookingAdminController {
     }
   }
 
+  async getAllBookings(req, res) {
+    try {
+      const {
+        page = 1,
+        pageSize = 15,
+        sortField = "createdAt",
+        sortOrder = "desc"
+      } = req.query;
+
+      // No filters or search; fetch all bookings, paginate, and sort only.
+      let sortObj = {};
+      if (sortField) sortObj[sortField] = sortOrder === "desc" ? -1 : 1;
+      const _page = parseInt(page, 10) || 1;
+      const _pageSize = parseInt(pageSize, 10) || 15;
+      const skip = (_page - 1) * _pageSize;
+
+      // Get total count
+      const total = await Booking.countDocuments();
+
+      // Query bookings with pagination and population
+      const bookings = await Booking.find({})
+        .sort(sortObj)
+        .skip(skip)
+        .limit(_pageSize)
+        .populate({ path: "package" })
+        .populate({ path: "therapy", model: "TherapyType" })
+        .populate({
+          path: "therapist",
+          model: "TherapistProfile",
+          populate: { path: "userId", model: "User" }
+        })
+        .populate({
+          path: "patient",
+          model: "PatientProfile",
+          populate: { path: "userId", model: "User" }
+        })
+        .populate({ path: "payment", model: "Payment" })
+        .populate({ path: "discountInfo.coupon", model: "Discount" })
+        .populate({
+          path: "sessions.therapist",
+          model: "TherapistProfile",
+          populate: { path: "userId", model: "User" }
+        })
+        .populate({
+          path: "sessions.therapyTypeId",
+          model: "TherapyType"
+        });
+
+      res.json({
+        success: true,
+        bookings,
+        total,
+        page: _page,
+        pageSize: _pageSize,
+        totalPages: Math.ceil(total / _pageSize)
+      });
+
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch bookings.",
+        error: error.message,
+      });
+    }
+  }
+
   // Create a new booking with updated booking schema (1-47)
   async createBooking(req, res) {
     const session = await mongoose.startSession();
@@ -908,72 +975,7 @@ class BookingAdminController {
    * - Accepts filters in req.query, e.g. therapist, patient, paymentStatus, etc.
    * - Example: /api/admin/bookings?search=foo&page=1&pageSize=5&paymentStatus=paid&therapist=NPL0002&patient=P0005
    */
-  async getAllBookings(req, res) {
-    try {
-      const {
-        page = 1,
-        pageSize = 15,
-        sortField = "createdAt",
-        sortOrder = "desc"
-      } = req.query;
 
-      // No filters or search; fetch all bookings, paginate, and sort only.
-      let sortObj = {};
-      if (sortField) sortObj[sortField] = sortOrder === "desc" ? -1 : 1;
-      const _page = parseInt(page, 10) || 1;
-      const _pageSize = parseInt(pageSize, 10) || 15;
-      const skip = (_page - 1) * _pageSize;
-
-      // Get total count
-      const total = await Booking.countDocuments();
-
-      // Query bookings with pagination and population
-      const bookings = await Booking.find({})
-        .sort(sortObj)
-        .skip(skip)
-        .limit(_pageSize)
-        .populate({ path: "package" })
-        .populate({ path: "therapy", model: "TherapyType" })
-        .populate({
-          path: "therapist",
-          model: "TherapistProfile",
-          populate: { path: "userId", model: "User" }
-        })
-        .populate({
-          path: "patient",
-          model: "PatientProfile",
-          populate: { path: "userId", model: "User" }
-        })
-        .populate({ path: "payment", model: "Payment" })
-        .populate({ path: "discountInfo.coupon", model: "Discount" })
-        .populate({
-          path: "sessions.therapist",
-          model: "TherapistProfile",
-          populate: { path: "userId", model: "User" }
-        })
-        .populate({
-          path: "sessions.therapyTypeId",
-          model: "TherapyType"
-        });
-
-      res.json({
-        success: true,
-        bookings,
-        total,
-        page: _page,
-        pageSize: _pageSize,
-        totalPages: Math.ceil(total / _pageSize)
-      });
-
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to fetch bookings.",
-        error: error.message,
-      });
-    }
-  }
 
   // Get single booking by id (populated)
   // async getBookingById(req, res) {
