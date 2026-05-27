@@ -19,6 +19,11 @@ const SessionSchema = new Schema({
     type: Boolean, 
     default: false 
   },
+  status: {
+    type: String,
+    enum: ['CheckedIn', 'NotCheckedIn', 'Missed'],
+    default: 'NotCheckedIn'
+  },
  
   // add more fields as needed
 });

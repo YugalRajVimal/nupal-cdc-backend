@@ -3611,7 +3611,7 @@ async checkIn(req, res) {
         { path: "sessions.therapist", model: "TherapistProfile", select: "userId therapistId phoneNo", populate: { path: "userId", model: "User", select: "name phone email" } }
       ])
       .session(session);
- 
+
     if (!booking) {
       await session.abortTransaction();
       session.endSession();
@@ -3647,8 +3647,9 @@ async checkIn(req, res) {
     }
 
     const date = new Date();
-    // Mark this session as checked in and set checkInTime
+    // Mark this session as checked in, set checkInTime and update status as "CheckedIn"
     booking.sessions[sessionIndex].isCheckedIn = true;
+    booking.sessions[sessionIndex].status = "CheckedIn";
     booking.sessions[sessionIndex].checkInTime = date;
     await booking.save({ session });
 
@@ -3692,17 +3693,14 @@ async checkIn(req, res) {
     // Make sure to send correct data to whatsapp (Children name, phone number, appointmentId, sessionId, checkIn time, therapist, etc.)
     try {
       // Import WhatsappController only when needed to avoid cycles, or move to top if safe
-      // import WhatsappController from "../Whatsapp/whatsapp.js";
       const WhatsappController = (await import("../Whatsapp/whatsapp.js")).default;
 
       // Children profile
       let patientName = "";
       let patientPhone = "";
       if (booking.patient) {
-       
-          patientName = booking.patient.name || "";
-          patientPhone = booking.patient.mobile1 || "";
-
+        patientName = booking.patient.name || "";
+        patientPhone = booking.patient.mobile1 || "";
       }
       // Therapist profile
       let therapistName = "";
@@ -3760,6 +3758,115 @@ async checkIn(req, res) {
     });
   }
 }
+
+/**
+ * Mark a session as missed for a booking.
+ * Expects: { bookingId, sessionId }
+ * Only marks as missed if current status is NOT 'CheckedIn'.
+ * Sets isCheckedIn = false and status = "Missed".
+ */
+async markSessionMissed(req, res) {
+  const session = await Booking.startSession();
+  session.startTransaction();
+  try {
+    const { bookingId, sessionId } = req.body;
+
+    if (!bookingId || !sessionId) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "bookingId and sessionId are required."
+      });
+    }
+
+    // Find the booking (attach the session/tx)
+    const booking = await Booking.findById(bookingId).session(session);
+
+    if (!booking) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found."
+      });
+    }
+
+    // Find session index in the booking sessions array
+    const sessionIndex = booking.sessions.findIndex(
+      (sess) => String(sess._id) === String(sessionId)
+    );
+
+    if (sessionIndex === -1) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Session not found in this booking."
+      });
+    }
+
+    // Do NOT mark as missed if already checked-in
+    if (
+      booking.sessions[sessionIndex].status === "CheckedIn" ||
+      booking.sessions[sessionIndex].isCheckedIn
+    ) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(409).json({
+        success: false,
+        message: "Session has already been checked in. Cannot mark as missed."
+      });
+    }
+
+    // Mark as missed
+    booking.sessions[sessionIndex].isCheckedIn = false;
+    booking.sessions[sessionIndex].status = "Missed";
+    await booking.save({ session });
+
+    // Optionally: Add to audit log
+    try {
+      await AuditLogService.addLog({
+        action: "SESSION_MARKED_MISSED",
+        user: req.user && req.user.id ? req.user.id : null,
+        role: "admin",
+        resource: "Booking",
+        resourceId: booking._id,
+        details: {
+          bookingId: booking._id,
+          sessionId,
+          markedMissedBy: req.user && req.user._id ? req.user._id : null,
+          markedAt: new Date(),
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] || null,
+      });
+    } catch (err) {
+      console.error("[markSessionMissed] Error creating audit log:", err);
+      // If audit log fails, do not revert the change.
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+    return res.json({
+      success: true,
+      message: "Session marked as missed successfully.",
+      booking
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("[markSessionMissed] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark session as missed.",
+      error: error.message
+    });
+  }
+}
+
+
+
 
 // Check-in a Children for a booking
 // async checkIn(req, res) {

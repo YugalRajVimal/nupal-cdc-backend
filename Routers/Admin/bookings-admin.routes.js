@@ -82,6 +82,16 @@ bookingsAdminRouter.post("/check-in",jwtAuth, (req, res) =>
 );
 
 /**
+ * @route POST /api/admin/bookings/mark-session-missed
+ * @desc Mark a specific session as missed for a booking
+ * @access Admin (authentication required)
+ */
+bookingsAdminRouter.post("/mark-session-missed", jwtAuth, (req, res) =>
+  bookingAdminController.markSessionMissed(req, res)
+);
+
+
+/**
  * @route GET /api/admin/bookings/reception-desk
  * @desc Get today's bookings and pending payment bookings (Reception Desk details)
  */
