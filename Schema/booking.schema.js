@@ -22,7 +22,7 @@ const SessionSchema = new Schema({
   status: {
     type: String,
     enum: ['CheckedIn', 'NotCheckedIn', 'Missed'],
-    default: 'NotCheckedIn'
+    default: 'NotCheckedIn' 
   },
  
   // add more fields as needed

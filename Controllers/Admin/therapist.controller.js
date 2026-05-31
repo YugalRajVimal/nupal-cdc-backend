@@ -771,7 +771,10 @@ class TherapistAdminController {
           await WhatsappController.sendTherapistPaymentInitiated({
             destination,
             userName: userName || "",
-            therapistName: therapistName || "",
+            therapistName: therapistName
+              ? `${therapistName} (${therapist.therapistId || therapist._id || ""})`
+              : `${therapist.therapistId || therapist._id || ""}`,
+       
             amountPaid: amount != null ? String(amount) : "",
             paymentType: type || "",
             periodFrom: formatISODate(fromDate),

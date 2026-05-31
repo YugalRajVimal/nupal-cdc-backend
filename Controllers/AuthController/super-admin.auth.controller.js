@@ -116,33 +116,33 @@ class SuperAdminAuthController {
         return res.status(500).json({ message: "Audit log creation failed. Login aborted." });
       }
 
-      // --- Send WhatsApp notification for superadmin login success ---
-      try {
-        // Use text-based template from @whatsapp.js lines 119-144 for WhatsApp notification
-        // This matches the WhatsAppController.sendSuperAdminLoginSuccess() signature/documented structure
+      // // --- Send WhatsApp notification for superadmin login success ---
+      // try {
+      //   // Use text-based template from @whatsapp.js lines 119-144 for WhatsApp notification
+      //   // This matches the WhatsAppController.sendSuperAdminLoginSuccess() signature/documented structure
 
-        const destination = user.phone;
-        const userName = user.name || "";
-        const userNameParam = user.name || "Superadmin";
-        const device = req.headers["user-agent"] || "Unknown Device";
-        // Provide client IP from header or fallback
-        const location = req.headers["x-forwarded-for"] || req.ip || "Not available";
-        // Format as per India timezone and readable string
-        const dateTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+      //   const destination = user.phone;
+      //   const userName = user.name || "";
+      //   const userNameParam = user.name || "Superadmin";
+      //   const device = req.headers["user-agent"] || "Unknown Device";
+      //   // Provide client IP from header or fallback
+      //   const location = req.headers["x-forwarded-for"] || req.ip || "Not available";
+      //   // Format as per India timezone and readable string
+      //   const dateTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
 
-        // Using the implementation model from whatsapp.js (119-144)
-        await WhatsappController.sendSuperAdminLoginSuccess({
-          destination,
-          userName,
-          userNameParam,
-          dateTime,
-          device,
-          location
-        });
-      } catch (waErr) {
-        // Don't fail the login if WhatsApp notification fails -- log the error.
-        console.error("Failed to send WhatsApp superadmin login notification:", waErr);
-      }
+      //   // Using the implementation model from whatsapp.js (119-144)
+      //   await WhatsappController.sendSuperAdminLoginSuccess({
+      //     destination,
+      //     userName,
+      //     userNameParam,
+      //     dateTime,
+      //     device,
+      //     location
+      //   });
+      // } catch (waErr) {
+      //   // Don't fail the login if WhatsApp notification fails -- log the error.
+      //   console.error("Failed to send WhatsApp superadmin login notification:", waErr);
+      // }
 
       await session.commitTransaction();
       session.endSession();

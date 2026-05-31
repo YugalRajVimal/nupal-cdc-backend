@@ -21,21 +21,20 @@ class CashfreeController {
 
   // Generates a Cashfree order, creates payment & attaches to booking (if provided)
   generateSessionId = async (req, res) => {
-    console.log("Get Cashfree Session ID: Started");
     const { paymentId } = req.body;
 
     try {
-      // Fetch the payment using paymentId
       if (!paymentId) {
         return res.status(400).json({ error: "paymentId is required in the body" });
       }
 
+      // Fetch Payment
       const payment = await Payment.findOne({ paymentId });
       if (!payment) {
         return res.status(404).json({ error: "Payment not found" });
       }
 
-      // Early exit: If payment already marked as paid, do not create sessionId/order
+      // Early exit: already PAID
       if (payment.status && payment.status.toLowerCase() === "paid") {
         return res.status(200).json({
           message: "Payment has already been completed for this paymentId.",
@@ -46,26 +45,114 @@ class CashfreeController {
         });
       }
 
-      // Try to find related booking
-      const booking = await Booking.findOne({ payment: payment._id }).populate({
-        path: 'patient',
-        model: PatientProfile,
-      });
+      // Fetch associated booking and deeply populate discountInfo.coupon and patient
+      // This ensures we have access to coupon's discount, couponCode, validity etc.
+      const booking = await Booking.findOne({ payment: payment._id })
+        .populate({
+          path: 'patient',
+          model: PatientProfile,
+        })
+        .populate({
+          path: 'discountInfo.coupon',
+          model: "Discount"
+        })
+        .populate({
+          path: 'package'
+        });
+      console.log("Fetched Booking with discountInfo.coupon populated:", booking);
 
-      let Children = null;
+      let patient = null;
       if (booking && booking.patient) {
-        // Children in booking refers to PatientProfile
-        Children = await PatientProfile.findById(booking.patient._id || booking.patient);
+        patient = await PatientProfile.findById(booking.patient._id || booking.patient);
       }
 
-      // Always generate a new unique orderId
+      // Calculate invoiceOriginal (before any discount)
+      let invoiceOriginal = (payment.totalAmount != null)
+        ? payment.totalAmount
+        : (booking && booking.package && typeof booking.package.price === "number"
+            ? booking.package.price
+            : booking && booking.totalAmount != null
+                ? booking.totalAmount
+                : payment.amount
+          );
+
+      console.log("invoiceOriginal (before any discount):", invoiceOriginal);
+
+      // ---- DISCOUNT RESOLUTION LOGIC ----
+      // Try to get discount from booking.discountInfo.coupon if available and enabled
+      let discountAmount = 0;
+      if (
+        booking &&
+        booking.discountInfo &&
+        booking.discountInfo.coupon &&
+        booking.discountInfo.coupon.discountEnabled === true &&
+        typeof booking.discountInfo.coupon.discount === "number" &&
+        booking.discountInfo.coupon.discount > 0
+      ) {
+        // Percentage-based discount (as per discount.schema.js)
+        discountAmount = Math.floor(
+          invoiceOriginal * (booking.discountInfo.coupon.discount / 100)
+        );
+        console.log("Using discount from booking.discountInfo.coupon (percentage):", discountAmount);
+      } else if (
+        booking &&
+        booking.discountInfo &&
+        typeof booking.discountInfo.discountAmount === "number" &&
+        booking.discountInfo.discountAmount > 0
+      ) {
+        discountAmount = booking.discountInfo.discountAmount;
+        console.log("Using discount from booking.discountInfo.discountAmount:", discountAmount);
+      } else if (
+        payment.discountInfo &&
+        typeof payment.discountInfo.amount === "number" &&
+        payment.discountInfo.amount > 0
+      ) {
+        discountAmount = payment.discountInfo.amount;
+        console.log("Using discount from payment.discountInfo.amount:", discountAmount);
+      } else {
+        console.log("No discount available or detected. discountAmount set to 0.");
+      }
+
+      let invoiceAfterDiscount =
+        invoiceOriginal != null
+          ? Math.max(0, Math.round(invoiceOriginal - discountAmount))
+          : null;
+      console.log("invoiceAfterDiscount:", invoiceAfterDiscount);
+
+      let totalPaid = 0;
+      // payment.amountPaid may represent what has been paid (partial payments)
+      if (payment.amountPaid && !isNaN(payment.amountPaid)) {
+        totalPaid = Number(payment.amountPaid);
+        console.log("Using payment.amountPaid as totalPaid:", totalPaid);
+      } else {
+        console.log("No amountPaid detected or set to 0.");
+      }
+      // Ensure not to double-count in case of partial payments; only count for this Payment, not all payments
+
+      let dueAmount = invoiceAfterDiscount != null ? invoiceAfterDiscount - totalPaid : null;
+      if (dueAmount != null) dueAmount = Math.max(0, Math.round(dueAmount));
+      console.log("dueAmount (amount left after discount and paid):", dueAmount);
+
+      if (dueAmount === 0) {
+        console.log("Nothing due for this paymentId (already paid or overpaid). Returning response.");
+        return res.status(200).json({
+          message: "Nothing due for this paymentId (already paid or overpaid).",
+          alreadyPaid: true,
+          dueAmount: dueAmount,
+          paymentId: payment.paymentId,
+          paymentDbId: payment._id,
+          cashfree: payment.cashfree || null
+        });
+      }
+
+      // Always generate a new unique orderId for Cashfree
       const orderId = await this.generateOrderId();
-      const amount = payment.amount;
+      const amount = dueAmount;
       const remark = payment.remark || (booking
         ? `Online payment initiated for appointment ${booking.appointmentId}`
         : `Manual payment`);
 
-      // Gather customer details
+      // Gather customer data
       let customer_name = '';
       let customer_phone = '';
       let customer_email = '';
@@ -77,18 +164,15 @@ class CashfreeController {
         customer_email = patient.parentEmail || '';
         customer_id = patient.patientId || `guest-${orderId}`;
       } else if (booking && booking.patient) {
-        // fallback: booking's Children field populated
-        if (typeof booking.Children === 'object') {
-          customer_name = booking.patient.name || '';
-          customer_phone = booking.patient.mobile1 || '';
-          customer_email = booking.patient.parentEmail || '';
-          customer_id = booking.patient.patientId || `guest-${orderId}`;
-        }
+        customer_name = booking.patient.name || '';
+        customer_phone = booking.patient.mobile1 || '';
+        customer_email = booking.patient.parentEmail || '';
+        customer_id = booking.patient.patientId || `guest-${orderId}`;
       } else {
         customer_id = `guest-${orderId}`;
       }
 
-      // Compose Cashfree order payload including order_meta
+      // Compose order payload for due amount
       let request = {
         order_id: orderId,
         order_amount: amount,
@@ -108,12 +192,10 @@ class CashfreeController {
 
       const response = await CashfreePG.PGCreateOrder("2023-08-01", request);
 
-      // Save CashfreeSchema details to payment when session/order is created
-      // See payment.schema.js@CashfreeSchema and its structure
+      // Save to payment.cashfree block in schema (override on session create)
       if (response?.data) {
-        // Build CashfreeSchema-compliant object
         const cashfreeDetails = {
-          cf_order_id: response.data.cf_order_id || response.data.order_id || null, // fallback for cf_order_id if not present
+          cf_order_id: response.data.cf_order_id || response.data.order_id || null,
           order_id: orderId,
           payment_session_id: response.data.payment_session_id || null,
           order_status: response.data.order_status || null,
@@ -129,26 +211,30 @@ class CashfreeController {
             phone: customer_phone,
           },
           order_meta: {
-            return_url: (request.order_meta && request.order_meta.return_url) || "",
-            notify_url: (request.order_meta && request.order_meta.notify_url) || ""
+            return_url: request.order_meta && request.order_meta.return_url || "",
+            notify_url: request.order_meta && request.order_meta.notify_url || "",
           }
         };
 
-        // Save to payment.cashfree and persist
         payment.cashfree = cashfreeDetails;
         await payment.save();
       }
 
-      console.log("Cashfree order created:", response.data);
-
       res.status(200).json({
         ...response.data,
         paymentId: payment.paymentId,
-        orderId: orderId, // return both for clarity
+        orderId: orderId,
         paymentDbId: payment._id,
-        bookingId: booking?._id
+        bookingId: booking?._id,
+        invoiceOriginal,
+        discountAmount,
+        invoiceAfterDiscount,
+        totalPaid,
+        dueAmount
       });
     } catch (error) {
+      // Keep this error log as it is general error handling,
+      // but remove all other detailed logs per instruction above
       console.error("Error creating Cashfree order", error);
       res.status(500).json({ error: "Internal Server Error" });
     }

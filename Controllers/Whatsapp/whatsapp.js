@@ -1130,20 +1130,18 @@ class WhatsappController {
     userName,
     appointmentId,
     patientName,
-    therapist,
     totalSessions,
     paymentId
   }) {
     const payload = {
       apiKey: AISENSY_API_KEY,
-      campaignName: "Booking Creation Completed",
+      campaignName: "Booking Creation Completed New",
       destination: destination || "",
       userName: userName || "",
       templateParams: [
         userName || "",
         appointmentId || "",
         patientName || "",
-        therapist || "",
         totalSessions != null && totalSessions !== undefined ? String(totalSessions) : "",
         paymentId || ""
       ]
@@ -1155,7 +1153,6 @@ class WhatsappController {
       userName,
       appointmentId,
       patientName,
-      therapist,
       totalSessions,
       paymentId
     });
@@ -1201,7 +1198,7 @@ async sendChildrenRegistrationSuccessfull({
 }) {
   const payload = {
     apiKey: AISENSY_API_KEY,
-    campaignName: "Children Registration Successfull",
+    campaignName: "Children Registration Successfull New",
     destination: destination || "",
     userName: userName || "",
     templateParams: [
@@ -1241,20 +1238,18 @@ async sendBookingEditSuccess({
   userName,
   appointmentId,
   patientName,
-  therapistName,
   totalSessions,
   status
 }) {
   const payload = {
     apiKey: AISENSY_API_KEY,
-    campaignName: "Booking Edited Successfully",
+    campaignName: "Booking Edited Successfully New",
     destination: destination || "",
     userName: userName || "",
     templateParams: [
       userName || "",
       appointmentId || "",
       patientName || "",
-      therapistName || "",
       String(totalSessions ?? ""),
       status || ""
     ]
@@ -1266,7 +1261,6 @@ async sendBookingEditSuccess({
     userName,
     appointmentId,
     patientName,
-    therapistName,
     totalSessions,
     status
   });
@@ -1295,7 +1289,7 @@ async sendBookingEditSuccess({
 async sendSessionCompleted({ destination, userName, appointmentId, sessionId, completedAt }) {
   const payload = {
     apiKey: AISENSY_API_KEY,
-    campaignName: "Mark Session Completed",
+    campaignName: "Mark Session Completed New",
     destination: destination || "",
     userName: userName || "",
     templateParams: [
@@ -1521,7 +1515,7 @@ async sendChildrenProfileCompleted({
 }) {
   const payload = {
     apiKey: AISENSY_API_KEY,
-    campaignName: "Children Profile Completed",
+    campaignName: "Children Profile Completed New",
     destination: destination || "",
     userName: userName || "",
     templateParams: [
@@ -1642,7 +1636,7 @@ async sendBookingRequestRejected({
 }) {
   const payload = {
     apiKey: AISENSY_API_KEY,
-    campaignName: "Booking Request Rejected",
+    campaignName: "Booking Request Not Approved",
     destination: destination || "",
     userName: userName || "",
     templateParams: [

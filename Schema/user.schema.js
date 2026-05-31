@@ -14,9 +14,18 @@ const UserSchema = new mongoose.Schema(
       enum: ["patient", "therapist", "admin", "superadmin"],
       required: true,
     },
-    name: { type: String, required: true },
+    // Name is only mandatory for patient users
+    name: { 
+      type: String,
+      required: function () { return this.role === "patient"; }
+    },
     email: { type: String, sparse: true },
-    phone:{type: String, default: ""},
+    // Only mandatory for patient users
+    phone: {
+      type: String,
+      default: "",
+      required: function () { return this.role === "patient"; }
+    },
     authProvider: {
       type: String,
       enum: ["otp", "password"],
@@ -67,6 +76,7 @@ const UserSchema = new mongoose.Schema(
 // Children Profile (extended with child/Children details)
 const PatientProfileSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  // Child name, required
   name: { type: String, required: true },
   patientId:{type: String, required: true, },
   gender: { type: String, default: "" },
@@ -76,10 +86,12 @@ const PatientProfileSchema = new mongoose.Schema({
   package: { type: String, default: "" },
   motherFullName: { type: String, default: "" },
   parentEmail: { type: String, default: "" },
-  mobile1: { type: String, default: "" },
+  // Only mobile1 is required
+  mobile1: { type: String, required: true },
   mobile1Verified: { type: Boolean, default: false },
   mobile2: { type: String, default: "" },
-  address: { type: String, default: "" },
+  // Address is required
+  address: { type: String, required: true },
   pincode: { type: String, default: "" },
   areaName: { type: String, default: "" },
   diagnosisInfo: { type: String, default: "" },

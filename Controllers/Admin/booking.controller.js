@@ -734,6 +734,7 @@ class BookingAdminController {
       }
 
       // Assign sessionIds according to the sorted order
+      // ***** CHANGE: status should be 'NotCheckedIn' by default if not present in sess.status
       const normalizedSessions = (sortedSessions || []).map((sess, idx) => ({
         sessionId: `S${String(sessionCounterStart + idx).padStart(6, "0")}`,
         date: sess.date,
@@ -741,7 +742,8 @@ class BookingAdminController {
         slotId: sess.slotId || sess.id,
         therapist: sess.therapistId || therapistId,
         therapyTypeId: sess.therapyTypeId || sess.therapyType || null,
-        isCheckedIn: typeof sess.isCheckedIn !== "undefined" ? sess.isCheckedIn : false
+        isCheckedIn: typeof sess.isCheckedIn !== "undefined" ? sess.isCheckedIn : false,
+        status: typeof sess.status !== "undefined" && sess.status !== null ? sess.status : 'NotCheckedIn'
       }));
 
       // Compose booking payload (do NOT write outside tx)
@@ -923,7 +925,6 @@ class BookingAdminController {
             userName: patientName,
             appointmentId: populatedBooking.appointmentId,
             patientName: patientName,
-            therapist: therapistName,
             totalSessions: sessionsText, // now sending multiline all sessions with date & time
             paymentId: waPaymentId
           });
@@ -2649,8 +2650,10 @@ async updateBooking(req, res) {
           destination,
           userName,
           appointmentId: booking.appointmentId || booking._id?.toString(),
-          patientName,
-          therapistName: therapistNameText,
+          patientName: patientName && booking.patient._id
+            ? `${patientName} - (${booking.patient.patientId?.toString?.() || booking.patient.patientId || ""})`
+            : patientName,
+     
           totalSessions: Array.isArray(booking.sessions)
             ? booking.sessions.length
             : 0,
@@ -3589,12 +3592,16 @@ async collectPayment(req, res) {
 async checkIn(req, res) {
   const session = await Booking.startSession();
   session.startTransaction();
+
   let auditLogFailed = false;
   let auditLogError = null;
   try {
     const { bookingId, sessionId } = req.body;
 
+    console.log("[checkIn] Incoming request body:", req.body);
+
     if (!bookingId || !sessionId) {
+      console.log("[checkIn] Missing bookingId or sessionId", { bookingId, sessionId });
       await session.abortTransaction();
       session.endSession();
       return res.status(400).json({
@@ -3604,6 +3611,7 @@ async checkIn(req, res) {
     }
 
     // Find the booking (attach the session/tx)
+    console.log("[checkIn] Finding booking by ID:", bookingId);
     const booking = await Booking.findById(bookingId)
       .populate([
         { path: "patient", model: "PatientProfile", select: "userId name mobile1", populate: { path: "userId", model: "User", select: "name phone email" } },
@@ -3613,20 +3621,25 @@ async checkIn(req, res) {
       .session(session);
 
     if (!booking) {
+      console.log("[checkIn] Booking not found.");
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
         success: false,
         message: "Booking not found."
       });
+    } else {
+      console.log("[checkIn] Fetched booking:", booking._id);
     }
 
     // Find session index in the booking sessions array
     const sessionIndex = booking.sessions.findIndex(
       (sess) => String(sess._id) === String(sessionId)
     );
+    console.log("[checkIn] Session index in booking.sessions:", sessionIndex);
 
     if (sessionIndex === -1) {
+      console.log("[checkIn] Session not found in booking.");
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({
@@ -3637,6 +3650,7 @@ async checkIn(req, res) {
 
     // If already checked in for this session, return idempotent response
     if (booking.sessions[sessionIndex].isCheckedIn) {
+      console.log("[checkIn] Session already checked in.");
       await session.abortTransaction();
       session.endSession();
       return res.status(200).json({
@@ -3651,10 +3665,12 @@ async checkIn(req, res) {
     booking.sessions[sessionIndex].isCheckedIn = true;
     booking.sessions[sessionIndex].status = "CheckedIn";
     booking.sessions[sessionIndex].checkInTime = date;
+    console.log("[checkIn] Updating session status for sessionIndex:", sessionIndex);
     await booking.save({ session });
 
     // --- AUDIT LOG ---
     try {
+      console.log("[checkIn] Writing audit log for check-in...");
       await AuditLogService.addLog({
         action: "PATIENT_CHECKIN",
         user: req.user.id,
@@ -3670,6 +3686,7 @@ async checkIn(req, res) {
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"] || null,
       });
+      console.log("[checkIn] Audit log complete");
     } catch (err) {
       auditLogFailed = true;
       auditLogError = err;
@@ -3677,6 +3694,7 @@ async checkIn(req, res) {
     }
 
     if (auditLogFailed) {
+      console.log("[checkIn] Audit log failed. Aborting transaction.");
       await session.abortTransaction();
       session.endSession();
       return res.status(500).json({
@@ -3688,10 +3706,12 @@ async checkIn(req, res) {
 
     await session.commitTransaction();
     session.endSession();
+    console.log("[checkIn] Transaction committed and session ended.");
 
     // --- SEND WHATSAPP CHECK-IN NOTIFICATION ---
     // Make sure to send correct data to whatsapp (Children name, phone number, appointmentId, sessionId, checkIn time, therapist, etc.)
     try {
+      console.log("[checkIn] Preparing to send WhatsApp check-in notification…");
       // Import WhatsappController only when needed to avoid cycles, or move to top if safe
       const WhatsappController = (await import("../Whatsapp/whatsapp.js")).default;
 
@@ -3737,11 +3757,14 @@ async checkIn(req, res) {
         sessionId: sessionIdToSend,
         completedAt: date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
       });
+
+      console.log("[checkIn] WhatsApp check-in notification sent for appointmentId:", booking.appointmentId || String(booking._id));
     } catch (wserr) {
       // WhatsApp send error should be logged but should not block check-in success
       console.error("[checkIn] Error sending WhatsApp session completed message:", wserr);
     }
 
+    console.log("[checkIn] Success. Sending success response.");
     res.json({
       success: true,
       message: "Children checked in successfully for this session.",
@@ -4016,6 +4039,7 @@ async getReceptionDeskDetails(req, res) {
       .lean();
 
     // For each session today, create a booking object where sessions contains only that session.
+    // Also ensure session._id is present in the bookingCopy.session
     const todaysBookings = [];
     rawBookings.forEach(booking => {
       if (Array.isArray(booking.sessions)) {
@@ -4023,7 +4047,12 @@ async getReceptionDeskDetails(req, res) {
           if (session.date === todayStr) {
             const bookingCopy = { ...booking };
             delete bookingCopy.sessions;
-            bookingCopy.session = session;
+            // Ensure session._id is present and send as sessionId for convenience
+            bookingCopy.session = {
+              ...session,
+              _id: session._id, // send _id
+              sessionId: session.sessionId || (session._id ? session._id.toString() : undefined) // fallback
+            };
             todaysBookings.push(bookingCopy);
           }
         });

@@ -1969,7 +1969,7 @@ class TherapistController {
         await WhatsappController.sendTherapistProfileCompleted({
           destination: therapistProfile.mobile1,
           userName: user.name || "",
-          therapistId: therapistProfile.therapistId || "",
+          therapistId: `${therapistProfile.therapistId || ""} (${user.name || ""})`,
           specializations: Array.isArray(specializations) ? specializations.join(", ") : (specializations || ""),
           experience: experienceYears || ""
         });

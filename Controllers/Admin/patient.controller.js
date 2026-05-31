@@ -70,23 +70,11 @@ class PatientAdminController {
         profilePhotoPath = req.files.profilePhoto[0].path;
       }
 
-      // Define required fields (except: mobile2, plannedSessionsPerMonth, package, remarks, profilePhoto)
+      // Enforce only childFullName, mobile1, address are required in PatientProfile (user) as per request.
       const requiredFields = [
-        { key: "email", value: email },
         { key: "childFullName", value: childFullName },
-        { key: "gender", value: gender },
-        { key: "childDOB", value: childDOB },
-        { key: "fatherFullName", value: fatherFullName },
-        { key: "motherFullName", value: motherFullName },
-        { key: "parentEmail", value: parentEmail },
         { key: "mobile1", value: mobile1 },
         { key: "address", value: address },
-        { key: "areaName", value: areaName },
-        { key: "pincode", value: pincode },
-        { key: "diagnosisInfo", value: diagnosisInfo },
-        { key: "childReference", value: childReference },
-        { key: "parentOccupation", value: parentOccupation },
-        { key: "motherOccupation", value: motherOccupation },
       ];
 
       // Gather missing required fields
@@ -111,16 +99,21 @@ class PatientAdminController {
       }
 
       // Prepare for comparison (trim string types)
-      const emailTrimmed = email.trim();
+      const emailTrimmed = (typeof email === "string" ? email.trim() : "");
       const mobile1Trimmed = mobile1.trim();
       const pincodeValue =
         typeof pincode === "string" ? pincode.trim() : pincode;
 
       // Find if user already exists by email or mobile
-      const existingUserByEmail = await User.findOne({
-        email: emailTrimmed,
-        role: "patient",
-      }).session(session);
+      // We only enforce uniqueness/matching exclusively for mobile1 (main contact) and email if provided.
+
+      let existingUserByEmail = null;
+      if (emailTrimmed) {
+        existingUserByEmail = await User.findOne({
+          email: emailTrimmed,
+          role: "patient",
+        }).session(session);
+      }
 
       const existingUserByMobile = await PatientProfile.findOne({
         mobile1: mobile1Trimmed,
@@ -157,6 +150,7 @@ class PatientAdminController {
 
       // Violation 1: Email registered with different phone
       if (
+        emailTrimmed &&
         existingUserByEmail &&
         emailAssociatedMobile &&
         emailAssociatedMobile !== mobile1Trimmed
@@ -198,6 +192,7 @@ class PatientAdminController {
 
       // Violation 2: Phone registered with different email
       if (
+        emailTrimmed &&
         existingUserByMobile &&
         mobileAssociatedEmail &&
         mobileAssociatedEmail !== emailTrimmed
@@ -245,6 +240,7 @@ class PatientAdminController {
       let nextSeq;
 
       if (
+        emailTrimmed &&
         existingUserByEmail &&
         emailAssociatedMobile &&
         emailAssociatedMobile === mobile1Trimmed
@@ -252,6 +248,7 @@ class PatientAdminController {
         user = existingUserByEmail;
         reusedExistingUser = true;
       } else if (
+        emailTrimmed &&
         existingUserByMobile &&
         mobileAssociatedEmail &&
         mobileAssociatedEmail === emailTrimmed
@@ -266,7 +263,8 @@ class PatientAdminController {
         user = new User({
           role: "patient",
           name: childFullName,
-          email: emailTrimmed,
+          // If email is blank, omit it from user
+          ...(emailTrimmed ? { email: emailTrimmed } : {}),
           authProvider: "otp",
           phoneVerified: false,
           emailVerified: false,
@@ -329,13 +327,12 @@ class PatientAdminController {
         // --------- SEND WHATSAPP MESSAGE -------------
         try {
           await WhatsappController.sendChildrenRegistrationSuccessfull({
-            
-              destination:mobile1Trimmed,
-  userName:fatherFullName,
-  patientName:childFullName,
-  patientId:patientId,
-            registeredMobile:mobile1Trimmed,
-  createdOn: new Date().toISOString()
+            destination: mobile1Trimmed,
+            userName: fatherFullName,
+            patientName: childFullName,
+            patientId: patientId,
+            registeredMobile: mobile1Trimmed,
+            createdOn: new Date().toISOString()
             // Add any extra details if required
           });
         } catch (waErr) {
