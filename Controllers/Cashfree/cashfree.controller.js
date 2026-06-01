@@ -46,7 +46,6 @@ class CashfreeController {
       }
 
       // Fetch associated booking and deeply populate discountInfo.coupon and patient
-      // This ensures we have access to coupon's discount, couponCode, validity etc.
       const booking = await Booking.findOne({ payment: payment._id })
         .populate({
           path: 'patient',
@@ -59,7 +58,6 @@ class CashfreeController {
         .populate({
           path: 'package'
         });
-      console.log("Fetched Booking with discountInfo.coupon populated:", booking);
 
       let patient = null;
       if (booking && booking.patient) {
@@ -76,8 +74,6 @@ class CashfreeController {
                 : payment.amount
           );
 
-      console.log("invoiceOriginal (before any discount):", invoiceOriginal);
-
       // ---- DISCOUNT RESOLUTION LOGIC ----
       // Try to get discount from booking.discountInfo.coupon if available and enabled
       let discountAmount = 0;
@@ -93,7 +89,6 @@ class CashfreeController {
         discountAmount = Math.floor(
           invoiceOriginal * (booking.discountInfo.coupon.discount / 100)
         );
-        console.log("Using discount from booking.discountInfo.coupon (percentage):", discountAmount);
       } else if (
         booking &&
         booking.discountInfo &&
@@ -101,40 +96,30 @@ class CashfreeController {
         booking.discountInfo.discountAmount > 0
       ) {
         discountAmount = booking.discountInfo.discountAmount;
-        console.log("Using discount from booking.discountInfo.discountAmount:", discountAmount);
       } else if (
         payment.discountInfo &&
         typeof payment.discountInfo.amount === "number" &&
         payment.discountInfo.amount > 0
       ) {
         discountAmount = payment.discountInfo.amount;
-        console.log("Using discount from payment.discountInfo.amount:", discountAmount);
-      } else {
-        console.log("No discount available or detected. discountAmount set to 0.");
       }
 
       let invoiceAfterDiscount =
         invoiceOriginal != null
           ? Math.max(0, Math.round(invoiceOriginal - discountAmount))
           : null;
-      console.log("invoiceAfterDiscount:", invoiceAfterDiscount);
 
       let totalPaid = 0;
       // payment.amountPaid may represent what has been paid (partial payments)
       if (payment.amountPaid && !isNaN(payment.amountPaid)) {
         totalPaid = Number(payment.amountPaid);
-        console.log("Using payment.amountPaid as totalPaid:", totalPaid);
-      } else {
-        console.log("No amountPaid detected or set to 0.");
       }
       // Ensure not to double-count in case of partial payments; only count for this Payment, not all payments
 
       let dueAmount = invoiceAfterDiscount != null ? invoiceAfterDiscount - totalPaid : null;
       if (dueAmount != null) dueAmount = Math.max(0, Math.round(dueAmount));
-      console.log("dueAmount (amount left after discount and paid):", dueAmount);
 
       if (dueAmount === 0) {
-        console.log("Nothing due for this paymentId (already paid or overpaid). Returning response.");
         return res.status(200).json({
           message: "Nothing due for this paymentId (already paid or overpaid).",
           alreadyPaid: true,
