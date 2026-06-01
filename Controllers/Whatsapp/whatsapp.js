@@ -930,7 +930,7 @@ const AISENSY_API_KEY = process.env.API_CAMPAIGN_KEY || "";
 // ─── HOLD SWITCH ──────────────────────────────────────────────────────────────
 // Set to false to silently pause ALL WhatsApp messages across every method.
 // Set back to true to resume instantly. No other changes needed anywhere.
-const WHATSAPP_ENABLED = false;
+const WHATSAPP_ENABLED = true;
 // ─────────────────────────────────────────────────────────────────────────────
 
 class WhatsappController {
