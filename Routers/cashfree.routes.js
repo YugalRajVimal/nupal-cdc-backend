@@ -9,6 +9,12 @@ router.post("/generate-session-id", (req, res) =>
   cashfreeController.generateSessionId(req, res)
 );
 
+// Route to confirm status of Cashfree order by order_id
+router.get("/confirm-order-status/:order_id", (req, res) =>
+  cashfreeController.confirmStatus(req, res)
+);
+
+
 // Cashfree webhook handler (for payment status updates)
 router.post("/booking-payment-webhook", (req, res) =>
   cashfreeController.handleWebhook(req, res)

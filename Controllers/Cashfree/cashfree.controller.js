@@ -3,7 +3,7 @@ import { Cashfree as CashfreePG } from "cashfree-pg";
 
 CashfreePG.XClientId = process.env.CASHFREE_CLIENT_ID;
 CashfreePG.XClientSecret = process.env.CASHFREE_CLIENT_SECRET;
-CashfreePG.XEnvironment = CashfreePG.Environment.SANDBOX;
+CashfreePG.XEnvironment = CashfreePG.Environment.PRODUCTION;
 
 import Payment from "../../Schema/payment.schema.js";
 import Booking from "../../Schema/booking.schema.js";
@@ -240,6 +240,76 @@ class CashfreeController {
     }
   };
 
+  // Handler to confirm order status with Cashfree
+  confirmStatus = async (req, res) => {
+    const { order_id } = req.params; // order_id is expected as a route param
+
+    if (!order_id) {
+      return res.status(400).json({ error: "order_id is required in the URL params" });
+    }
+
+    // Prepare headers as per instruction
+    const headers = {
+      "accept": "application/json",
+      "x-api-version": "2025-01-01",
+      "x-client-id": process.env.CASHFREE_CLIENT_ID,
+      "x-client-secret": process.env.CASHFREE_CLIENT_SECRET
+    };
+
+    try {
+      // Use fetch API or axios. Native fetch is supported in Node 18+.
+      const url = `https://api.cashfree.com/pg/orders/${order_id}`;
+      const response = await fetch(url, { method: "GET", headers });
+      const data = await response.json();
+
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: data?.message || "Failed to fetch order status from Cashfree",
+          details: data
+        });
+      }
+
+      // Update our Payment record if found and Cashfree order_status is terminal or meaningful
+      // Require Payment model (import Payment from "../../Schema/payment.schema.js")
+      const Payment = (await import('../../Schema/payment.schema.js')).default;
+      const payment = await Payment.findOne({ 'cashfree.order_id': order_id });
+
+      if (payment && data?.order_status) {
+        // 'order_status' can be ACTIVE, PAID, EXPIRED, FAILED
+        switch (data.order_status) {
+          case 'PAID':
+            payment.status = 'paid';
+            payment.amountPaid = data.order_amount || payment.amountPaid || 0;
+            payment.paymentTime = data.payment_time ? new Date(data.payment_time) : new Date();
+            break;
+          case 'FAILED':
+            payment.status = 'failed';
+            break;
+          case 'EXPIRED':
+            payment.status = 'failed'; // treat expired as failed for now
+            break;
+          case 'ACTIVE':
+            payment.status = 'pending'; // still open
+            break;
+          default:
+            // If future states: null-op
+            break;
+        }
+        // Update cashfree block with latest details for record keeping
+        payment.cashfree = {
+          ...(payment.cashfree || {}),
+          ...data,
+        };
+        await payment.save();
+      }
+
+      return res.status(200).json({ orderStatus: data, paymentStatusMarked: payment ? payment.status : null });
+    } catch (error) {
+      console.error("Error confirming Cashfree order status:", error);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
+  };
+ 
   // Handler for Cashfree Webhook (called by Cashfree for status update)
   handleWebhook = async (req, res) => {
     console.log("Cashfree Webhook: Started");
