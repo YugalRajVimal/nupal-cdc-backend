@@ -18,6 +18,26 @@ import WhatsappController from "../Whatsapp/whatsapp.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 import mongoose from "mongoose";
 
+  // Create a new booking with updated booking schema (1-47)
+  // Slot/config for session time resolution
+  const SESSION_TIME_OPTIONS = [
+    { id: '1000-1045', label: '10:00 to 10:45', limited: false },
+    { id: '1045-1130', label: '10:45 to 11:30', limited: false },
+    { id: '1130-1215', label: '11:30 to 12:15', limited: false },
+    { id: '1215-1300', label: '12:15 to 13:00', limited: false },
+    { id: '1300-1345', label: '13:00 to 13:45', limited: false },
+    { id: '1415-1500', label: '14:15 to 15:00', limited: false },
+    { id: '1500-1545', label: '15:00 to 15:45', limited: false },
+    { id: '1545-1630', label: '15:45 to 16:30', limited: false },
+    { id: '1630-1715', label: '16:30 to 17:15', limited: false },
+    { id: '1715-1800', label: '17:15 to 18:00', limited: false },
+    { id: '0830-0915', label: '08:30 to 09:15', limited: true },
+    { id: '0915-1000', label: '09:15 to 10:00', limited: true },
+    { id: '1800-1845', label: '18:00 to 18:45', limited: true },
+    { id: '1845-1930', label: '18:45 to 19:30', limited: true },
+    { id: '1930-2015', label: '19:30 to 20:15', limited: true }
+  ];
+
 // Utility to get next sequence for an allowed counter
 const getNextSequence = async (name) => {
   const counter = await Counter.findOneAndUpdate(
@@ -505,54 +525,501 @@ class BookingAdminController {
   }
 
   // Create a new booking with updated booking schema (1-47)
+  // async createBooking(req, res) {
+  //   const session = await mongoose.startSession();
+  //   try {
+  //     // Start transaction (mandatory - ALL steps MUST be in session, revert on any error including logs)
+  //     await session.startTransaction();
+
+  //     const {
+  //       coupon,
+  //       package: packageId,
+  //       patient: patientId,
+  //       therapist: therapistId,
+  //       sessions,
+  //       therapy: therapyId,
+  //       status,
+  //       notes,
+  //       channel,
+  //       attendedBy,
+  //       referral,
+  //       extra,
+  //       attendedByType,
+  //       paymentDueDate,
+  //       invoiceNumber,
+  //       followupRequired,
+  //       followupDate,
+  //       isBookingRequest,
+  //       bookingRequestId,
+  //       remark
+  //     } = req.body;
+
+  //     // Required fields check
+  //     if (
+  //       !packageId ||
+  //       !patientId ||
+  //       !therapyId ||
+  //       !therapistId ||
+  //       !Array.isArray(sessions) ||
+  //       !sessions.length
+  //     ) {
+  //       await session.abortTransaction();
+  //       session.endSession();
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "Missing required fields"
+  //       });
+  //     }
+
+  //     // Step 1: Therapist and slot availability validation (in tx session)
+  //     const therapistIdsForSessions = Array.from(new Set((sessions || []).map(sess => sess.therapistId || therapistId)));
+  //     const therapistProfiles = await TherapistProfile.find({ _id: { $in: therapistIdsForSessions } }).lean();
+  //     const therapistIdToRefIdMap = {};
+  //     therapistProfiles.forEach(tp => {
+  //       therapistIdToRefIdMap[tp._id.toString()] = tp.therapistId;
+  //     });
+  //     if (Object.keys(therapistIdToRefIdMap).length !== therapistIdsForSessions.length) {
+  //       await session.abortTransaction();
+  //       session.endSession();
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "One or more therapist(s) referenced in sessions do not exist."
+  //       });
+  //     }
+  //     // Prepare requestedSlots for availability
+  //     const requestedSlots = (sessions || []).map(sess => ({
+  //       date: sess.date,
+  //       slotId: sess.slotId || sess.id,
+  //       therapistId: sess.therapistId || therapistId
+  //     }));
+  //     if (requestedSlots.some(s => !s.date || !s.slotId || !s.therapistId)) {
+  //       await session.abortTransaction();
+  //       session.endSession();
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "Invalid session data: All sessions must have date, slotId/id, and therapistId."
+  //       });
+  //     }
+
+  //     let sessionDates = requestedSlots.map(s => s.date).sort();
+  //     const fromDate = sessionDates[0];
+  //     const toDate = sessionDates[sessionDates.length - 1];
+
+  //     let allSlotAvailabilityData = {};
+  //     for (const uniqueTherapistId of therapistIdsForSessions) {
+  //       try {
+  //         let fakeReq = {
+  //           query: {
+  //             therapistId: String(uniqueTherapistId),
+  //             from: fromDate,
+  //             to: toDate,
+  //           }
+  //         };
+  //         let availabilitySummaryResult = await new Promise((resolve, reject) => {
+  //           aavailabilitySlotsAdminController.getAvailabilitySummary(
+  //             fakeReq,
+  //             {
+  //               json: (body) => resolve(body),
+  //               status: (code) => ({
+  //                 json: (body) => {
+  //                   body.__status = code;
+  //                   resolve(body);
+  //                 }
+  //               })
+  //             }
+  //           );
+  //         });
+  //         if (
+  //           !availabilitySummaryResult ||
+  //           !availabilitySummaryResult.success ||
+  //           !availabilitySummaryResult.data
+  //         ) {
+  //           throw new Error("Invalid response from getAvailabilitySummary");
+  //         }
+  //         const therapistRefId = therapistIdToRefIdMap[uniqueTherapistId];
+  //         allSlotAvailabilityData[therapistRefId] = availabilitySummaryResult.data;
+  //       } catch (err) {
+  //         await session.abortTransaction();
+  //         session.endSession();
+  //         return res.status(500).json({
+  //           success: false,
+  //           message: `Failed to check slot availability for one or more therapists.`,
+  //           error: err.message,
+  //         });
+  //       }
+  //     }
+
+  //     // Conflict check
+  //     let conflicts = [];
+  //     requestedSlots.forEach(sess => {
+  //       const refId = therapistIdToRefIdMap[sess.therapistId];
+  //       const slotAvailabilityData = allSlotAvailabilityData[refId];
+  //       if (!slotAvailabilityData) return;
+
+  //       for (const availKey in slotAvailabilityData) {
+  //         const [d, m, y] = availKey.split('-');
+  //         const keyAsIso = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  //         if (
+  //           sess.date === keyAsIso &&
+  //           slotAvailabilityData[availKey]?.BookedSlots &&
+  //           slotAvailabilityData[availKey].BookedSlots[refId] &&
+  //           Array.isArray(slotAvailabilityData[availKey].BookedSlots[refId]) &&
+  //           slotAvailabilityData[availKey].BookedSlots[refId].includes(sess.slotId)
+  //         ) {
+  //           conflicts.push({
+  //             date: sess.date,
+  //             slotId: sess.slotId,
+  //             therapistId: sess.therapistId
+  //           });
+  //         }
+  //       }
+  //     });
+  //     if (conflicts.length > 0) {
+  //       await session.abortTransaction();
+  //       session.endSession();
+  //       return res.status(409).json({
+  //         success: false,
+  //         message: "Selected therapist/time slot already booked for one or more session dates.",
+  //         conflicts,
+  //         allSlotAvailabilityData
+  //       });
+  //     }
+
+  //     // Step 2: Coupon logic (in tx)
+  //     let discountInfo = undefined;
+  //     if (coupon && coupon.id) {
+  //       discountInfo = { coupon: coupon.id, time: new Date() };
+  //     } else if (typeof coupon === "string" && coupon) {
+  //       discountInfo = { coupon: coupon, time: new Date() };
+  //     }
+
+  //     // Step 3: Generate new appointmentId & paymentId in tx
+  //     const counter = await Counter.findOneAndUpdate(
+  //       { name: "appointment" },
+  //       { $inc: { seq: 1 } },
+  //       { new: true, upsert: true, session }
+  //     );
+  //     const appointmentId = generateAppointmentId(counter.seq);
+
+  //     // Step 4: Create payment document in tx
+  //     const pkg = await Package.findById(packageId).lean();
+  //     if (!pkg) {
+  //       await session.abortTransaction();
+  //       session.endSession();
+  //       return res.status(400).json({
+  //         success: false,
+  //         message: "Invalid package"
+  //       });
+  //     }
+  //     const year = new Date().getFullYear();
+  //     const paymentCounter = await Counter.findOneAndUpdate(
+  //       { name: "payment" },
+  //       { $inc: { seq: 1 } },
+  //       { new: true, upsert: true, session }
+  //     );
+  //     const paymentId = `INV-${year}-${String(paymentCounter.seq).padStart(5, "0")}`;
+  //     const paymentDoc = new Payment({
+  //       paymentId: paymentId,
+  //       totalAmount: pkg.totalCost,
+  //       amount: pkg.totalCost,
+  //       status: 'pending',
+  //       paymentMethod: 'cash'
+  //     });
+  //     await paymentDoc.save({ session });
+
+  //     // Step 5: Normalize sessions, WITH sessionId per session (S00001...) -- updated: sessionId sorted by date
+  //     const sessionCount = Array.isArray(sessions) ? sessions.length : 0;
+  //     let sessionCounterStart = 1;
+  //     if (sessionCount > 0) {
+  //       const sessionCounterDoc = await Counter.findOneAndUpdate(
+  //         { name: "session" },
+  //         { $inc: { seq: sessionCount } },
+  //         { new: true, upsert: true, session }
+  //       );
+  //       sessionCounterStart = sessionCounterDoc.seq - sessionCount + 1;
+  //     }
+
+  //     // Sort the sessions by date (earlier sessions first)
+  //     // If two sessions have same date, maintain their original order (stable sort)
+  //     let sortedSessions = [];
+  //     if (Array.isArray(sessions)) {
+  //       sortedSessions = sessions
+  //         .map((s, origIdx) => ({ ...s, __origIdx: origIdx }))
+  //         .sort((a, b) => {
+  //           // Compare dates as ISO strings (YYYY-MM-DD)
+  //           if (a.date < b.date) return -1;
+  //           if (a.date > b.date) return 1;
+  //           return a.__origIdx - b.__origIdx;
+  //         });
+  //     }
+
+  //     // Assign sessionIds according to the sorted order
+  //     // ***** CHANGE: status should be 'NotCheckedIn' by default if not present in sess.status
+  //     const normalizedSessions = (sortedSessions || []).map((sess, idx) => ({
+  //       sessionId: `S${String(sessionCounterStart + idx).padStart(6, "0")}`,
+  //       date: sess.date,
+  //       time: sess.time || "",
+  //       slotId: sess.slotId || sess.id,
+  //       therapist: sess.therapistId || therapistId,
+  //       therapyTypeId: sess.therapyTypeId || sess.therapyType || null,
+  //       isCheckedIn: typeof sess.isCheckedIn !== "undefined" ? sess.isCheckedIn : false,
+  //       status: typeof sess.status !== "undefined" && sess.status !== null ? sess.status : 'NotCheckedIn'
+  //     }));
+
+  //     // Compose booking payload (do NOT write outside tx)
+  //     const bookingPayload = {
+  //       appointmentId,
+  //       status,
+  //       notes,
+  //       remark,
+  //       discountInfo,
+  //       package: packageId,
+  //       patient: patientId,
+  //       therapist: therapistId,
+  //       sessions: normalizedSessions,
+  //       therapy: therapyId,
+  //       payment: paymentDoc._id,
+  //       channel,
+  //       attendedBy,
+  //       referral,
+  //       extra,
+  //       attendedByType,
+  //       paymentDueDate,
+  //       invoiceNumber,
+  //       followupRequired,
+  //       followupDate
+  //     };
+
+  //     Object.keys(bookingPayload).forEach(
+  //       k => bookingPayload[k] === undefined && delete bookingPayload[k]
+  //     );
+  //     const booking = new Booking(bookingPayload);
+
+  //     // Step 6: Save booking in tx
+  //     await booking.save({ session });
+
+  //     // Step 7: If booking request, update request status in tx
+  //     if (isBookingRequest && bookingRequestId) {
+  //       const bookingRequestDoc = await BookingRequests.findById(bookingRequestId).session(session);
+  //       if (bookingRequestDoc) {
+  //         const previousBookingRequest = bookingRequestDoc.toObject();
+  //         bookingRequestDoc.status = "approved";
+  //         bookingRequestDoc.appointmentId = booking._id;
+  //         await bookingRequestDoc.save({ session });
+
+  //         // Log approval of booking request, and association with booking
+  //         try {
+  //           await AuditLogService.addLog(
+  //             {
+  //               action: "BOOKING_REQUEST_APPROVED",
+  //               user: req.user?.id,
+  //               role: "admin",
+  //               resource: "BookingRequest",
+  //               resourceId: bookingRequestDoc._id,
+  //               details: {
+  //                 previous: previousBookingRequest,
+  //                 updated: bookingRequestDoc,
+  //                 approvedBy: req.user?.id,
+  //                 appointmentId: booking._id,
+  //                 message: `Booking request approved and linked to booking ${booking._id} by admin ${req.user?.id}`,
+  //               },
+  //               ipAddress: req.ip,
+  //               userAgent: req.headers['user-agent']
+  //             },
+  //             session
+  //           );
+  //         } catch (logError) {
+  //           await session.abortTransaction();
+  //           session.endSession();
+  //           return res.status(500).json({
+  //             success: false,
+  //             message: "Failed to approve booking request (audit log failure).",
+  //             error: logError?.message || "Audit logging failed.",
+  //           });
+  //         }
+  //       }
+  //     }
+
+  //     // Step 8: Audit log in tx (MANDATORY: if fails, ROLLBACK everything)
+  //     try {
+  //       await AuditLogService.addLog({
+  //         action: "BOOKING_CREATED",
+  //         user: req.user?.id,
+  //         role: "admin",
+  //         resource: "Booking",
+  //         resourceId: booking._id,
+  //         details: {
+  //           patientId,
+  //           therapistId,
+  //           appointmentId: booking.appointmentId,
+  //           packageId,
+  //           therapyId,
+  //           channel,
+  //           sessions: normalizedSessions.length,
+  //           invoiceNumber,
+  //           remark,
+  //           status,
+  //           message: `Booking created for children ${patientId} with therapist ${therapistId}, package ${packageId}, therapy ${therapyId}`
+  //         },
+  //         ipAddress: req.ip,
+  //         userAgent: req.headers['user-agent']
+  //       }, session); // pass session if AuditLog supports it!
+  //     } catch (logError) {
+  //       await session.abortTransaction();
+  //       session.endSession();
+  //       return res.status(500).json({
+  //         success: false,
+  //         message: "Failed to create booking (audit log failure).",
+  //         error: logError?.message || "Audit logging failed.",
+  //       });
+  //     }
+
+  //     // Commit transaction ONLY IF ALL steps succeed including log
+  //     await session.commitTransaction();
+  //     session.endSession();
+
+  //     // Step 9: Populate and return booking (not in tx, not rollbackable but data is safe now)
+  //     const populatedBooking = await Booking.findById(booking._id)
+  //       .populate("package")
+  //       .populate({
+  //         path: "patient",
+  //         model: "PatientProfile",
+  //         populate: { path: "userId", model: "User" }
+  //       })
+  //       .populate({ path: "therapy", model: "TherapyType" })
+  //       .populate({ path: "therapist", model: "TherapistProfile" })
+  //       .populate({ path: "payment", model: "Payment" });
+
+  //     // ---- WhatsApp Integration ----
+  //     try {
+  //       // Children details: phone, name
+  //       let phoneNo;
+  //       let patientName;
+  //       if (populatedBooking?.patient) {
+  //         if (populatedBooking.patient?.mobile1) {
+  //           phoneNo = populatedBooking.patient.mobile1;
+  //         } else if (populatedBooking.patient?.userId && populatedBooking.patient.userId?.phone) {
+  //           phoneNo = populatedBooking.patient.userId.phone;
+  //         }
+  //         patientName = populatedBooking.patient?.name || populatedBooking.patient?.userId?.fullName;
+  //       }
+  //       // therapist name
+  //       let therapistName;
+  //       if (populatedBooking?.therapist) {
+  //         therapistName = populatedBooking.therapist.name || populatedBooking.therapist.therapistId;
+  //       }
+  //       // package
+  //       let packageName = populatedBooking?.package?.name;
+  //       // therapy type
+  //       let therapyTypeName = populatedBooking?.therapy?.name;
+
+  //       // session dates and times - send all in WhatsApp message
+  //       let sessionsData = [];
+  //       if (Array.isArray(populatedBooking.sessions)) {
+  //         sessionsData = populatedBooking.sessions.map(ses => {
+  //           let sessionDate = ses.date;
+  //           let sessionTime = ses.time;
+  //           return { date: sessionDate, time: sessionTime };
+  //         });
+  //       }
+
+  //       // Only send if phoneNo present and not empty
+  //       if (phoneNo) {
+  //         // Convert sessionsData (array of {date, time}) to a readable multiline text string, showing every session on separate line as "Date: YYYY-MM-DD, Time: HH:mm"
+  //         const sessionsText = Array.isArray(sessionsData) && sessionsData.length
+  //           ? sessionsData.map(
+  //               (s, i) =>
+  //                 `Session ${i + 1}: Date: ${s.date || '-'}, Time: ${s.time ? s.time : '-'}`
+  //             ).join(",")
+  //           : "";
+
+  //         // Send the ACTUAL paymentId (not placeholder), as per @payment.schema.js (1-74)
+  //         // paymentId must be taken from populatedBooking.payment.paymentId
+  //         let waPaymentId = undefined;
+  //         if (populatedBooking?.payment && populatedBooking.payment.paymentId) {
+  //           waPaymentId = populatedBooking.payment.paymentId;
+  //         }
+
+  //         await WhatsappController.sendBookingCreationCompleted({
+  //           destination: phoneNo,
+  //           userName: patientName,
+  //           appointmentId: populatedBooking.appointmentId,
+  //           patientName: patientName,
+  //           totalSessions: sessionsText, // now sending multiline all sessions with date & time
+  //           paymentId: waPaymentId
+  //         });
+
+  //       }
+  //     } catch (waErr) {
+  //       // log error only, do not fail booking creation if WhatsApp fails
+  //       console.error("Failed to send WhatsApp message:", waErr?.message || waErr);
+  //     }
+  //     // ---- End WhatsApp Integration ----
+
+  //     res.status(201).json({
+  //       success: true,
+  //       booking: populatedBooking,
+  //     });
+  //   } catch (error) {
+  //     await session.abortTransaction();
+  //     session.endSession();
+  //     res.status(500).json({
+  //       success: false,
+  //       message: "Failed to create booking.",
+  //       error: error.message,
+  //     });
+  //   }
+  // }
+
+
+
+  // Helper to get label by slotId, e.g. "10:00 to 10:45"
+  // Returns time label for a given slotId; empty if not found
+  getTimeLabelFromSlotId(slotId) {
+    if (!slotId) return '';
+    const entry = SESSION_TIME_OPTIONS.find(s => s.id === slotId);
+    return entry ? entry.label : '';
+  }
+
+  /**
+   * Creates a new booking with transaction & validation logic.
+   * - Validates all required fields
+   * - Checks slot/therapist/session conflicts
+   * - Generates appointment/payment/session IDs
+   * - Handles booking request approval if needed
+   * - Persists all via MongoDB transaction
+   * - Sends WhatsApp on completion (non-blocking)
+   */
   async createBooking(req, res) {
     const session = await mongoose.startSession();
     try {
-      // Start transaction (mandatory - ALL steps MUST be in session, revert on any error including logs)
       await session.startTransaction();
 
+      // Destructure and alias critical booking fields from req.body
       const {
-        coupon,
-        package: packageId,
-        patient: patientId,
-        therapist: therapistId,
-        sessions,
-        therapy: therapyId,
-        status,
-        notes,
-        channel,
-        attendedBy,
-        referral,
-        extra,
-        attendedByType,
-        paymentDueDate,
-        invoiceNumber,
-        followupRequired,
-        followupDate,
-        isBookingRequest,
-        bookingRequestId,
+        coupon, package: packageId, patient: patientId, therapist: therapistId,
+        sessions, therapy: therapyId, status, notes, channel, attendedBy,
+        referral, extra, attendedByType, paymentDueDate, invoiceNumber,
+        followupRequired, followupDate, isBookingRequest, bookingRequestId,
         remark
       } = req.body;
 
-      // Required fields check
-      if (
-        !packageId ||
-        !patientId ||
-        !therapyId ||
-        !therapistId ||
-        !Array.isArray(sessions) ||
-        !sessions.length
-      ) {
+      // Validate presence of required data
+      if (!packageId || !patientId || !therapyId || !therapistId ||
+          !Array.isArray(sessions) || !sessions.length) {
         await session.abortTransaction();
         session.endSession();
+        console.log("Missing required fields:", { packageId, patientId, therapyId, therapistId, sessions });
         return res.status(400).json({
           success: false,
           message: "Missing required fields"
         });
       }
 
-      // Step 1: Therapist and slot availability validation (in tx session)
-      const therapistIdsForSessions = Array.from(new Set((sessions || []).map(sess => sess.therapistId || therapistId)));
+      // Build and validate therapist references for all sessions
+      const therapistIdsForSessions = Array.from(
+        new Set((sessions || []).map(sess => sess.therapistId || therapistId))
+      );
       const therapistProfiles = await TherapistProfile.find({ _id: { $in: therapistIdsForSessions } }).lean();
       const therapistIdToRefIdMap = {};
       therapistProfiles.forEach(tp => {
@@ -561,12 +1028,14 @@ class BookingAdminController {
       if (Object.keys(therapistIdToRefIdMap).length !== therapistIdsForSessions.length) {
         await session.abortTransaction();
         session.endSession();
+        console.log("Therapist(s) referenced in sessions do not exist:", { therapistIdsForSessions, therapistIdToRefIdMap });
         return res.status(400).json({
           success: false,
           message: "One or more therapist(s) referenced in sessions do not exist."
         });
       }
-      // Prepare requestedSlots for availability
+
+      // Compose slots required for booking, ensuring essential fields
       const requestedSlots = (sessions || []).map(sess => ({
         date: sess.date,
         slotId: sess.slotId || sess.id,
@@ -575,16 +1044,19 @@ class BookingAdminController {
       if (requestedSlots.some(s => !s.date || !s.slotId || !s.therapistId)) {
         await session.abortTransaction();
         session.endSession();
+        console.log("Invalid session data:", requestedSlots);
         return res.status(400).json({
           success: false,
           message: "Invalid session data: All sessions must have date, slotId/id, and therapistId."
         });
       }
 
+      // Calculate booking period (earliest to latest session date)
       let sessionDates = requestedSlots.map(s => s.date).sort();
       const fromDate = sessionDates[0];
       const toDate = sessionDates[sessionDates.length - 1];
 
+      // Check slot availability for each involved therapist
       let allSlotAvailabilityData = {};
       for (const uniqueTherapistId of therapistIdsForSessions) {
         try {
@@ -595,7 +1067,7 @@ class BookingAdminController {
               to: toDate,
             }
           };
-          let availabilitySummaryResult = await new Promise((resolve, reject) => {
+          let availabilitySummaryResult = await new Promise((resolve) => {
             aavailabilitySlotsAdminController.getAvailabilitySummary(
               fakeReq,
               {
@@ -614,6 +1086,7 @@ class BookingAdminController {
             !availabilitySummaryResult.success ||
             !availabilitySummaryResult.data
           ) {
+            console.log("Invalid response from getAvailabilitySummary:", { availabilitySummaryResult });
             throw new Error("Invalid response from getAvailabilitySummary");
           }
           const therapistRefId = therapistIdToRefIdMap[uniqueTherapistId];
@@ -621,6 +1094,7 @@ class BookingAdminController {
         } catch (err) {
           await session.abortTransaction();
           session.endSession();
+          console.log(`Failed to check slot availability for therapist ${uniqueTherapistId}:`, err && err.message, err);
           return res.status(500).json({
             success: false,
             message: `Failed to check slot availability for one or more therapists.`,
@@ -629,7 +1103,7 @@ class BookingAdminController {
         }
       }
 
-      // Conflict check
+      // Detect session conflicts by therapistId/slotId/date
       let conflicts = [];
       requestedSlots.forEach(sess => {
         const refId = therapistIdToRefIdMap[sess.therapistId];
@@ -657,6 +1131,7 @@ class BookingAdminController {
       if (conflicts.length > 0) {
         await session.abortTransaction();
         session.endSession();
+        console.log("Conflict detected in session slots:", { conflicts, allSlotAvailabilityData });
         return res.status(409).json({
           success: false,
           message: "Selected therapist/time slot already booked for one or more session dates.",
@@ -665,15 +1140,15 @@ class BookingAdminController {
         });
       }
 
-      // Step 2: Coupon logic (in tx)
-      let discountInfo = undefined;
+      // Build discount/coupon info if present
+      let discountInfo;
       if (coupon && coupon.id) {
         discountInfo = { coupon: coupon.id, time: new Date() };
       } else if (typeof coupon === "string" && coupon) {
         discountInfo = { coupon: coupon, time: new Date() };
       }
 
-      // Step 3: Generate new appointmentId & paymentId in tx
+      // Generate appointmentId and paymentId within tx
       const counter = await Counter.findOneAndUpdate(
         { name: "appointment" },
         { $inc: { seq: 1 } },
@@ -681,16 +1156,19 @@ class BookingAdminController {
       );
       const appointmentId = generateAppointmentId(counter.seq);
 
-      // Step 4: Create payment document in tx
+      // Find target package and ensure it exists
       const pkg = await Package.findById(packageId).lean();
       if (!pkg) {
         await session.abortTransaction();
         session.endSession();
+        console.log("Invalid package:", { packageId });
         return res.status(400).json({
           success: false,
           message: "Invalid package"
         });
       }
+
+      // Generate invoice/payment doc
       const year = new Date().getFullYear();
       const paymentCounter = await Counter.findOneAndUpdate(
         { name: "payment" },
@@ -707,7 +1185,7 @@ class BookingAdminController {
       });
       await paymentDoc.save({ session });
 
-      // Step 5: Normalize sessions, WITH sessionId per session (S00001...) -- updated: sessionId sorted by date
+      // Prepare session documents (stable sorted, generate sessionId)
       const sessionCount = Array.isArray(sessions) ? sessions.length : 0;
       let sessionCounterStart = 1;
       if (sessionCount > 0) {
@@ -718,67 +1196,46 @@ class BookingAdminController {
         );
         sessionCounterStart = sessionCounterDoc.seq - sessionCount + 1;
       }
+      let sortedSessions = Array.isArray(sessions)
+        ? sessions.map((s, origIdx) => ({ ...s, __origIdx: origIdx }))
+            .sort((a, b) => {
+              if (a.date < b.date) return -1;
+              if (a.date > b.date) return 1;
+              return a.__origIdx - b.__origIdx;
+            })
+        : [];
 
-      // Sort the sessions by date (earlier sessions first)
-      // If two sessions have same date, maintain their original order (stable sort)
-      let sortedSessions = [];
-      if (Array.isArray(sessions)) {
-        sortedSessions = sessions
-          .map((s, origIdx) => ({ ...s, __origIdx: origIdx }))
-          .sort((a, b) => {
-            // Compare dates as ISO strings (YYYY-MM-DD)
-            if (a.date < b.date) return -1;
-            if (a.date > b.date) return 1;
-            return a.__origIdx - b.__origIdx;
-          });
-      }
+      const normalizedSessions = (sortedSessions || []).map((sess, idx) => {
+        const slotId = sess.slotId || sess.id;
+        const resolvedTime = this.getTimeLabelFromSlotId(slotId);
+        return {
+          sessionId: `S${String(sessionCounterStart + idx).padStart(6, "0")}`,
+          date: sess.date,
+          time: resolvedTime || '',
+          slotId: slotId,
+          therapist: sess.therapistId || therapistId,
+          therapyTypeId: sess.therapyTypeId || sess.therapyType || null,
+          isCheckedIn: typeof sess.isCheckedIn !== "undefined" ? sess.isCheckedIn : false,
+          status: typeof sess.status !== "undefined" && sess.status !== null ? sess.status : 'NotCheckedIn'
+        };
+      });
 
-      // Assign sessionIds according to the sorted order
-      // ***** CHANGE: status should be 'NotCheckedIn' by default if not present in sess.status
-      const normalizedSessions = (sortedSessions || []).map((sess, idx) => ({
-        sessionId: `S${String(sessionCounterStart + idx).padStart(6, "0")}`,
-        date: sess.date,
-        time: sess.time || "",
-        slotId: sess.slotId || sess.id,
-        therapist: sess.therapistId || therapistId,
-        therapyTypeId: sess.therapyTypeId || sess.therapyType || null,
-        isCheckedIn: typeof sess.isCheckedIn !== "undefined" ? sess.isCheckedIn : false,
-        status: typeof sess.status !== "undefined" && sess.status !== null ? sess.status : 'NotCheckedIn'
-      }));
-
-      // Compose booking payload (do NOT write outside tx)
+      // Prepare booking document, prune undefined fields
       const bookingPayload = {
-        appointmentId,
-        status,
-        notes,
-        remark,
-        discountInfo,
-        package: packageId,
-        patient: patientId,
-        therapist: therapistId,
-        sessions: normalizedSessions,
-        therapy: therapyId,
-        payment: paymentDoc._id,
-        channel,
-        attendedBy,
-        referral,
-        extra,
-        attendedByType,
-        paymentDueDate,
-        invoiceNumber,
-        followupRequired,
-        followupDate
+        appointmentId, status, notes, remark, discountInfo,
+        package: packageId, patient: patientId, therapist: therapistId,
+        sessions: normalizedSessions, therapy: therapyId,
+        payment: paymentDoc._id, channel, attendedBy, referral, extra,
+        attendedByType, paymentDueDate, invoiceNumber, followupRequired, followupDate
       };
-
-      Object.keys(bookingPayload).forEach(
-        k => bookingPayload[k] === undefined && delete bookingPayload[k]
-      );
+      for (const k in bookingPayload) {
+        if (bookingPayload[k] === undefined) delete bookingPayload[k];
+      }
       const booking = new Booking(bookingPayload);
 
-      // Step 6: Save booking in tx
       await booking.save({ session });
 
-      // Step 7: If booking request, update request status in tx
+      // If booking request, approve and log it within transaction
       if (isBookingRequest && bookingRequestId) {
         const bookingRequestDoc = await BookingRequests.findById(bookingRequestId).session(session);
         if (bookingRequestDoc) {
@@ -787,7 +1244,6 @@ class BookingAdminController {
           bookingRequestDoc.appointmentId = booking._id;
           await bookingRequestDoc.save({ session });
 
-          // Log approval of booking request, and association with booking
           try {
             await AuditLogService.addLog(
               {
@@ -811,6 +1267,7 @@ class BookingAdminController {
           } catch (logError) {
             await session.abortTransaction();
             session.endSession();
+            console.log("Failed to approve booking request (audit log failure):", logError && logError.message, logError);
             return res.status(500).json({
               success: false,
               message: "Failed to approve booking request (audit log failure).",
@@ -820,7 +1277,7 @@ class BookingAdminController {
         }
       }
 
-      // Step 8: Audit log in tx (MANDATORY: if fails, ROLLBACK everything)
+      // Log booking creation (mandatory to succeed transaction)
       try {
         await AuditLogService.addLog({
           action: "BOOKING_CREATED",
@@ -829,24 +1286,18 @@ class BookingAdminController {
           resource: "Booking",
           resourceId: booking._id,
           details: {
-            patientId,
-            therapistId,
-            appointmentId: booking.appointmentId,
-            packageId,
-            therapyId,
-            channel,
-            sessions: normalizedSessions.length,
-            invoiceNumber,
-            remark,
-            status,
+            patientId, therapistId, appointmentId: booking.appointmentId,
+            packageId, therapyId, channel, sessions: normalizedSessions.length,
+            invoiceNumber, remark, status,
             message: `Booking created for children ${patientId} with therapist ${therapistId}, package ${packageId}, therapy ${therapyId}`
           },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
-        }, session); // pass session if AuditLog supports it!
+        }, session);
       } catch (logError) {
         await session.abortTransaction();
         session.endSession();
+        console.log("Failed to create booking (audit log failure):", logError && logError.message, logError);
         return res.status(500).json({
           success: false,
           message: "Failed to create booking (audit log failure).",
@@ -854,11 +1305,11 @@ class BookingAdminController {
         });
       }
 
-      // Commit transaction ONLY IF ALL steps succeed including log
+      // Commit the successful transaction
       await session.commitTransaction();
       session.endSession();
 
-      // Step 9: Populate and return booking (not in tx, not rollbackable but data is safe now)
+      // Populate booking & references for return
       const populatedBooking = await Booking.findById(booking._id)
         .populate("package")
         .populate({
@@ -870,9 +1321,8 @@ class BookingAdminController {
         .populate({ path: "therapist", model: "TherapistProfile" })
         .populate({ path: "payment", model: "Payment" });
 
-      // ---- WhatsApp Integration ----
+      // WhatsApp notification (async, do not fail booking if error)
       try {
-        // Children details: phone, name
         let phoneNo;
         let patientName;
         if (populatedBooking?.patient) {
@@ -883,29 +1333,16 @@ class BookingAdminController {
           }
           patientName = populatedBooking.patient?.name || populatedBooking.patient?.userId?.fullName;
         }
-        // therapist name
-        let therapistName;
-        if (populatedBooking?.therapist) {
-          therapistName = populatedBooking.therapist.name || populatedBooking.therapist.therapistId;
-        }
-        // package
-        let packageName = populatedBooking?.package?.name;
-        // therapy type
-        let therapyTypeName = populatedBooking?.therapy?.name;
 
-        // session dates and times - send all in WhatsApp message
         let sessionsData = [];
         if (Array.isArray(populatedBooking.sessions)) {
-          sessionsData = populatedBooking.sessions.map(ses => {
-            let sessionDate = ses.date;
-            let sessionTime = ses.time;
-            return { date: sessionDate, time: sessionTime };
-          });
+          sessionsData = populatedBooking.sessions.map((ses) => ({
+            date: ses.date,
+            time: this.getTimeLabelFromSlotId(ses.slotId)
+          }));
         }
 
-        // Only send if phoneNo present and not empty
         if (phoneNo) {
-          // Convert sessionsData (array of {date, time}) to a readable multiline text string, showing every session on separate line as "Date: YYYY-MM-DD, Time: HH:mm"
           const sessionsText = Array.isArray(sessionsData) && sessionsData.length
             ? sessionsData.map(
                 (s, i) =>
@@ -913,28 +1350,29 @@ class BookingAdminController {
               ).join(",")
             : "";
 
-          // Send the ACTUAL paymentId (not placeholder), as per @payment.schema.js (1-74)
-          // paymentId must be taken from populatedBooking.payment.paymentId
-          let waPaymentId = undefined;
-          if (populatedBooking?.payment && populatedBooking.payment.paymentId) {
-            waPaymentId = populatedBooking.payment.paymentId;
-          }
+          let waPaymentId = populatedBooking?.payment?.paymentId;
+
+          console.log("Sending WhatsApp booking completed notification:", {
+            destination: phoneNo,
+            userName: patientName,
+            appointmentId: populatedBooking.appointmentId,
+            patientName: patientName,
+            totalSessions: sessionsText,
+            paymentId: waPaymentId
+          });
 
           await WhatsappController.sendBookingCreationCompleted({
             destination: phoneNo,
             userName: patientName,
             appointmentId: populatedBooking.appointmentId,
             patientName: patientName,
-            totalSessions: sessionsText, // now sending multiline all sessions with date & time
+            totalSessions: sessionsText,
             paymentId: waPaymentId
           });
-
         }
       } catch (waErr) {
-        // log error only, do not fail booking creation if WhatsApp fails
         console.error("Failed to send WhatsApp message:", waErr?.message || waErr);
       }
-      // ---- End WhatsApp Integration ----
 
       res.status(201).json({
         success: true,
@@ -943,6 +1381,7 @@ class BookingAdminController {
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
+      console.log("Failed to create booking:", error && error.message, error);
       res.status(500).json({
         success: false,
         message: "Failed to create booking.",
