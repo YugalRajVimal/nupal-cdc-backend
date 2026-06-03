@@ -1688,7 +1688,7 @@ async sendSessionEditRequestStatusUpdate({
 }) {
   const payload = {
     apiKey: AISENSY_API_KEY,
-    campaignName: "Session Edit Request Status Update",
+    campaignName: "Session Edit Request Status Update New",
     destination: destination || "",
     userName: userName || "",
     templateParams: [
