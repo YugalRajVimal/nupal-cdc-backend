@@ -90,6 +90,18 @@ bookingsAdminRouter.post("/mark-session-missed", jwtAuth, (req, res) =>
   bookingAdminController.markSessionMissed(req, res)
 );
 
+/**
+ * @route POST /api/admin/bookings/mark-session-not-checked-in
+ * @desc Mark a session as "Not Checked In" for a booking (undo "checked in")
+ * @access Admin (authentication required)
+ */
+bookingsAdminRouter.post(
+  "/mark-session-not-checked-in",
+  jwtAuth,
+  (req, res) => bookingAdminController.markSessionNotCheckedIn(req, res)
+);
+
+
 
 /**
  * @route GET /api/admin/bookings/reception-desk

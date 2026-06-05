@@ -59,9 +59,10 @@ const PaymentSchema = new Schema({
   paymentTime: { type: Date },
   paymentMethod: {
     type: String,
-    enum: ['card', 'upi', 'netbanking', 'cash', 'wallet'],
+    enum: ['cashfree', 'online', 'cash'],
     required: true,
   },
+  utr: { type: [String], default: [] },
   remark: { type: String },
 
   // --- Cashfree critical bridge block (do not remove) ---

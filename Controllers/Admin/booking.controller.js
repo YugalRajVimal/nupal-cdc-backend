@@ -3724,7 +3724,9 @@ async collectPayment(req, res) {
     const {
       paymentType = "full",
       partialAmount,
-      discountApplied = false // Discount applied flag from frontend
+      discountApplied = false, // Discount applied flag from frontend
+      paymentMethod,           // cashfree, online, or cash
+      utr                     // UTR number for transaction (optional, string from req.body)
     } = req.body;
 
     if (!id) {
@@ -3786,6 +3788,15 @@ async collectPayment(req, res) {
       });
     }
 
+    // Ensure 'utr' field is an array (migration handling: safety for legacy docs)
+    if (!Array.isArray(payment.utr)) {
+      if (payment.utr) {
+        payment.utr = [payment.utr];
+      } else {
+        payment.utr = [];
+      }
+    }
+
     // --- Discount Logic ---
     let originalAmount = payment.amount;
     let amountToCollect = originalAmount;
@@ -3793,7 +3804,12 @@ async collectPayment(req, res) {
     let appliedDiscountPercent = 0;
 
     // If discount applied, get actual discount percent from booking's coupon if available
-    if (discountApplied && booking.discountInfo && booking.discountInfo.coupon && typeof booking.discountInfo.coupon.discount === "number") {
+    if (
+      discountApplied && 
+      booking.discountInfo &&
+      booking.discountInfo.coupon && 
+      typeof booking.discountInfo.coupon.discount === "number"
+    ) {
       appliedDiscountPercent = booking.discountInfo.coupon.discount;
       if (appliedDiscountPercent > 0) {
         discountAmount = Math.round((originalAmount * appliedDiscountPercent) / 100);
@@ -3829,6 +3845,10 @@ async collectPayment(req, res) {
 
       payment.amountPaid = (payment.amountPaid || 0) + partialAmount;
 
+      // Add paymentMethod and push utr to Payment for latest transaction
+      if (paymentMethod) payment.paymentMethod = paymentMethod;
+      if (utr) payment.utr.push(utr);
+
       // Handle payment status vs discounted collection
       if (payment.amountPaid < amountToCollect) {
         payment.status = "partiallypaid";
@@ -3859,6 +3879,8 @@ async collectPayment(req, res) {
           type: "income",
           amount: partialAmount,
           creditDebitStatus: "credited",
+          paymentMethod: paymentMethod || payment.paymentMethod || null,
+          utr: payment.utr, // Now always array
         }
       ], { session });
 
@@ -3867,6 +3889,11 @@ async collectPayment(req, res) {
       payment.status = "paid";
       payment.paymentTime = new Date();
       payment.amountPaid = amountToCollect; // Use discounted amount if discount applied
+
+      // Add paymentMethod and utr to Payment for latest transaction
+      if (paymentMethod) payment.paymentMethod = paymentMethod;
+      if (utr) payment.utr.push(utr);
+
       await payment.save({ session });
 
       booking.paymentStatus = "paid";
@@ -3887,6 +3914,8 @@ async collectPayment(req, res) {
           type: "income",
           amount: amountToCollect,
           creditDebitStatus: "credited",
+          paymentMethod: paymentMethod || payment.paymentMethod || null,
+          utr: payment.utr, // Now always array
         }], { session });
       } else {
         financeRecord = financeExists;
@@ -3917,7 +3946,9 @@ async collectPayment(req, res) {
           discountPercent: appliedDiscountPercent,
           totalAmount: originalAmount,
           discountAmount,
-          netAmount: amountToCollect
+          netAmount: amountToCollect,
+          paymentMethod: paymentMethod || payment.paymentMethod || null,
+          utr: payment.utr, // Now always array
         },
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"]
@@ -3982,7 +4013,9 @@ async collectPayment(req, res) {
             userName: userName,
             appointmentId: appointmentId,
             amount: String(amountForWhatsapp),
-            paymentStatus: paymentStatusTxt
+            paymentStatus: paymentStatusTxt,
+            paymentMethod: paymentMethod || payment.paymentMethod || null,
+            utr: payment.utr, // send full utr array
           });
         } catch (err) {
           console.error(
@@ -4326,6 +4359,117 @@ async markSessionMissed(req, res) {
     });
   }
 }
+
+// Mark a session as "Not Checked In" for a booking (undo "checked in" in a deliberate way)
+async markSessionNotCheckedIn(req, res) {
+  const session = await Booking.startSession();
+  session.startTransaction();
+
+  try {
+    const { bookingId, sessionId } = req.body;
+
+    if (!bookingId || !sessionId) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: "bookingId and sessionId are required."
+      });
+    }
+
+    // Find the booking (attach the session/tx)
+    const booking = await Booking.findById(bookingId)
+      .populate([
+        { path: "patient", model: "PatientProfile", select: "userId name mobile1", populate: { path: "userId", model: "User", select: "name phone email" } },
+        { path: "therapist", model: "TherapistProfile", select: "userId therapistId phoneNo", populate: { path: "userId", model: "User", select: "name phone email" } },
+        { path: "sessions.therapist", model: "TherapistProfile", select: "userId therapistId phoneNo", populate: { path: "userId", model: "User", select: "name phone email" } }
+      ])
+      .session(session);
+
+    if (!booking) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found."
+      });
+    }
+
+    // Find session index in the booking sessions array
+    const sessionIndex = booking.sessions.findIndex(
+      (sess) => String(sess._id) === String(sessionId)
+    );
+
+    if (sessionIndex === -1) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        message: "Session not found in this booking."
+      });
+    }
+
+    // If the session is already not checked in (no matter the previous status), return idempotent response
+    if (
+      booking.sessions[sessionIndex].isCheckedIn === false &&
+      booking.sessions[sessionIndex].status === "NotCheckedIn"
+    ) {
+      await session.commitTransaction();
+      session.endSession();
+      return res.json({
+        success: true,
+        message: "Session is already not checked in.",
+        booking
+      });
+    }
+
+    // Mark as "Not Checked In" even if previous status was "Missed" or anything else
+    booking.sessions[sessionIndex].isCheckedIn = false;
+    booking.sessions[sessionIndex].status = "NotCheckedIn";
+    await booking.save({ session });
+
+    // Optionally log this action
+    try {
+      await AuditLogService.addLog({
+        action: "SESSION_MARKED_NOT_CHECKED_IN",
+        user: req.user && req.user.id ? req.user.id : null,
+        role: "admin",
+        resource: "Booking",
+        resourceId: booking._id,
+        details: {
+          bookingId: booking._id,
+          sessionId,
+          markedNotCheckedInBy: req.user && req.user._id ? req.user._id : null,
+          markedAt: new Date(),
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] || null,
+      });
+    } catch (err) {
+      console.error("[markSessionNotCheckedIn] Error creating audit log:", err);
+      // Do not revert transaction if logging fails
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+    return res.json({
+      success: true,
+      message: "Session marked as not checked in successfully.",
+      booking
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error("[markSessionNotCheckedIn] Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark session as not checked in.",
+      error: error.message
+    });
+  }
+}
+
 
 
 

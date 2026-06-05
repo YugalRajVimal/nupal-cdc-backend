@@ -69,9 +69,8 @@ class FinancesAdminController {
         page = parseInt(page, 10) || 1;
         pageSize = parseInt(pageSize, 10) || 20;
 
-        // Only get "income"
-        let query = { type: "income" };
-
+        // Get ALL (income + expense)
+        let query = {};
         // Build sorting object
         let sortObj = {};
         if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
@@ -88,14 +87,22 @@ class FinancesAdminController {
             (f.creditDebitStatus && regex.test(f.creditDebitStatus)) ||
             (f.type && regex.test(f.type)) ||
             (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
-            (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10)))
+            (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
+            (f.paymentMethod && regex.test(f.paymentMethod)) ||
+            (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u)))
           );
         }
 
-        // Calculate only income totals
+        // Calculate totals for income, expenses, net
         let totalIncome = 0;
+        let totalExpenses = 0;
+
         finances.forEach(finance => {
-          totalIncome += finance.amount;
+          if (finance.type === "income") {
+            totalIncome += finance.amount;
+          } else if (finance.type === "expense") {
+            totalExpenses += finance.amount;
+          }
         });
 
         // Pagination
@@ -103,18 +110,25 @@ class FinancesAdminController {
         const offset = (page - 1) * pageSize;
         const pagedFinances = finances.slice(offset, offset + pageSize);
 
-        // Prepare logs for output
+        // Prepare logs for output, match all fields in schema (id, date, description, type, amount, creditDebitStatus, paymentMethod, utr, createdAt, updatedAt)
         const financeLogs = pagedFinances.map(finance => ({
+          _id: finance._id,
           Date: finance.date,
           Description: finance.description,
           Type: finance.type.charAt(0).toUpperCase() + finance.type.slice(1),
           Amount: finance.amount,
-          CreditDebitStatus: finance.creditDebitStatus
+          CreditDebitStatus: finance.creditDebitStatus,
+          PaymentMethod: finance.paymentMethod,
+          Utr: finance.utr,
+          CreatedAt: finance.createdAt,
+          UpdatedAt: finance.updatedAt,
         }));
 
         return res.json({
           success: true,
           totalIncome,
+          totalExpenses,
+          netBalance: totalIncome - totalExpenses,
           page,
           pageSize,
           total,

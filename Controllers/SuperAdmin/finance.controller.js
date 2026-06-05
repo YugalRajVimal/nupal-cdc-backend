@@ -36,7 +36,9 @@ class FinancesSuperAdminController {
           (f.creditDebitStatus && regex.test(f.creditDebitStatus)) ||
           (f.type && regex.test(f.type)) ||
           (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
-          (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10)))
+          (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
+          (f.paymentMethod && regex.test(f.paymentMethod)) ||
+          (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u)))
         );
       }
 
@@ -56,13 +58,18 @@ class FinancesSuperAdminController {
       const offset = (page - 1) * pageSize;
       const pagedFinances = finances.slice(offset, offset + pageSize);
 
-      // Prepare logs for output
+      // Prepare logs for output, match all details as in finances.schema.js
       const financeLogs = pagedFinances.map(finance => ({
+        _id: finance._id,
         Date: finance.date,
         Description: finance.description,
         Type: finance.type.charAt(0).toUpperCase() + finance.type.slice(1),
         Amount: finance.amount,
-        CreditDebitStatus: finance.creditDebitStatus
+        CreditDebitStatus: finance.creditDebitStatus,
+        PaymentMethod: finance.paymentMethod,
+        Utr: finance.utr,
+        CreatedAt: finance.createdAt,
+        UpdatedAt: finance.updatedAt,
       }));
 
       // Calculate net balance
