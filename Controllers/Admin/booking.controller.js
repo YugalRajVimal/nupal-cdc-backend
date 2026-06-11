@@ -5319,24 +5319,22 @@ async getReceptionDeskDetails(req, res) {
 async getAllSessions(req, res) {
   try {
     const {
-      date,             // YYYY-MM-DD (string)
+      date,             // Single day filter (YYYY-MM-DD)
+      from,             // Start date (YYYY-MM-DD)
+      to,               // End date (YYYY-MM-DD)
       therapistId,      // therapist._id as string
       patientId,        // patient._id as string
       therapyTypeId,    // therapyTypeId as string
       isCheckedIn,      // 'true', 'false', or undefined
+      search,           // General search string
     } = req.query;
-
-    // We need: 
-    // - Booking populated with Children ("PatientProfile"), package, therapy ("TherapyType"), therapist ("TherapistProfile")
-    // - Each session in booking.sessions with therapist, therapyTypeId populated
-    // - Flatten to array: [{ session, booking }]
 
     // Build booking query level filters
     const bookingQuery = {};
     if (patientId) bookingQuery.Children = patientId;
-    if (therapistId) bookingQuery.therapist = therapistId; // legacy: top-level therapist
+    if (therapistId) bookingQuery.therapist = therapistId;
 
-    // Fetch bookings
+    // Fetch bookings with population
     const bookings = await Booking.find(bookingQuery)
       .populate({
         path: "patient",
@@ -5354,6 +5352,10 @@ async getAllSessions(req, res) {
         select: "_id name"
       })
       .populate({
+        path: "package",
+        model: "Package",
+      })
+      .populate({
         path: "sessions.therapist",
         model: "TherapistProfile",
         select: "_id name therapistId userId",
@@ -5369,13 +5371,32 @@ async getAllSessions(req, res) {
       })
       .lean();
 
-    // Flatten all sessions, annotate with booking info
+    // Helper: date filter check (from/to inclusive)
+    function isWithinRange(dateStr, fromStr, toStr) {
+      if (!dateStr) return false;
+      const d = new Date(dateStr);
+      const fromD = fromStr ? new Date(fromStr) : null;
+      const toD = toStr ? new Date(toStr) : null;
+      if (fromD && d < fromD) return false;
+      if (toD && d > toD) return false;
+      return true;
+    }
+    function safeString(v) { return (typeof v === "undefined" || v === null) ? "" : String(v); }
+
+    // Compose normalized sessions array
     let sessions = [];
-    for(const booking of bookings) {
+    for (const booking of bookings) {
       if (Array.isArray(booking.sessions)) {
-        for(const session of booking.sessions) {
-          // Apply session filters
+        for (const session of booking.sessions) {
+          // ---- Date Filtering ----
+          // Single date priority, otherwise from-to
           if (date && session.date !== date) continue;
+          if (!date) {
+            if (from && !to && session.date < from) continue;
+            if (to && !from && session.date > to) continue;
+            if (from && to && !isWithinRange(session.date, from, to)) continue;
+          }
+          // ---- Session-level filtering ----
           if (therapistId && session.therapist && session.therapist._id?.toString() !== therapistId) continue;
           if (therapyTypeId && session.therapyTypeId && session.therapyTypeId._id?.toString() !== therapyTypeId) continue;
           if (typeof isCheckedIn !== "undefined") {
@@ -5383,28 +5404,95 @@ async getAllSessions(req, res) {
             if (isCheckedIn === "true" && session.isCheckedIn !== true) continue;
           }
 
-          const therapyTypeName = session.therapyTypeId;
-          // Compose item
+          // Extract data for search fields & output
+          // Patient Name
+          const patientName = safeString(booking.patient?.name);
+          // Therapist Name: prefer session.therapist (populated) if present
+          let therapistName = "";
+          if (session.therapist && typeof session.therapist === "object") {
+            // populated therapist on session
+            therapistName =
+              safeString(session.therapist.name) ||
+              safeString(session.therapist.userId?.name) ||
+              "";
+          } else if (booking.therapist && typeof booking.therapist === "object") {
+            therapistName =
+              safeString(booking.therapist.name) ||
+              safeString(booking.therapist.userId?.name) ||
+              "";
+          }
+
+          // Therapy Name: prefer session's populated therapyTypeId if present
+          let therapyName = "";
+          if (session.therapyTypeId && typeof session.therapyTypeId === "object") {
+            therapyName = safeString(session.therapyTypeId.name);
+          } else if (booking.therapy && typeof booking.therapy === "object") {
+            therapyName = safeString(booking.therapy.name);
+          }
+
+          // Session ID
+          let sessionId = safeString(session.sessionId || session._id);
+
+          // Time slot: prefer slotId for human label, fallback to timeSlot/time
+          let timeSlot = "";
+          if (session.slotId) timeSlot = safeString(session.slotId);
+          else if (session.timeSlot) timeSlot = safeString(session.timeSlot);
+          else if (session.time) timeSlot = safeString(session.time);
+
+          // Compose output as per shape required
           sessions.push({
             bookingId: booking._id,
-            appointmentId: booking.appointmentId,
-            package: booking.package,
+            appointmentId: safeString(booking.appointmentId),
+            package: booking.package?._id ? booking.package._id : booking.package,
             patient: booking.patient,
             therapist: booking.therapist,
-            therapy: therapyTypeName,
-            session: session,
-            // You can add more fields here as necessary for frontend
+            therapy: session.therapyTypeId && typeof session.therapyTypeId === "object"
+              ? { _id: session.therapyTypeId._id, name: session.therapyTypeId.name }
+              : (booking.therapy && typeof booking.therapy === "object"
+                  ? { _id: booking.therapy._id, name: booking.therapy.name }
+                  : booking.therapy),
+            session: {
+              ...session,
+              sessionId, // ensure sessionId on session object
+            },
+            searchFields: {
+              sessionId,
+              date: safeString(session.date),
+              timeSlot: timeSlot,
+              patient: patientName,
+              therapist: therapistName,
+              therapy: therapyName,
+              appointmentId: safeString(booking.appointmentId),
+            }
           });
         }
       }
     }
 
-    // If isCheckedIn param not provided, return all; if "false", only unchecked; if "true", only checked-in
-    // Return currentDate for reference if date is provided
+    // ---- Search Filtering (after flattening) ----
+    let filteredSessions = sessions;
+    if (search && search.trim() !== "") {
+      const lower = search.trim().toLowerCase();
+      filteredSessions = sessions.filter(({ searchFields }) => {
+        return (
+          safeString(searchFields.sessionId).toLowerCase().includes(lower) ||
+          safeString(searchFields.date).toLowerCase().includes(lower) ||
+          safeString(searchFields.timeSlot).toLowerCase().includes(lower) ||
+          safeString(searchFields.patient).toLowerCase().includes(lower) ||
+          safeString(searchFields.therapist).toLowerCase().includes(lower) ||
+          safeString(searchFields.therapy).toLowerCase().includes(lower) ||
+          safeString(searchFields.appointmentId).toLowerCase().includes(lower)
+        );
+      });
+    }
+
     return res.json({
       success: true,
       date: date || null,
-      sessions: sessions
+      from: from || null,
+      to: to || null,
+      search: search || null,
+      sessions: filteredSessions
     });
   } catch (error) {
     console.error("[getAllSessions] Error:", error);
