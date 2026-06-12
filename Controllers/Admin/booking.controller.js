@@ -4338,16 +4338,19 @@ async rejectSessionEditRequest(req, res) {
 async collectPayment(req, res) {
   const session = await Booking.startSession();
   session.startTransaction();
+
   let auditLogFailed = false;
   let auditLogError = null;
+
   try {
     const { id } = req.params;
     const {
       paymentType = "full",
       partialAmount,
-      discountApplied = false, // Discount applied flag from frontend
-      paymentMethod,           // cashfree, online, or cash
-      utr                     // UTR number for transaction (optional, string from req.body)
+      discountApplied = false,
+      paymentMethod,
+      utr,
+      paymentTime
     } = req.body;
 
     if (!id) {
@@ -4409,13 +4412,9 @@ async collectPayment(req, res) {
       });
     }
 
-    // Ensure 'utr' field is an array (migration handling: safety for legacy docs)
+    // Ensure 'utr' field is always an array
     if (!Array.isArray(payment.utr)) {
-      if (payment.utr) {
-        payment.utr = [payment.utr];
-      } else {
-        payment.utr = [];
-      }
+      payment.utr = payment.utr ? [payment.utr] : [];
     }
 
     // --- Discount Logic ---
@@ -4424,11 +4423,10 @@ async collectPayment(req, res) {
     let discountAmount = 0;
     let appliedDiscountPercent = 0;
 
-    // If discount applied, get actual discount percent from booking's coupon if available
     if (
-      discountApplied && 
+      discountApplied &&
       booking.discountInfo &&
-      booking.discountInfo.coupon && 
+      booking.discountInfo.coupon &&
       typeof booking.discountInfo.coupon.discount === "number"
     ) {
       appliedDiscountPercent = booking.discountInfo.coupon.discount;
@@ -4441,16 +4439,15 @@ async collectPayment(req, res) {
     let financeRecord = null;
     let auditLogMessage = "";
     let paymentStatusChanged = false;
-    let paymentStatusForWhatsapp = ""; // to determine sent status
+    let paymentStatusForWhatsapp = "";
+    let remainingToPay;
 
     // -------- PARTIAL PAYMENT --------
     if (paymentType === "partial") {
       const { amountPaid = 0 } = payment;
-      // Remaining is always based on original amount (before discount)
       let actualAmountToCompare = amountToCollect;
       let remaining = actualAmountToCompare - amountPaid;
 
-      // Validate partial amount (must not exceed remaining)
       if (
         typeof partialAmount !== "number" ||
         partialAmount <= 0 ||
@@ -4465,31 +4462,26 @@ async collectPayment(req, res) {
       }
 
       payment.amountPaid = (payment.amountPaid || 0) + partialAmount;
-
-      // Add paymentMethod and push utr to Payment for latest transaction
       if (paymentMethod) payment.paymentMethod = paymentMethod;
       if (utr) payment.utr.push(utr);
 
-      // Handle payment status vs discounted collection
       if (payment.amountPaid < amountToCollect) {
         payment.status = "partiallypaid";
-        payment.paymentTime = new Date();
+        payment.paymentTime = paymentTime ? new Date(paymentTime) : new Date();
         booking.paymentStatus = "partiallypaid";
         auditLogMessage = `[collectPayment] Marking as partiallypaid. Partial payment of Rs.${partialAmount} received for Booking #${booking.appointmentId}. Remaining: Rs.${amountToCollect - payment.amountPaid}. DiscountApplied: ${discountApplied}${discountApplied ? ` (${appliedDiscountPercent}%)` : ""}`;
         paymentStatusForWhatsapp = "Partial";
         paymentStatusChanged = true;
       } else {
         payment.status = "paid";
-        payment.paymentTime = new Date();
-        // Make sure we don't overpay (limit to discounted total)
-        payment.amountPaid = amountToCollect;
+        payment.paymentTime = paymentTime ? new Date(paymentTime) : new Date();
+        payment.amountPaid = amountToCollect; // clamp to discounted total
         booking.paymentStatus = "paid";
         auditLogMessage = `[collectPayment] Marking as fully paid after partial payment. Final partial payment of Rs.${partialAmount} received. Booking #${booking.appointmentId} fully paid. DiscountApplied: ${discountApplied}${discountApplied ? ` (${appliedDiscountPercent}%)` : ""}`;
         paymentStatusForWhatsapp = "Full";
         paymentStatusChanged = true;
       }
 
-      // Persist payment and booking
       await payment.save({ session });
       await booking.save({ session });
 
@@ -4501,17 +4493,17 @@ async collectPayment(req, res) {
           amount: partialAmount,
           creditDebitStatus: "credited",
           paymentMethod: paymentMethod || payment.paymentMethod || null,
-          utr: payment.utr, // Now always array
+          utr: payment.utr,
         }
       ], { session });
-
     } else {
       // -------- FULL PAYMENT --------
-      payment.status = "paid";
-      payment.paymentTime = new Date();
-      payment.amountPaid = amountToCollect; // Use discounted amount if discount applied
+      // Calculate remainingToPay as the difference BEFORE updating payment.amountPaid
+      remainingToPay = payment.amount - (payment.amountPaid || 0);
 
-      // Add paymentMethod and utr to Payment for latest transaction
+      payment.status = "paid";
+      payment.paymentTime = paymentTime ? new Date(paymentTime) : new Date();
+      payment.amountPaid = amountToCollect;
       if (paymentMethod) payment.paymentMethod = paymentMethod;
       if (utr) payment.utr.push(utr);
 
@@ -4520,27 +4512,22 @@ async collectPayment(req, res) {
       booking.paymentStatus = "paid";
       await booking.save({ session });
 
-      auditLogMessage = `[collectPayment] Full payment of Rs.${amountToCollect} received for Booking #${booking.appointmentId}.${discountApplied ? ` Discount of Rs.${discountAmount} (${appliedDiscountPercent}%) applied.` : ""}`;
+      auditLogMessage = `[collectPayment] Full payment of Rs.${amountToCollect} received for Booking #${booking.appointmentId}.${discountApplied ? ` Discount of Rs.${discountAmount} (${appliedDiscountPercent}%) applied.` : ""} Previously paid: Rs.${payment.amountPaid - remainingToPay}. Now collected: Rs.${remainingToPay}.`;
       paymentStatusForWhatsapp = "Full";
       paymentStatusChanged = true;
 
-      const financeExists = await Finances.findOne({
-        description: { $regex: `Payment for Booking #${booking.appointmentId}`, $options: "i" }
-      }).session(session);
-
-      if (!financeExists) {
-        financeRecord = await Finances.create([{
+      financeRecord = await Finances.create([
+        {
           date: payment.paymentTime || new Date(),
           description: `Payment for Booking #${booking.appointmentId}${discountApplied ? " (DISCOUNT APPLIED)" : ""}`,
           type: "income",
-          amount: amountToCollect,
+          amount: remainingToPay,
           creditDebitStatus: "credited",
           paymentMethod: paymentMethod || payment.paymentMethod || null,
-          utr: payment.utr, // Now always array
-        }], { session });
-      } else {
-        financeRecord = financeExists;
-      }
+          utr: payment.utr,
+        }
+      ], { session });
+
     }
 
     // Add audit log for payment collection if payment status changed
@@ -4569,7 +4556,7 @@ async collectPayment(req, res) {
           discountAmount,
           netAmount: amountToCollect,
           paymentMethod: paymentMethod || payment.paymentMethod || null,
-          utr: payment.utr, // Now always array
+          utr: payment.utr,
         },
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"]
@@ -4583,7 +4570,6 @@ async collectPayment(req, res) {
       }
     }
 
-    // If audit log creation failed with an error
     if (paymentStatusChanged && auditLogFailed) {
       await session.abortTransaction();
       session.endSession();
@@ -4597,9 +4583,8 @@ async collectPayment(req, res) {
     await session.commitTransaction();
     session.endSession();
 
-    // Send WhatsApp message if payment recorded and Children has mobile number
+    // WhatsApp Notification if payment recorded and patient mobile exists
     if (paymentStatusChanged) {
-      // Only attempt if Children exist
       let patientProfile = booking.patient;
       let userPhone =
         (patientProfile && patientProfile.mobile1) ||
@@ -4607,7 +4592,6 @@ async collectPayment(req, res) {
           patientProfile.userId &&
           patientProfile.userId.phone) ||
         null;
-
       let userName =
         (patientProfile && patientProfile.name) ||
         (patientProfile &&
@@ -4615,12 +4599,19 @@ async collectPayment(req, res) {
           patientProfile.userId.name) ||
         "";
 
-      // Only send if we have a destination phone (prefer mobile1, fallback userId.phone)
       if (userPhone) {
         const { appointmentId } = booking;
-        let amountForWhatsapp = (paymentType === "partial")
-          ? (payment.amountPaid < amountToCollect ? partialAmount : payment.amountPaid)
-          : amountToCollect;
+        let amountForWhatsapp;
+        if (paymentType === "partial") {
+          amountForWhatsapp = payment.amountPaid < amountToCollect ? partialAmount : payment.amountPaid;
+        } else {
+          // Only compute remainingToPay in the 'full payment' block
+         
+          // If previouslyPaid exists, result is what was actually collected "now"
+          amountForWhatsapp = typeof remainingToPay !== "undefined"
+            ? remainingToPay
+            : amountToCollect;
+        }
 
         let paymentStatusTxt =
           payment.status === "paid"
@@ -4628,15 +4619,16 @@ async collectPayment(req, res) {
             : payment.status === "partiallypaid"
               ? "Partial"
               : payment.status;
+
         try {
           await WhatsappController.sendPaymentCollectedSuccessfully({
             destination: userPhone,
-            userName: userName,
-            appointmentId: appointmentId,
+            userName,
+            appointmentId,
             amount: String(amountForWhatsapp),
             paymentStatus: paymentStatusTxt,
             paymentMethod: paymentMethod || payment.paymentMethod || null,
-            utr: payment.utr, // send full utr array
+            utr: payment.utr,
           });
         } catch (err) {
           console.error(
@@ -4657,9 +4649,7 @@ async collectPayment(req, res) {
           : "Payment recorded successfully.",
       booking,
       payment,
-      finance: Array.isArray(financeRecord)
-        ? financeRecord[0]
-        : financeRecord,
+      finance: Array.isArray(financeRecord) ? financeRecord[0] : financeRecord,
       discount: discountApplied
         ? {
             percent: appliedDiscountPercent,
