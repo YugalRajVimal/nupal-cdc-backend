@@ -4499,7 +4499,7 @@ async collectPayment(req, res) {
     } else {
       // -------- FULL PAYMENT --------
       // Calculate remainingToPay as the difference BEFORE updating payment.amountPaid
-      remainingToPay = payment.amount - (payment.amountPaid || 0);
+      remainingToPay = amountToCollect - (payment.amountPaid || 0);
 
       payment.status = "paid";
       payment.paymentTime = paymentTime ? new Date(paymentTime) : new Date();
