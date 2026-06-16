@@ -227,13 +227,12 @@ class CashfreeController {
 
   // Handler to confirm order status with Cashfree
   confirmStatus = async (req, res) => {
-    const { order_id } = req.params; // order_id is expected as a route param
+    const { order_id } = req.params;
 
     if (!order_id) {
       return res.status(400).json({ error: "order_id is required in the URL params" });
     }
 
-    // Prepare headers as per instruction
     const headers = {
       "accept": "application/json",
       "x-api-version": "2025-01-01",
@@ -242,7 +241,6 @@ class CashfreeController {
     };
 
     try {
-      // Use fetch API or axios. Native fetch is supported in Node 18+.
       const url = `https://api.cashfree.com/pg/orders/${order_id}`;
       const response = await fetch(url, { method: "GET", headers });
       const data = await response.json();
@@ -254,33 +252,66 @@ class CashfreeController {
         });
       }
 
-      // Update our Payment record if found and Cashfree order_status is terminal or meaningful
-      // Require Payment model (import Payment from "../../Schema/payment.schema.js")
+      // Import models
       const Payment = (await import('../../Schema/payment.schema.js')).default;
+      const Finances = (await import('../../Schema/finances.schema.js')).default;
+      const Booking = (await import('../../Schema/booking.schema.js')).default;
+
+      // Find payment by cashfree.order_id
       const payment = await Payment.findOne({ 'cashfree.order_id': order_id });
 
+      let financeRecord = null;
+
       if (payment && data?.order_status) {
-        // 'order_status' can be ACTIVE, PAID, EXPIRED, FAILED
+        // 'PAID' → create the finances record directly (never check existence)
         switch (data.order_status) {
           case 'PAID':
             payment.status = 'paid';
             payment.amountPaid = data.order_amount || payment.amountPaid || 0;
             payment.paymentTime = data.payment_time ? new Date(data.payment_time) : new Date();
+
+            // Gather childrenName, childrenId, and description from Booking (if exists)
+            let childrenName = payment.childrenName || undefined;
+            let childrenId = payment.childrenId || undefined;
+            let description = payment.remark || `Cashfree Payment for order ${order_id}`;
+            try {
+              const booking = await Booking.findOne({ payment: payment._id }).populate('patient');
+              if (booking) {
+                if (booking.patient && booking.patient.name) {
+                  childrenName = booking.patient.name;
+                  childrenId = String(booking.patient.patientId || booking.patient._id);
+                }
+                description = `Payment for ${childrenName ? childrenName : "patient"} (Order ${order_id})`;
+              }
+            } catch (e) {
+              // ignore any issues getting names
+            }
+
+            financeRecord = await Finances.create({
+              date: payment.paymentTime || new Date(),
+              description,
+              type: 'income',
+              amount: payment.amountPaid || payment.amount,
+              creditDebitStatus: 'credited',
+              paymentMethod: 'cashfree',
+              utr: payment.utr && payment.utr.length ? payment.utr : [order_id],
+              childrenName,
+              childrenId
+            });
             break;
           case 'FAILED':
             payment.status = 'failed';
             break;
           case 'EXPIRED':
-            payment.status = 'failed'; // treat expired as failed for now
+            payment.status = 'failed';
             break;
           case 'ACTIVE':
-            payment.status = 'pending'; // still open
+            payment.status = 'pending';
             break;
           default:
-            // If future states: null-op
             break;
         }
-        // Update cashfree block with latest details for record keeping
+        // always update latest cashfree details
         payment.cashfree = {
           ...(payment.cashfree || {}),
           ...data,
@@ -288,13 +319,24 @@ class CashfreeController {
         await payment.save();
       }
 
-      return res.status(200).json({ orderStatus: data, paymentStatusMarked: payment ? payment.status : null });
+      return res.status(200).json({
+        orderStatus: data,
+        paymentStatusMarked: payment ? payment.status : null,
+        financeRecord: financeRecord
+          ? {
+            _id: financeRecord._id,
+            amount: financeRecord.amount,
+            type: financeRecord.type,
+            date: financeRecord.date,
+            paymentMethod: financeRecord.paymentMethod
+          }
+          : null
+      });
     } catch (error) {
       console.error("Error confirming Cashfree order status:", error);
       return res.status(500).json({ error: "Internal Server Error" });
     }
   };
- 
   // Handler for Cashfree Webhook (called by Cashfree for status update)
   handleWebhook = async (req, res) => {
     console.log("Cashfree Webhook: Started");
