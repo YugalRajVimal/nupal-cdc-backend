@@ -4494,8 +4494,11 @@ async collectPayment(req, res) {
           creditDebitStatus: "credited",
           paymentMethod: paymentMethod || payment.paymentMethod || null,
           utr: payment.utr,
+          childrenName: booking?.patient?.name || booking?.patientName || "",
+          childrenId: booking?.patient?.patientId || booking?.patientId || ""
         }
       ], { session });
+ 
     } else {
       // -------- FULL PAYMENT --------
       // Calculate remainingToPay as the difference BEFORE updating payment.amountPaid
@@ -4525,8 +4528,11 @@ async collectPayment(req, res) {
           creditDebitStatus: "credited",
           paymentMethod: paymentMethod || payment.paymentMethod || null,
           utr: payment.utr,
+          childrenName: booking?.patient?.name || booking?.patientName || "",
+          childrenId: booking?.patient?.patientId || booking?.patientId || ""
         }
       ], { session });
+ 
 
     }
 

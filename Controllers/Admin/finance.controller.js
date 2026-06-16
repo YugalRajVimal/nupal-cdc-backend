@@ -89,7 +89,9 @@ class FinancesAdminController {
             (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
             (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
             (f.paymentMethod && regex.test(f.paymentMethod)) ||
-            (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u)))
+            (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u))) ||
+            (f.childrenName && regex.test(f.childrenName)) ||
+            (f.childrenId && regex.test(f.childrenId))
           );
         }
 
@@ -110,7 +112,7 @@ class FinancesAdminController {
         const offset = (page - 1) * pageSize;
         const pagedFinances = finances.slice(offset, offset + pageSize);
 
-        // Prepare logs for output, match all fields in schema (id, date, description, type, amount, creditDebitStatus, paymentMethod, utr, createdAt, updatedAt)
+        // Prepare logs for output, including childrenName and childrenId
         const financeLogs = pagedFinances.map(finance => ({
           _id: finance._id,
           Date: finance.date,
@@ -120,6 +122,8 @@ class FinancesAdminController {
           CreditDebitStatus: finance.creditDebitStatus,
           PaymentMethod: finance.paymentMethod,
           Utr: finance.utr,
+          ChildrenName: finance.childrenName,
+          ChildrenId: finance.childrenId,
           CreatedAt: finance.createdAt,
           UpdatedAt: finance.updatedAt,
         }));

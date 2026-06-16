@@ -30,8 +30,19 @@ const FinancesSchema = new Schema({
         type: String,
         enum: ['cashfree', 'online', 'cash'],
         required: true,
-      },
-      utr: { type: [String], default: [] },
+    },
+    utr: { 
+        type: [String], 
+        default: [] 
+    },
+    childrenName: {
+        type: String,
+        trim: true
+    },
+    childrenId: {
+        type: String,
+        trim: true
+    }
 }, { timestamps: true });
 
 const Finances = mongoose.model("Finances", FinancesSchema);
