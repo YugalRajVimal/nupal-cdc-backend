@@ -1135,7 +1135,7 @@ class WhatsappController {
   }) {
     const payload = {
       apiKey: AISENSY_API_KEY,
-      campaignName: "Booking Creation Completed New",
+      campaignName: "Booking Creation Completed New 2",
       destination: destination || "",
       userName: userName || "",
       templateParams: [
@@ -1243,7 +1243,7 @@ async sendBookingEditSuccess({
 }) {
   const payload = {
     apiKey: AISENSY_API_KEY,
-    campaignName: "Booking Edited Successfully New",
+    campaignName: "Booking Edited Successfully New 2",
     destination: destination || "",
     userName: userName || "",
     templateParams: [
