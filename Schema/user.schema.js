@@ -149,7 +149,12 @@ const TherapistProfileSchema = new mongoose.Schema({
       fromDate: { type: Date, required: true },
       toDate: { type: Date, required: true },
       remark: { type: String, default: "" },
-      paidOn: { type: Date }
+      paidOn: { type: Date },
+      paymentMethod: {
+        type: String,
+        enum: [ 'online', 'cash'],
+        required: true,
+      },
     }
   ],
 

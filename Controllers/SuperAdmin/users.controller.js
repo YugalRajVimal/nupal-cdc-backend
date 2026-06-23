@@ -397,7 +397,7 @@ payTherapist = async (req, res) => {
     session.startTransaction();
     try {
       const { id } = req.params; // TherapistProfile _id
-      const { amount, type, fromDate, toDate, remark, paidOn } = req.body;
+      const { amount, type, fromDate, toDate, remark, paidOn, paymentMethod } = req.body;
 
       // Debug: log incoming request parameters for payTherapist
       if (process.env.NODE_ENV !== "production") {
@@ -409,6 +409,7 @@ payTherapist = async (req, res) => {
           toDate,
           remark,
           paidOn,
+          paymentMethod,
         });
       }
 
@@ -421,13 +422,16 @@ payTherapist = async (req, res) => {
         }
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
-      // Validate amount, type, fromDate, toDate
+      // Validate amount, type, fromDate, toDate, paymentMethod
+      const paymentMethodEnum = ['online', 'cash']
       if (
         typeof amount !== "number" ||
         amount <= 0 ||
         !["salary", "contract"].includes(type) ||
         !fromDate ||
-        !toDate
+        !toDate ||
+        !paymentMethod ||
+        !paymentMethodEnum.includes(paymentMethod)
       ) {
         await session.abortTransaction();
         session.endSession();
@@ -436,10 +440,11 @@ payTherapist = async (req, res) => {
             amount,
             type,
             fromDate,
-            toDate
+            toDate,
+            paymentMethod,
           });
         }
-        return res.status(400).json({ error: "Missing or invalid payment details" });
+        return res.status(400).json({ error: "Missing or invalid payment details (amount, type, fromDate, toDate, paymentMethod)" });
       }
 
       const therapist = await TherapistProfile.findById(id).session(session);
@@ -460,6 +465,7 @@ payTherapist = async (req, res) => {
         toDate: new Date(toDate),
         remark: remark || "",
         paidOn: paidOn ? new Date(paidOn) : new Date(),
+        paymentMethod, // ADDED paymentMethod
       };
 
       // Append to earnings array and save within session
@@ -486,7 +492,8 @@ payTherapist = async (req, res) => {
         description,
         type: "expense",
         amount: payment.amount,
-        creditDebitStatus: "debited"
+        creditDebitStatus: "debited",
+        paymentMethod // ADDED paymentMethod to Finances schema
       }], { session });
       const financeDocObj = financesDoc && Array.isArray(financesDoc) ? financesDoc[0] : financesDoc;
 
@@ -507,7 +514,8 @@ payTherapist = async (req, res) => {
               remark: remark || "",
               paidOn: payment.paidOn,
               financeId: financeDocObj?._id?.toString() || undefined,
-              message: `Therapist paid (amount=${amount}, type=${type}) by userId=${req?.user?.id || "SYSTEM"} for therapistId=${id}`
+              paymentMethod: paymentMethod, // add paymentMethod to log
+              message: `Therapist paid (amount=${amount}, type=${type}, paymentMethod=${paymentMethod}) by userId=${req?.user?.id || "SYSTEM"} for therapistId=${id}`
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]
@@ -576,6 +584,7 @@ payTherapist = async (req, res) => {
             therapistName: therapistName || "",
             amountPaid: amount != null ? String(amount) : "",
             paymentType: type || "",
+            paymentMethod: paymentMethod || "",
             periodFrom: formatISODate(fromDate),
             periodTo: formatISODate(toDate),
             paidOn: formatISODate(payment.paidOn)

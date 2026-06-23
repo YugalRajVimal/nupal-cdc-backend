@@ -170,8 +170,8 @@ class CashfreeController {
         },
         order_note: remark,
         order_meta: {
-          return_url: "https://nupalcdcserver.devyugal.in/api/cashfree/booking-payment-webhook",
-          notify_url: "https://nupalcdcserver.devyugal.in/api/cashfree/booking-payment-webhook"
+          return_url: "https://api.nupalcdc.com/api/cashfree/booking-payment-webhook",
+          notify_url: "https://api.nupalcdc.com/api/cashfree/booking-payment-webhook"
         }
       };
 
