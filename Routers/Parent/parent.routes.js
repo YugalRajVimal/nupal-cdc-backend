@@ -74,7 +74,7 @@ parentRouter.get('/invoice-and-payment',jwtAuth, (req, res) => parentController.
  * Body: { subject, description, priority, tags }
  * Protected: requires authentication as a parent
  */
-parentRouter.post('/tickets/raise', jwtAuth, (req, res) => parentController.raiseTicket(req, res));
+parentRouter.post('/ticket/raise', jwtAuth, (req, res) => parentController.raiseTicket(req, res));
 
 
 // INSERT_YOUR_CODE

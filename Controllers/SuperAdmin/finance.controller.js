@@ -16,10 +16,11 @@ class FinancesSuperAdminController {
         sortOrder = "desc"
       } = req.query;
 
+      // Ensure numbers are parsed and fallback to defaults if invalid
       page = parseInt(page, 10) || 1;
       pageSize = parseInt(pageSize, 10) || 20;
 
-      // Build sorting object
+      // Build sorting object for mongo sort
       let sortObj = {};
       if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
 
@@ -38,7 +39,9 @@ class FinancesSuperAdminController {
           (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
           (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
           (f.paymentMethod && regex.test(f.paymentMethod)) ||
-          (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u)))
+          (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u))) ||
+          (f.childrenName && regex.test(f.childrenName)) ||
+          (f.childrenId && regex.test(f.childrenId?.toString()))
         );
       }
 
@@ -70,6 +73,8 @@ class FinancesSuperAdminController {
         Utr: finance.utr,
         CreatedAt: finance.createdAt,
         UpdatedAt: finance.updatedAt,
+        ChildrenName: finance.childrenName,
+        ChildrenId: finance.childrenId,
       }));
 
       // Calculate net balance
