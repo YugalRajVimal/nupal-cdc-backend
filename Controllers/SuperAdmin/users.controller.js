@@ -397,7 +397,7 @@ payTherapist = async (req, res) => {
     session.startTransaction();
     try {
       const { id } = req.params; // TherapistProfile _id
-      const { amount, type, fromDate, toDate, remark, paidOn, paymentMethod } = req.body;
+      const { amount, type, fromDate, toDate, remark, paidOn, paymentMethod, utr } = req.body;
 
       // Debug: log incoming request parameters for payTherapist
       if (process.env.NODE_ENV !== "production") {
@@ -410,6 +410,7 @@ payTherapist = async (req, res) => {
           remark,
           paidOn,
           paymentMethod,
+          utr
         });
       }
 
@@ -446,6 +447,15 @@ payTherapist = async (req, res) => {
         }
         return res.status(400).json({ error: "Missing or invalid payment details (amount, type, fromDate, toDate, paymentMethod)" });
       }
+      // For online payment, require utr
+      if (paymentMethod === "online" && (!utr || typeof utr !== "string" || !utr.trim())) {
+        await session.abortTransaction();
+        session.endSession();
+        if (process.env.NODE_ENV !== "production") {
+          console.log("[payTherapist] Validation error: UTR required for online payments.");
+        }
+        return res.status(400).json({ error: "UTR is required for online payment method." });
+      }
 
       const therapist = await TherapistProfile.findById(id).session(session);
       if (!therapist) {
@@ -466,6 +476,7 @@ payTherapist = async (req, res) => {
         remark: remark || "",
         paidOn: paidOn ? new Date(paidOn) : new Date(),
         paymentMethod, // ADDED paymentMethod
+        ...(paymentMethod === "online" ? { utr: utr ? utr : "" } : {}), // If payment online, add utr
       };
 
       // Append to earnings array and save within session
@@ -487,14 +498,22 @@ payTherapist = async (req, res) => {
       if (process.env.NODE_ENV !== "production") {
         console.log("[payTherapist] Creating Finances document with description:", description);
       }
-      const financesDoc = await Finances.create([{
+
+      let financesPayload = {
         date: payment.paidOn,
         description,
         type: "expense",
         amount: payment.amount,
         creditDebitStatus: "debited",
-        paymentMethod // ADDED paymentMethod to Finances schema
-      }], { session });
+        paymentMethod // ADDED paymentMethod to Finances schema,
+      };
+
+      // If payment is online and utr provided, add utr field as one-element array (since schema expects [String])
+      if (paymentMethod === "online" && utr) {
+        financesPayload.utr = [utr];
+      }
+
+      const financesDoc = await Finances.create([financesPayload], { session });
       const financeDocObj = financesDoc && Array.isArray(financesDoc) ? financesDoc[0] : financesDoc;
 
       // ====== Audit Log using AuditLogService (must succeed for transaction) ======

@@ -155,6 +155,7 @@ const TherapistProfileSchema = new mongoose.Schema({
         enum: [ 'online', 'cash'],
         required: true,
       },
+      utr: { type: String, default: "" }, // Added UTR
     }
   ],
 

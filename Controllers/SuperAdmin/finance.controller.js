@@ -144,7 +144,7 @@ class FinancesSuperAdminController {
       therapists = await TherapistProfile.find({
         userId: { $in: activeTherapistUserIds }
       })
-        .populate({ path: 'userId', model: 'User', select: 'status name email' })
+        .populate({ path: 'userId', model: 'User', select: 'status isDisabled name email' })
         .lean();
  
 
