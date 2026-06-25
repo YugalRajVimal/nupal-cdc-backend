@@ -2030,7 +2030,12 @@ class TherapistController {
 
       console.log("All Appointments found in system:", appointments.length);
 
-      let totalAppointments = 0; // Will count bookings in which therapist has at least one session
+      // Calculate totalAppointments and totalSessions
+      // A session is assigned to the therapist if its session.therapist == therapistProfile._id
+      // totalAppointments: count unique bookings with at least one session for this therapist
+      // totalSessions: count of all sessions (any booking) assigned to this therapist
+
+      let totalAppointments = 0;
       let totalSessions = 0;
       let upcomingSessions = 0;
       let checkedInSessions = 0;
@@ -2040,110 +2045,97 @@ class TherapistController {
 
       const upcomingSessionDetails = [];
 
+      // This set collects all booking _ids that have at least one session for this therapist
+      const appointmentIdsWithTherapistSession = new Set();
+
       for (const booking of appointments) {
-        // Check if this booking contains at least one session for this therapist
-        let hasTherapistSession = false;
+        if (!Array.isArray(booking.sessions)) continue;
 
-        // Count sessions assigned to this therapist in this booking
-        let sessionCountForTherapist = 0;
-        let pkgSessionCountForTherapist = 0;
+        let foundSessionForTherapistInThisBooking = false;
 
-        if (Array.isArray(booking.sessions)) {
-          for (const session of booking.sessions) {
-            // Ensure the session is for this therapist
+        for (const session of booking.sessions) {
+          if (
+            session &&
+            String(session.therapist) === String(therapistProfile._id)
+          ) {
+            // Found a session assigned to this therapist in this booking
+            totalSessions++;
+            foundSessionForTherapistInThisBooking = true;
+
+            // Only count non-cancelled sessions for relevant stats
             if (
-              session &&
-              (String(session.therapist) === String(therapistProfile._id) ||
-                String(session.therapist) === String(therapistProfile._id))
+              session.date &&
+              (!session.status || session.status !== "Cancelled")
             ) {
-              hasTherapistSession = true;
+              const sessionDateObj = new Date(session.date);
+              const sessionDateStr =
+                session.date.length >= 10
+                  ? session.date.slice(0, 10)
+                  : session.date;
 
-              // Count session as part of this therapist's tally
-              sessionCountForTherapist++;
-
-              // Only count non-cancelled sessions for relevant stats
+              // Count as upcoming session if session date is in the future OR is today
               if (
-                session &&
-                session.date &&
-                (!session.status || session.status !== "Cancelled")
+                sessionDateObj > now ||
+                sessionDateStr === todayStr
               ) {
-                const sessionDateObj = new Date(session.date);
-                const sessionDateStr =
-                  session.date.length >= 10
-                    ? session.date.slice(0, 10)
-                    : session.date;
+                upcomingSessions++;
+                let slotTime = "";
+                if (session.slotId) {
+                  // SESSION_TIME_OPTIONS may not be available in this file; leave as id/label fallback
+                  const slotObj = typeof SESSION_TIME_OPTIONS !== 'undefined' && SESSION_TIME_OPTIONS
+                    ? SESSION_TIME_OPTIONS.find(option => option.id === session.slotId)
+                    : null;
+                  slotTime = slotObj ? slotObj.label : session.slotId;
+                } else if (session.time) {
+                  slotTime = session.time;
+                }
 
-                // Count as upcoming session if session date is in the future OR is today
+                let childrenName = "";
+                let childrenId = "";
                 if (
-                  sessionDateObj > now ||
-                  sessionDateStr === todayStr
+                  booking.patient &&
+                  typeof booking.patient === "object"
                 ) {
-                  upcomingSessions++;
-                  // Find slotTime label from SESSION_TIME_OPTIONS by session.slotId or session.time
-                  let slotTime = "";
-                  if (session.slotId) {
-                    const slotObj = SESSION_TIME_OPTIONS.find(
-                      (option) => option.id === session.slotId
-                    );
-                    slotTime = slotObj ? slotObj.label : session.slotId;
-                  } else if (session.time) {
-                    slotTime = session.time;
-                  }
-
-                  // ── CHANGED: renamed patientName → childrenName, patientId → childrenId ──
-                  let childrenName = "";
-                  let childrenId = "";
-                  if (
-                    booking.patient &&
-                    typeof booking.patient === "object"
-                  ) {
-                    childrenName = booking.patient.name || "";
-                    childrenId = booking.patient.patientId
-                      ? booking.patient.patientId.toString()
-                      : "";
-                  } else if (typeof booking.patient === "string") {
-                    childrenId = booking.patient;
-                  }
-                  let therapyTypeName = "";
-                  if (
-                    booking.therapy &&
-                    typeof booking.therapy === "object"
-                  ) {
-                    therapyTypeName = booking.therapy.name || "";
-                  }
-                  upcomingSessionDetails.push({
-                    date: session.date,
-                    slotTime,
-                    childrenName,   // ── CHANGED from patientName ──
-                    childrenId,     // ── CHANGED from patientId ──
-                    therapyTypeName,
-                    appointmentId: booking.appointmentId
-                      ? booking.appointmentId.toString()
-                      : undefined,
-                    sessionId: session.sessionId ? session.sessionId.toString() : undefined,
-                  });
+                  childrenName = booking.patient.name || "";
+                  childrenId = booking.patient.patientId
+                    ? booking.patient.patientId.toString()
+                    : "";
+                } else if (typeof booking.patient === "string") {
+                  childrenId = booking.patient;
                 }
-
-                // checkedIn (completed) -- use isCheckedIn boolean field from schema
-                if (session.isCheckedIn === true) {
-                  checkedInSessions++;
+                let therapyTypeName = "";
+                if (
+                  booking.therapy &&
+                  typeof booking.therapy === "object"
+                ) {
+                  therapyTypeName = booking.therapy.name || "";
                 }
+                upcomingSessionDetails.push({
+                  date: session.date,
+                  slotTime,
+                  childrenName,
+                  childrenId,
+                  therapyTypeName,
+                  appointmentId: booking.appointmentId
+                    ? booking.appointmentId.toString()
+                    : undefined,
+                  sessionId: session.sessionId ? session.sessionId.toString() : undefined,
+                });
+              }
+
+              // checkedIn (completed)
+              if (session.isCheckedIn === true) {
+                checkedInSessions++;
               }
             }
           }
-        }
+        } // end sessions loop
 
-        // Add package session counts IF there's a way to link to session's therapistId
-        // Most schemas do not put therapist assignment at package level, so SKIP package counting for this dashboard (usually the dashboard user expects real delivered sessions)
-        // pkgSessionCountForTherapist left at zero
-
-        totalSessions += sessionCountForTherapist + pkgSessionCountForTherapist;
-
-        // Only count this booking as therapist's appointment if any sessions are assigned to this therapist
-        if (hasTherapistSession) {
-          totalAppointments++;
-        }
+        if (foundSessionForTherapistInThisBooking && booking._id)
+          appointmentIdsWithTherapistSession.add(String(booking._id));
       }
+
+      totalAppointments = appointmentIdsWithTherapistSession.size;
 
       // Use earnings from TherapistProfile, or fallback 0
       let totalEarnings = 0;

@@ -42,7 +42,11 @@ const FinancesSchema = new Schema({
     childrenId: {
         type: String,
         trim: true
-    }
+    },
+    booking: {
+        type: Schema.Types.ObjectId,
+        ref: 'Booking'
+    },
 }, { timestamps: true });
 
 const Finances = mongoose.model("Finances", FinancesSchema);

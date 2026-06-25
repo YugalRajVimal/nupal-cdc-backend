@@ -2792,10 +2792,11 @@ async collectPayment(req, res) {
           paymentMethod: paymentMethod || payment.paymentMethod || null,
           utr: payment.utr,
           childrenName: booking?.patient?.name || booking?.patientName || "",
-          childrenId: booking?.patient?.patientId || booking?.patientId || ""
+          childrenId: booking?.patient?.patientId || booking?.patientId || "",
+          booking: booking._id // Save booking ObjectId in finances
         }
       ], { session });
- 
+
     } else {
       // -------- FULL PAYMENT --------
       // Calculate remainingToPay as the difference BEFORE updating payment.amountPaid
@@ -2826,10 +2827,11 @@ async collectPayment(req, res) {
           paymentMethod: paymentMethod || payment.paymentMethod || null,
           utr: payment.utr,
           childrenName: booking?.patient?.name || booking?.patientName || "",
-          childrenId: booking?.patient?.patientId || booking?.patientId || ""
+          childrenId: booking?.patient?.patientId || booking?.patientId || "",
+          booking: booking._id // Save booking ObjectId in finances
         }
       ], { session });
- 
+
 
     }
 
@@ -2908,9 +2910,6 @@ async collectPayment(req, res) {
         if (paymentType === "partial") {
           amountForWhatsapp = payment.amountPaid < amountToCollect ? partialAmount : payment.amountPaid;
         } else {
-          // Only compute remainingToPay in the 'full payment' block
-         
-          // If previouslyPaid exists, result is what was actually collected "now"
           amountForWhatsapp = typeof remainingToPay !== "undefined"
             ? remainingToPay
             : amountToCollect;

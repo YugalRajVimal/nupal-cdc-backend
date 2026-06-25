@@ -2311,6 +2311,7 @@ import Booking from '../../Schema/booking.schema.js';
 import ConsultationBooking from '../../Schema/consultation-booking.schema.js';
 import counterSchema from '../../Schema/counter.schema.js';
 import DiscountModel from '../../Schema/discount.schema.js';
+import Finances from '../../Schema/finances.schema.js';
 import Package from '../../Schema/packages.schema.js';
 import SessionEditRequest from '../../Schema/session-edit-request.schema.js';
 import { TherapyType } from '../../Schema/therapy-type.schema.js';
@@ -4187,6 +4188,209 @@ class ParentController {
     }
   }
 
+  // async getInvoiceAndPayment(req, res) {
+  //   try {
+  //     const userId = req.user.id;
+  //     const search = (req.query.search || "").trim();
+  //     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  //     const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 10, 100));
+
+  //     const user = await User.findById(userId);
+  //     if (!user) {
+  //       return res.status(404).json({
+  //         success: false,
+  //         message: "User not found.",
+  //       });
+  //     }
+
+  //     const patientProfiles = await PatientProfile.find({ userId });
+  //     if (!patientProfiles || patientProfiles.length === 0) {
+  //       return res.status(404).json({
+  //         success: false,
+  //         message: "No Children profiles found for this user.",
+  //       });
+  //     }
+  //     const patientProfileIds = patientProfiles.map((p) => p._id);
+
+  //     let bookingQuery = { patient: { $in: patientProfileIds } };
+  //     if (search.length > 0) {
+  //       bookingQuery = {
+  //         ...bookingQuery,
+  //         $or: [
+  //           { 'patientNameForSearch': { $regex: search, $options: "i" } },
+  //         ]
+  //       };
+  //     }
+
+  //     const totalCount = await Booking.countDocuments({ patient: { $in: patientProfileIds } });
+  //     const skip = (page - 1) * limit;
+
+  //     let bookings = await Booking.find({ patient: { $in: patientProfileIds } })
+  //       .sort({ createdAt: -1 })
+  //       .skip(skip)
+  //       .limit(limit)
+  //       .populate("package")
+  //       .populate({
+  //         path: "patient",
+  //         model: "PatientProfile",
+  //         select: "name patientId mobile gender",
+  //         populate: { path: "userId", model: "User" }
+  //       })
+  //       .populate({ path: "therapy", model: "TherapyType" })
+  //       .populate({
+  //         path: "therapist",
+  //         model: "TherapistProfile",
+  //         populate: { path: "userId", model: "User" }
+  //       })
+  //       .populate({
+  //         path: "discountInfo.coupon",
+  //         model: "Discount",
+  //         select: "discountEnabled discount couponCode validityDays createdAt"
+  //       })
+  //       .populate({ path: "payment", model: "Payment" })
+  //       .lean();
+
+  //     // Search filter (extra in-memory filter in addition to $or above)
+  //     if (search.length > 0) {
+  //       const searchLower = search.toLowerCase();
+  //       bookings = bookings.filter(b => {
+  //         let found = false;
+  //         if (b.patient?.name && b.patient.name.toLowerCase().includes(searchLower)) found = true;
+  //         if (!found && b.patient?.patientId && (b.patient.patientId + "").toLowerCase().includes(searchLower)) found = true;
+  //         if (!found && b.payment) {
+  //           let payments = Array.isArray(b.payment) ? b.payment : [b.payment];
+  //           for (let pay of payments) {
+  //             if (!pay) continue;
+  //             if (pay.paymentId && (pay.paymentId + "").toLowerCase().includes(searchLower)) {
+  //               found = true;
+  //               break;
+  //             }
+  //           }
+  //         }
+  //         return found;
+  //       });
+  //     }
+
+  //     // Payment details output following @file_context_0 format
+  //     const paymentDetails = [];
+  //     for (const booking of bookings) {
+  //       // Get payments (array or single object)
+  //       let payments = [];
+  //       if (Array.isArray(booking.payment)) payments = booking.payment;
+  //       else if (booking.payment) payments = [booking.payment];
+
+  //       let invoiceOriginal = null;
+  //       if (payments.length > 0 && payments[0] && typeof payments[0].totalAmount === "number") {
+  //         invoiceOriginal = payments[0].totalAmount;
+  //       } else if (booking.package && typeof booking.package.price === "number") {
+  //         invoiceOriginal = booking.package.price;
+  //       } else if (booking.totalAmount != null) {
+  //         invoiceOriginal = booking.totalAmount;
+  //       }
+
+  //       // Send discount object according to the ReceptionDesk format
+  //       // coupon fields: { discountEnabled, discount, couponCode, validityDays, createdAt }
+  //       let discountObj = null;
+  //       if (booking.discountInfo && booking.discountInfo.coupon) {
+  //         const coupon = booking.discountInfo.coupon;
+  //         discountObj = {
+  //           _id: coupon._id,
+  //           discountEnabled: coupon.discountEnabled,
+  //           discount: coupon.discount,
+  //           couponCode: coupon.couponCode,
+  //           validityDays: coupon.validityDays,
+  //           createdAt: coupon.createdAt
+  //         };
+  //       }
+
+  //       // Compute total paid
+  //       let totalPaid = 0;
+  //       for (const pay of payments) {
+  //         if (
+  //           pay &&
+  //           pay.amount &&
+  //           ['paid', 'partiallypaid', 'success', 'Paid', 'PAID', 'Success'].includes((pay.status || "").toLowerCase())
+  //         ) {
+  //           totalPaid += pay.amount;
+  //         }
+  //       }
+
+  //       // Determine final amount after discount (when possible)
+  //       let discountAmount = 0;
+  //       if (
+  //         booking.discountInfo &&
+  //         typeof booking.discountInfo.discountAmount === "number"
+  //       ) {
+  //         discountAmount = booking.discountInfo.discountAmount;
+  //       }
+  //       let invoiceAfterDiscount = (invoiceOriginal != null)
+  //         ? Math.max(0, Math.round(invoiceOriginal - discountAmount))
+  //         : null;
+
+  //       // Due amount
+  //       let dueAmount = invoiceAfterDiscount != null ? invoiceAfterDiscount - totalPaid : null;
+  //       if (dueAmount != null) dueAmount = Math.max(0, Math.round(dueAmount));
+
+  //       // For each payment, output an entry
+  //       for (const pay of payments) {
+  //         if (!pay) continue;
+  //         let invoiceId = pay.paymentId ? pay.paymentId.toString() : "";
+  //         let date = pay.createdAt || pay.date || booking.createdAt;
+  //         let childrenName = booking.patient?.name || (user && user.name) || "";
+  //         let childrenId = booking.patient?.patientId;
+  //         paymentDetails.push({
+  //           InvoiceId: invoiceId,
+  //           date: date,
+  //           childrenName: childrenName,
+  //           childrenId,
+  //           amount: pay.amount || pay.totalAmount || 0,
+  //           status: pay.status || "Unknown",
+  //           originalInvoiceAmount: invoiceOriginal,
+  //           invoiceAmount: invoiceAfterDiscount,
+  //           dueAmount: dueAmount,
+  //           discount: discountObj,
+  //           paymentDetail: pay
+  //         });
+  //       }
+
+  //       // If booking has no payments (unpaid invoice), send one with status Unpaid
+  //       if (payments.length === 0 && invoiceOriginal != null) {
+  //         let childrenName = booking.patient?.name || (user && user.name) || "";
+  //         let childrenId = booking.patient?.patientId;
+  //         paymentDetails.push({
+  //           InvoiceId: "",
+  //           date: booking.createdAt,
+  //           childrenName: childrenName,
+  //           childrenId: childrenId,
+  //           amount: 0,
+  //           status: "Unpaid",
+  //           originalInvoiceAmount: invoiceOriginal,
+  //           invoiceAmount: invoiceAfterDiscount,
+  //           dueAmount: dueAmount,
+  //           discount: discountObj,
+  //           code: 400
+  //         });
+  //       }
+  //     }
+
+  //     res.json({
+  //       success: true,
+  //       payments: paymentDetails,
+  //       total: search.length > 0 ? paymentDetails.length : totalCount,
+  //       page,
+  //       limit,
+  //     });
+
+  //   } catch (error) {
+  //     console.error("[GET INVOICE AND PAYMENT]", error);
+  //     res.status(500).json({
+  //       success: false,
+  //       message: "Failed to fetch invoice and payment details.",
+  //       error: error.message,
+  //     });
+  //   }
+  // }
+
   async getInvoiceAndPayment(req, res) {
     try {
       const userId = req.user.id;
@@ -4196,30 +4400,14 @@ class ParentController {
 
       const user = await User.findById(userId);
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "User not found.",
-        });
+        return res.status(404).json({ success: false, message: "User not found." });
       }
 
       const patientProfiles = await PatientProfile.find({ userId });
       if (!patientProfiles || patientProfiles.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: "No Children profiles found for this user.",
-        });
+        return res.status(404).json({ success: false, message: "No Children profiles found for this user." });
       }
       const patientProfileIds = patientProfiles.map((p) => p._id);
-
-      let bookingQuery = { patient: { $in: patientProfileIds } };
-      if (search.length > 0) {
-        bookingQuery = {
-          ...bookingQuery,
-          $or: [
-            { 'patientNameForSearch': { $regex: search, $options: "i" } },
-          ]
-        };
-      }
 
       const totalCount = await Booking.countDocuments({ patient: { $in: patientProfileIds } });
       const skip = (page - 1) * limit;
@@ -4249,48 +4437,48 @@ class ParentController {
         .populate({ path: "payment", model: "Payment" })
         .lean();
 
-      // Search filter (extra in-memory filter in addition to $or above)
+      // In-memory search filter
       if (search.length > 0) {
         const searchLower = search.toLowerCase();
         bookings = bookings.filter(b => {
-          let found = false;
-          if (b.patient?.name && b.patient.name.toLowerCase().includes(searchLower)) found = true;
-          if (!found && b.patient?.patientId && (b.patient.patientId + "").toLowerCase().includes(searchLower)) found = true;
-          if (!found && b.payment) {
-            let payments = Array.isArray(b.payment) ? b.payment : [b.payment];
-            for (let pay of payments) {
-              if (!pay) continue;
-              if (pay.paymentId && (pay.paymentId + "").toLowerCase().includes(searchLower)) {
-                found = true;
-                break;
-              }
-            }
-          }
-          return found;
+          if (b.patient?.name && b.patient.name.toLowerCase().includes(searchLower)) return true;
+          if (b.patient?.patientId && (b.patient.patientId + "").toLowerCase().includes(searchLower)) return true;
+          if (b.payment?.paymentId && (b.payment.paymentId + "").toLowerCase().includes(searchLower)) return true;
+          return false;
         });
       }
 
-      // Payment details output following @file_context_0 format
+      // ---- Fetch all Finances rows for these bookings in one query, grouped by booking ----
+      const bookingIds = bookings.map(b => b._id);
+      const financeRecords = bookingIds.length
+        ? await Finances.find({ booking: { $in: bookingIds } })
+            .sort({ date: 1 }) // chronological order of partial payments
+            .lean()
+        : [];
+
+      const financesByBooking = new Map();
+      for (const f of financeRecords) {
+        const key = String(f.booking);
+        if (!financesByBooking.has(key)) financesByBooking.set(key, []);
+        financesByBooking.get(key).push(f);
+      }
+
       const paymentDetails = [];
+
       for (const booking of bookings) {
-        // Get payments (array or single object)
-        let payments = [];
-        if (Array.isArray(booking.payment)) payments = booking.payment;
-        else if (booking.payment) payments = [booking.payment];
+        const pay = booking.payment || null;
 
         let invoiceOriginal = null;
-        if (payments.length > 0 && payments[0] && typeof payments[0].totalAmount === "number") {
-          invoiceOriginal = payments[0].totalAmount;
-        } else if (booking.package && typeof booking.package.price === "number") {
+        if (pay && typeof pay.totalAmount === "number") {
+          invoiceOriginal = pay.totalAmount;
+        } else if (typeof booking.package?.price === "number") {
           invoiceOriginal = booking.package.price;
         } else if (booking.totalAmount != null) {
           invoiceOriginal = booking.totalAmount;
         }
 
-        // Send discount object according to the ReceptionDesk format
-        // coupon fields: { discountEnabled, discount, couponCode, validityDays, createdAt }
         let discountObj = null;
-        if (booking.discountInfo && booking.discountInfo.coupon) {
+        if (booking.discountInfo?.coupon) {
           const coupon = booking.discountInfo.coupon;
           discountObj = {
             _id: coupon._id,
@@ -4302,74 +4490,90 @@ class ParentController {
           };
         }
 
-        // Compute total paid
-        let totalPaid = 0;
-        for (const pay of payments) {
-          if (
-            pay &&
-            pay.amount &&
-            ['paid', 'partiallypaid', 'success', 'Paid', 'PAID', 'Success'].includes((pay.status || "").toLowerCase())
-          ) {
-            totalPaid += pay.amount;
-          }
-        }
+        const discountAmount = typeof booking.discountInfo?.discountAmount === "number"
+          ? booking.discountInfo.discountAmount
+          : (pay?.discountInfo?.amount || 0);
 
-        // Determine final amount after discount (when possible)
-        let discountAmount = 0;
-        if (
-          booking.discountInfo &&
-          typeof booking.discountInfo.discountAmount === "number"
-        ) {
-          discountAmount = booking.discountInfo.discountAmount;
-        }
-        let invoiceAfterDiscount = (invoiceOriginal != null)
+        const invoiceAfterDiscount = invoiceOriginal != null
           ? Math.max(0, Math.round(invoiceOriginal - discountAmount))
           : null;
 
-        // Due amount
-        let dueAmount = invoiceAfterDiscount != null ? invoiceAfterDiscount - totalPaid : null;
-        if (dueAmount != null) dueAmount = Math.max(0, Math.round(dueAmount));
+        const childrenName = booking.patient?.name || user?.name || "";
+        const childrenId = booking.patient?.patientId;
 
-        // For each payment, output an entry
-        for (const pay of payments) {
-          if (!pay) continue;
-          let invoiceId = pay.paymentId ? pay.paymentId.toString() : "";
-          let date = pay.createdAt || pay.date || booking.createdAt;
-          let childrenName = booking.patient?.name || (user && user.name) || "";
-          let childrenId = booking.patient?.patientId;
-          paymentDetails.push({
-            InvoiceId: invoiceId,
-            date: date,
-            childrenName: childrenName,
-            childrenId,
-            amount: pay.amount || pay.totalAmount || 0,
-            status: pay.status || "Unknown",
-            originalInvoiceAmount: invoiceOriginal,
-            invoiceAmount: invoiceAfterDiscount,
-            dueAmount: dueAmount,
-            discount: discountObj,
-            paymentDetail: pay
-          });
+        const finances = financesByBooking.get(String(booking._id)) || [];
+
+        // If there are no Payment record at all -> Unpaid
+        if (!pay) {
+          if (invoiceOriginal != null) {
+            paymentDetails.push({
+              InvoiceId: "",
+              date: booking.createdAt,
+              childrenName,
+              childrenId,
+              amount: 0,
+              status: "Unpaid",
+              originalInvoiceAmount: invoiceOriginal,
+              invoiceAmount: invoiceAfterDiscount,
+              dueAmount: invoiceAfterDiscount,
+              discount: discountObj,
+              code: 400,
+              sequence: 1, // only one, so sequence 1
+              totalInstallments: 1,
+            });
+          }
+          continue;
         }
 
-        // If booking has no payments (unpaid invoice), send one with status Unpaid
-        if (payments.length === 0 && invoiceOriginal != null) {
-          let childrenName = booking.patient?.name || (user && user.name) || "";
-          let childrenId = booking.patient?.patientId;
-          paymentDetails.push({
-            InvoiceId: "",
-            date: booking.createdAt,
-            childrenName: childrenName,
-            childrenId: childrenId,
-            amount: 0,
-            status: "Unpaid",
-            originalInvoiceAmount: invoiceOriginal,
-            invoiceAmount: invoiceAfterDiscount,
-            dueAmount: dueAmount,
-            discount: discountObj,
-            code: 400
-          });
+        // If there are finances (installments), send each installment as a separate record with sequence
+        if (finances.length > 0) {
+          let cumulativePaid = 0;
+          finances
+            .filter(f => f.creditDebitStatus === 'credited')
+            .forEach((finance, idx) => {
+              cumulativePaid += finance.amount || 0;
+              const dueAmount = invoiceAfterDiscount != null
+                ? Math.max(0, Math.round(invoiceAfterDiscount - cumulativePaid))
+                : null;
+              paymentDetails.push({
+                InvoiceId: pay.paymentId ? pay.paymentId.toString() : "",
+                date: finance.date,
+                childrenName,
+                childrenId,
+                amount: finance.amount, // Amount for this installment only
+                status: pay.status || "Unknown", // if per-finance status is needed, update here
+                originalInvoiceAmount: invoiceOriginal,
+                invoiceAmount: invoiceAfterDiscount,
+                dueAmount: dueAmount,
+                discount: discountObj,
+                paymentDetail: pay,
+                financeDetail: finance,
+                sequence: idx + 1, // Starts from 1
+                totalInstallments: finances.length,
+                financeId: finance._id,
+              });
+            });
+          continue;
         }
+
+        // If only single payment (no finances), send that payment as one record with sequence 1
+        paymentDetails.push({
+          InvoiceId: pay.paymentId ? pay.paymentId.toString() : "",
+          date: pay.paymentTime || pay.createdAt || booking.createdAt,
+          childrenName,
+          childrenId,
+          amount: pay.amount,
+          status: pay.status || "Unknown",
+          originalInvoiceAmount: invoiceOriginal,
+          invoiceAmount: invoiceAfterDiscount,
+          dueAmount: invoiceAfterDiscount != null 
+            ? Math.max(0, Math.round(invoiceAfterDiscount - (pay.amountPaid || 0))) 
+            : null,
+          discount: discountObj,
+          paymentDetail: pay,
+          sequence: 1,
+          totalInstallments: 1,
+        });
       }
 
       res.json({

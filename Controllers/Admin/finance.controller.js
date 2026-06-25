@@ -69,8 +69,8 @@ class FinancesAdminController {
         page = parseInt(page, 10) || 1;
         pageSize = parseInt(pageSize, 10) || 20;
 
-        // Get ALL (income + expense)
-        let query = {};
+        // Only get income records
+        let query = { type: "income" };
         // Build sorting object
         let sortObj = {};
         if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
@@ -95,16 +95,11 @@ class FinancesAdminController {
           );
         }
 
-        // Calculate totals for income, expenses, net
+        // Totals for income only
         let totalIncome = 0;
-        let totalExpenses = 0;
 
         finances.forEach(finance => {
-          if (finance.type === "income") {
-            totalIncome += finance.amount;
-          } else if (finance.type === "expense") {
-            totalExpenses += finance.amount;
-          }
+          totalIncome += finance.amount;
         });
 
         // Pagination
@@ -131,8 +126,9 @@ class FinancesAdminController {
         return res.json({
           success: true,
           totalIncome,
-          totalExpenses,
-          netBalance: totalIncome - totalExpenses,
+          // Return 0 for expense and netBalance since only income is included
+          totalExpenses: 0,
+          netBalance: totalIncome,
           page,
           pageSize,
           total,
