@@ -13,6 +13,7 @@ import financeAdminRouter from "./Admin/finance.routes.js";
 import { User } from "../Schema/user.schema.js";
 import ticketsRouter from "./Admin/tickets.routes.js";
 import ConsultationBookingRouter from "./Admin/consultation-booking.routes.js";
+import therapistReassignmentRoutes from "./Admin/therapists-reassignments-routes.js";
 
 const adminRouter = express.Router();
 
@@ -32,6 +33,9 @@ adminRouter.get("/", (req, res) => {
 adminRouter.use("/therapy-types", therapyAdminRouter);
 
 adminRouter.use("/therapist", therapistAdminRouter);
+
+adminRouter.use("/therapists", therapistReassignmentRoutes);
+
 
 adminRouter.use("/patients", patientAdminRouter);
 

@@ -3,8 +3,12 @@ import TherapistAdminController from "../../Controllers/Admin/therapist.controll
 import { upload } from "../../middlewares/fileUpload.middleware.js";
 import jwtAuth from "../../middlewares/Auth/auth.middleware.js";
 
+
+
+
 const therapistAdminRouter = express.Router();
 const therapistAdminController = new TherapistAdminController();
+
 
 // Set panel accessibility (set TherapistProfile.isPanelAccessible)
 therapistAdminRouter.patch(

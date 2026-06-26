@@ -381,8 +381,11 @@ class AuthController {
 
       // Check if passwordHash is set (for this user/role)
       if (!user.passwordHash) {
-        return res.status(401).json({ message: "Password login is not available for this user." });
+        return res.status(401).json({
+          message: "Password login is not available for this user. Please login with OTP and use the 'Forget Password' option from the profile to create your first password."
+        });
       }
+ 
 
       // Compare password
       const isMatch = await bcrypt.compare(password, user.passwordHash);
