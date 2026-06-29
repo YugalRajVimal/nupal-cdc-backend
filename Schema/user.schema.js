@@ -180,6 +180,9 @@ const TherapistProfileSchema = new mongoose.Schema({
       isFullDay: { type: Boolean, default: true } // true if the whole day is holiday, false if only slots[]
     }
   ],
+
+  // Field to specify if the therapist is a consultant
+  isConsultant: { type: Boolean, default: false },
   
 });
 

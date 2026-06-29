@@ -596,7 +596,7 @@ payTherapist = async (req, res) => {
           console.log("[payTherapist] WhatsApp notification destination:", destination);
         }
 
-        if (destination) {
+        if (destination && therapist.isConsultant) {
           await WhatsappController.sendTherapistPaymentInitiated({
             destination,
             userName: userName || "",
@@ -613,8 +613,13 @@ payTherapist = async (req, res) => {
             console.log("[payTherapist] WhatsApp notification sent for therapistId:", therapist._id);
           }
         } else {
-          console.warn("[payTherapist] No available WhatsApp destination for therapist ID:", therapist._id);
+          if (!therapist.isConsultant) {
+            console.warn("[payTherapist] WhatsApp notification NOT sent because therapist is not a consultant for therapist ID:", therapist._id);
+          } else {
+            console.warn("[payTherapist] No available WhatsApp destination for therapist ID:", therapist._id);
+          }
         }
+   
       } catch (whatsAppErr) {
         // DO NOT block main response, just log
         console.error("[payTherapist] Failed to send WhatsApp notification:", whatsAppErr);

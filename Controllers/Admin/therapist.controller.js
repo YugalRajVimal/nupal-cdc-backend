@@ -67,7 +67,8 @@ class TherapistAdminController {
         blog,
         remarks,
         specializations,
-        experienceYears
+        experienceYears,
+        isConsultant // <---- Add this to destructure isConsultant from body
       } = req.body;
 
       // Get the filepaths to store into DB (if files uploaded)
@@ -250,7 +251,8 @@ class TherapistAdminController {
           remarks, // optional
           specializations,
           experienceYears,
-          isPanelAccessible: false
+          isPanelAccessible: false,
+          isConsultant: typeof isConsultant !== "undefined" ? isConsultant : false // <--- Add isConsultant to profile
           // email is NOT stored in TherapistProfile
         });
       } catch (err) {
@@ -301,117 +303,8 @@ class TherapistAdminController {
     }
   };
 
-  // Fetch all therapists
-  fetchTherapists = async (req, res) => {
-    try {
-      // Destructure query params, only allow search input, remove both filters
-      let {
-        page = 1,
-        pageSize = 20,
-        search = "",
-        sortField = "therapistId", // Default: sort by therapistId (NPL001 format)
-        sortOrder = "desc"
-      } = req.query;
-
-      page = parseInt(page, 10) || 1;
-      pageSize = parseInt(pageSize, 10) || 20;
-
-      // No filters -- just fetch all
-      let query = {};
-
-      // Always sort by therapistId as string, but descending (bigger on top)
-      // NPL001, NPL002... so sort lexicographically desc for "bigger on top"
-      let sortObj = {};
-      if (sortField === "therapistId") {
-        sortObj["therapistId"] = sortOrder === "asc" ? 1 : -1; 
-      } else if (sortField) {
-        sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
-      }
-
-      // Fetch all matching therapists, populate userId for searching in populated data
-      let therapists = await TherapistProfile.find(query)
-        .populate({ path: "userId" })
-        .sort(sortObj)
-        .lean();
-
-      // Search logic: filter over both TherapistProfile and populated userId.* fields in-memory
-      if (search && typeof search === "string" && search.trim().length > 0) {
-        const regex = new RegExp(search.trim(), "i");
-        therapists = therapists.filter(t => {
-          // Search fields direct in TherapistProfile
-          const matchesTherapist = 
-            (t.fullName && regex.test(t.fullName)) ||
-            (t.name && regex.test(t.name)) || // fallback for any legacy use
-            (t.mobile1 && regex.test(t.mobile1)) ||
-            (t.mobile2 && regex.test(t.mobile2)) ||
-            (t.reference && regex.test(t.reference)) ||
-            (t.therapistId && regex.test(t.therapistId)) ||
-            (t.specializations && regex.test(t.specializations));
-
-          // Search in populated userId fields
-          const matchesUser = t.userId && (
-            (t.userId.email && regex.test(t.userId.email)) ||
-            (t.userId.name && regex.test(t.userId.name)) ||
-            (t.userId.phone && regex.test(t.userId.phone)) ||
-            (t.userId.role && regex.test(t.userId.role))
-          );
-
-          return matchesTherapist || matchesUser;
-        });
-
-        // Resort filtered results by therapistId, desc (bigger on top)
-        therapists.sort((a, b) => {
-          if (a.therapistId && b.therapistId) {
-            if (a.therapistId < b.therapistId) return sortOrder === "asc" ? -1 : 1;
-            if (a.therapistId > b.therapistId) return sortOrder === "asc" ? 1 : -1;
-            return 0;
-          }
-          // If therapistId missing, those items go below
-          if (!a.therapistId) return 1;
-          if (!b.therapistId) return -1;
-          return 0;
-        });
-      }
-
-      // No other filters
-
-      const total = therapists.length;
-
-      // Pagination
-      const offset = (page - 1) * pageSize;
-      const pagedTherapists = therapists.slice(offset, offset + pageSize);
-
-      res.json({
-        therapists: pagedTherapists,
-        total,
-        page,
-        pageSize,
-        totalPages: Math.ceil(total / pageSize),
-      });
-    } catch (e) {
-      res.status(500).json({ error: "Failed to fetch therapists", details: e.message });
-    }
-  };
-
-  // Fetch therapist by ID
-  fetchTherapistById = async (req, res) => {
-    try {
-      const { id } = req.params;
-      if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ error: "Invalid therapist ID" });
-      }
-      // Only email of therapist is in userId (not TherapistProfile)
-      const therapist = await TherapistProfile.findById(id)
-        .populate({ path: "userId"});
-      if (!therapist) return res.status(404).json({ error: "Therapist not found" });
-      res.json({ therapist });
-    } catch (e) {
-      res.status(500).json({ error: "Failed to fetch therapist", details: e.message });
-    }
-  };
-
-  // Edit therapist profile (with mandatory log creation and MongoDB transactions)
-  editTherapist = async (req, res) => {
+   // Edit therapist profile (with mandatory log creation and MongoDB transactions)
+   editTherapist = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -425,12 +318,17 @@ class TherapistAdminController {
         return res.status(400).json({ error: "Invalid therapist profile ID" });
       }
 
-      const { email, phone, mobile1, name, ...profileFields } = req.body || {};
-      console.log("[editTherapist] Incoming profileFields:", profileFields, "email:", email, "phone:", phone, "mobile1:", mobile1, "name:", name);
+      // Destructure isConsultant from req.body in addition to the rest of the fields
+      const { email, phone, mobile1, name, isConsultant, ...profileFields } = req.body || {};
+      console.log("[editTherapist] Incoming profileFields:", profileFields, "email:", email, "phone:", phone, "mobile1:", mobile1, "name:", name, "isConsultant:", isConsultant);
 
       Object.keys(profileFields).forEach(
         (key) => profileFields[key] === undefined && delete profileFields[key]
       );
+      // Add isConsultant explicitly if present in the request body
+      if (typeof isConsultant !== "undefined") {
+        profileFields.isConsultant = isConsultant;
+      }
 
       // Get current TherapistProfile for diff
       const oldTherapist = await TherapistProfile.findById(id).session(session);
@@ -588,6 +486,116 @@ class TherapistAdminController {
       res.status(400).json({ error: "Error editing therapist", details: e.message });
     }
   };
+  // Fetch all therapists
+  fetchTherapists = async (req, res) => {
+    try {
+      // Destructure query params, only allow search input, remove both filters
+      let {
+        page = 1,
+        pageSize = 20,
+        search = "",
+        sortField = "therapistId", // Default: sort by therapistId (NPL001 format)
+        sortOrder = "desc"
+      } = req.query;
+
+      page = parseInt(page, 10) || 1;
+      pageSize = parseInt(pageSize, 10) || 20;
+
+      // No filters -- just fetch all
+      let query = {};
+
+      // Always sort by therapistId as string, but descending (bigger on top)
+      // NPL001, NPL002... so sort lexicographically desc for "bigger on top"
+      let sortObj = {};
+      if (sortField === "therapistId") {
+        sortObj["therapistId"] = sortOrder === "asc" ? 1 : -1; 
+      } else if (sortField) {
+        sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+      }
+
+      // Fetch all matching therapists, populate userId for searching in populated data
+      let therapists = await TherapistProfile.find(query)
+        .populate({ path: "userId" })
+        .sort(sortObj)
+        .lean();
+
+      // Search logic: filter over both TherapistProfile and populated userId.* fields in-memory
+      if (search && typeof search === "string" && search.trim().length > 0) {
+        const regex = new RegExp(search.trim(), "i");
+        therapists = therapists.filter(t => {
+          // Search fields direct in TherapistProfile
+          const matchesTherapist = 
+            (t.fullName && regex.test(t.fullName)) ||
+            (t.name && regex.test(t.name)) || // fallback for any legacy use
+            (t.mobile1 && regex.test(t.mobile1)) ||
+            (t.mobile2 && regex.test(t.mobile2)) ||
+            (t.reference && regex.test(t.reference)) ||
+            (t.therapistId && regex.test(t.therapistId)) ||
+            (t.specializations && regex.test(t.specializations));
+
+          // Search in populated userId fields
+          const matchesUser = t.userId && (
+            (t.userId.email && regex.test(t.userId.email)) ||
+            (t.userId.name && regex.test(t.userId.name)) ||
+            (t.userId.phone && regex.test(t.userId.phone)) ||
+            (t.userId.role && regex.test(t.userId.role))
+          );
+
+          return matchesTherapist || matchesUser;
+        });
+
+        // Resort filtered results by therapistId, desc (bigger on top)
+        therapists.sort((a, b) => {
+          if (a.therapistId && b.therapistId) {
+            if (a.therapistId < b.therapistId) return sortOrder === "asc" ? -1 : 1;
+            if (a.therapistId > b.therapistId) return sortOrder === "asc" ? 1 : -1;
+            return 0;
+          }
+          // If therapistId missing, those items go below
+          if (!a.therapistId) return 1;
+          if (!b.therapistId) return -1;
+          return 0;
+        });
+      }
+
+      // No other filters
+
+      const total = therapists.length;
+
+      // Pagination
+      const offset = (page - 1) * pageSize;
+      const pagedTherapists = therapists.slice(offset, offset + pageSize);
+
+      res.json({
+        therapists: pagedTherapists,
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to fetch therapists", details: e.message });
+    }
+  };
+
+  // Fetch therapist by ID
+  fetchTherapistById = async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: "Invalid therapist ID" });
+      }
+      // Only email of therapist is in userId (not TherapistProfile)
+      const therapist = await TherapistProfile.findById(id)
+        .populate({ path: "userId"});
+      if (!therapist) return res.status(404).json({ error: "Therapist not found" });
+      res.json({ therapist });
+    } catch (e) {
+      res.status(500).json({ error: "Failed to fetch therapist", details: e.message });
+    }
+  };
+
+ 
 
 
   payTherapist = async (req, res) => {
