@@ -1509,12 +1509,6 @@ class BookingAdminController {
       ) {
         await session.abortTransaction();
         session.endSession();
-        console.log("[updateBooking] Missing required fields", {
-          packageId,
-          patientId,
-          therapyId,
-          sessions,
-        });
         return res.status(400).json({
           success: false,
           message: "Missing required fields",
@@ -1526,7 +1520,6 @@ class BookingAdminController {
       if (!prevBooking) {
         await session.abortTransaction();
         session.endSession();
-        console.log("[updateBooking] Booking not found:", id);
         return res.status(404).json({
           success: false,
           message: "Booking not found.",
@@ -1557,7 +1550,6 @@ class BookingAdminController {
       if (requestedSlots.some((s) => !s.date || !s.slotId || !s.therapist)) {
         await session.abortTransaction();
         session.endSession();
-        console.log("[updateBooking] Invalid session data in requestedSlots", { requestedSlots });
         return res.status(400).json({
           success: false,
           message:
@@ -1624,7 +1616,8 @@ class BookingAdminController {
         } catch (err) {
           await session.abortTransaction();
           session.endSession();
-          console.log("[updateBooking] Failed to check slot availability:", err);
+          // CONSOLE.LOG CHECK
+          console.log("[updateBooking][CONFLICTS] Failed to check slot availability:", err);
           return res.status(500).json({
             success: false,
             message: "Failed to check slot availability.",
@@ -1639,7 +1632,8 @@ class BookingAdminController {
         ) {
           await session.abortTransaction();
           session.endSession();
-          console.log("[updateBooking] Could not fetch therapist's slot availability for update request.", {
+          // CONSOLE.LOG CHECK
+          console.log("[updateBooking][CONFLICTS] Could not fetch therapist's slot availability for update request.", {
             therapistObjId,
             slotAvailabilityResult
           });
@@ -1681,7 +1675,8 @@ class BookingAdminController {
       if (conflicts.length > 0) {
         await session.abortTransaction();
         session.endSession();
-        console.log("[updateBooking] Slot conflicts found:", conflicts);
+        // CONSOLE.LOG CHECK
+        console.log("[updateBooking][CONFLICTS] Slot conflicts found:", conflicts);
         return res.status(409).json({
           success: false,
           message:
@@ -1774,6 +1769,7 @@ class BookingAdminController {
           { new: true, upsert: true }
         );
         counterStart = sessionCounterDoc.seq - indicesNeedingNewId.length + 1;
+        // preserve any original non-conflict log here (unchanged)
         console.log(
           `[updateBooking] Allocated session counter block: start=${counterStart}, count=${indicesNeedingNewId.length}`
         );
@@ -1863,10 +1859,7 @@ class BookingAdminController {
       const nextKeys = new Set(nextSessions.map(sessionKey));
       const sessionsToDecrement = prevSessions.filter((s) => !nextKeys.has(sessionKey(s)));
       const sessionsToIncrement = nextSessions.filter((s) => !prevKeys.has(sessionKey(s)));
-      console.log("[updateBooking] Session delta:", {
-        sessionsToDecrement,
-        sessionsToIncrement
-      });
+      // removed log: console.log("[updateBooking] Session delta:", {...})
 
       // Uncomment if you want to maintain booked counts in DailyAvailability:
       // if (sessionsToDecrement.length > 0) await this.adjustAvailabilityCounts(sessionsToDecrement, -1);
@@ -1940,12 +1933,14 @@ class BookingAdminController {
             error: err.message,
           },
         };
+        // retain log for DB error (not a conflict check)
         console.log("[updateBooking] Booking update DB error:", err);
       }
 
       if (!bookingUpdated || !booking) {
         await session.abortTransaction();
         session.endSession();
+        // retain log for not updated (not a conflict check)
         console.log("[updateBooking] Booking not updated", {
           bookingUpdateError
         });
@@ -2008,6 +2003,7 @@ class BookingAdminController {
           userAgent: req.headers["user-agent"],
         });
       } catch (err) {
+        // retain log for audit log error (not a conflict check)
         console.log("[AUDIT LOG] Failed to record booking_updated log:", err);
         await session.abortTransaction();
         session.endSession();
@@ -2084,6 +2080,7 @@ class BookingAdminController {
             status: "Updated",
           });
         } catch (waErr) {
+          // retain log for whatsapp error (not a conflict check)
           console.log("WhatsApp sending failed on booking update:", waErr);
         }
       }
@@ -2092,11 +2089,12 @@ class BookingAdminController {
       await session.commitTransaction();
       session.endSession();
 
-      console.log(`[updateBooking] Successful for booking _id: ${id}`);
+      // removed non-conflict success log: console.log(`[updateBooking] Successful for booking _id: ${id}`);
       return res.json({ success: true, booking });
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
+      // retain error log (not a conflict check)
       console.log("[updateBooking] Error:", error);
       return res.status(500).json({
         success: false,
