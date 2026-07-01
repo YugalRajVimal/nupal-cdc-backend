@@ -1473,10 +1473,10 @@ class BookingAdminController {
     const mongoose = (await import("mongoose")).default;
     const session = await mongoose.startSession();
     session.startTransaction();
-  
+
     try {
       const { id } = req.params; // bookingId being edited
-  
+
       const {
         coupon,
         package: packageId,
@@ -1498,7 +1498,7 @@ class BookingAdminController {
         therapist: bodyTherapist,
         remark,
       } = req.body;
-  
+
       // ── 1. Validate required fields ───────────────────────────────────────────
       if (
         !packageId ||
@@ -1509,23 +1509,30 @@ class BookingAdminController {
       ) {
         await session.abortTransaction();
         session.endSession();
+        console.log("[updateBooking] Missing required fields", {
+          packageId,
+          patientId,
+          therapyId,
+          sessions,
+        });
         return res.status(400).json({
           success: false,
           message: "Missing required fields",
         });
       }
-  
+
       // ── 2. Ensure booking exists ──────────────────────────────────────────────
       const prevBooking = await Booking.findById(id).lean();
       if (!prevBooking) {
         await session.abortTransaction();
         session.endSession();
+        console.log("[updateBooking] Booking not found:", id);
         return res.status(404).json({
           success: false,
           message: "Booking not found.",
         });
       }
-  
+
       // ── 3. Prepare requested slots ────────────────────────────────────────────
       const requestedSlots = (sessions || []).map((sess) => {
         let therapistValue =
@@ -1546,17 +1553,18 @@ class BookingAdminController {
           therapist: therapistValue,
         };
       });
-  
+
       if (requestedSlots.some((s) => !s.date || !s.slotId || !s.therapist)) {
         await session.abortTransaction();
         session.endSession();
+        console.log("[updateBooking] Invalid session data in requestedSlots", { requestedSlots });
         return res.status(400).json({
           success: false,
           message:
             "Invalid session data: Each session must have date, slotId, and therapist.",
         });
       }
-  
+
       // ── 4. Build therapist → dates map ────────────────────────────────────────
       const therapistToDates = {};
       requestedSlots.forEach(({ date, therapist }) => {
@@ -1564,7 +1572,7 @@ class BookingAdminController {
         if (!therapistToDates[key]) therapistToDates[key] = new Set();
         therapistToDates[key].add(date);
       });
-  
+
       // ── 5. Fetch therapist docs for id ↔ refId ↔ name mapping ─────────────────
       const uniqueTherapistIds = Array.from(
         new Set(requestedSlots.map((r) => String(r.therapist)))
@@ -1572,29 +1580,28 @@ class BookingAdminController {
       const therapistDocs = await TherapistProfile.find({
         _id: { $in: uniqueTherapistIds },
       }).lean();
-  
+
       const therapistIdMap = {};   // objectId string → therapistId (refId)
       const therapistNameMap = {}; // objectId string → fullName
       therapistDocs.forEach((tDoc) => {
         therapistIdMap[String(tDoc._id)] = tDoc.therapistId;
         therapistNameMap[String(tDoc._id)] = tDoc.fullName || tDoc.name || "";
       });
-  
+
       // ── 6. Slot conflict check (excluding the booking being edited) ───────────
       let conflicts = [];
-  
+
       for (const therapistObjId of uniqueTherapistIds) {
         const dates = Array.from(therapistToDates[therapistObjId] || []);
         if (!dates.length) continue;
-  
+
         const sortedDates = dates.slice().sort();
         const fromDate = sortedDates[0];
         const toDate = sortedDates[sortedDates.length - 1];
-  
+
         let slotAvailabilityResult;
         try {
-          // Pass excludeBookingId so availability does NOT count this booking's
-          // own sessions — preventing its slots from appearing as "already booked".
+          // Pass excludeBookingId so availability does NOT count this booking's own sessions — preventing its slots from appearing as "already booked".
           const fakeReq = {
             query: {
               therapistId: String(therapistObjId),
@@ -1617,13 +1624,14 @@ class BookingAdminController {
         } catch (err) {
           await session.abortTransaction();
           session.endSession();
+          console.log("[updateBooking] Failed to check slot availability:", err);
           return res.status(500).json({
             success: false,
             message: "Failed to check slot availability.",
             error: err.message,
           });
         }
-  
+
         if (
           !slotAvailabilityResult ||
           !slotAvailabilityResult.success ||
@@ -1631,16 +1639,20 @@ class BookingAdminController {
         ) {
           await session.abortTransaction();
           session.endSession();
+          console.log("[updateBooking] Could not fetch therapist's slot availability for update request.", {
+            therapistObjId,
+            slotAvailabilityResult
+          });
           return res.status(409).json({
             success: false,
             message:
               "Could not fetch therapist's slot availability for update request.",
           });
         }
-  
+
         const refId = therapistIdMap[therapistObjId];
         const slotAvailabilityData = slotAvailabilityResult.data;
-  
+
         requestedSlots
           .filter((s) => String(s.therapist) === String(therapistObjId))
           .forEach((sess) => {
@@ -1665,10 +1677,11 @@ class BookingAdminController {
             }
           });
       }
-  
+
       if (conflicts.length > 0) {
         await session.abortTransaction();
         session.endSession();
+        console.log("[updateBooking] Slot conflicts found:", conflicts);
         return res.status(409).json({
           success: false,
           message:
@@ -1676,7 +1689,7 @@ class BookingAdminController {
           conflicts,
         });
       }
-  
+
       // ── 7. Build prev-session lookup maps ─────────────────────────────────────
       //
       // sessionKey produces a deterministic string for a session so we can
@@ -1687,7 +1700,7 @@ class BookingAdminController {
             ? s.therapist._id
             : s.therapist || ""
         )}`;
-  
+
       const prevSessions = Array.isArray(prevBooking.sessions)
         ? prevBooking.sessions.filter(
             (s) =>
@@ -1697,7 +1710,7 @@ class BookingAdminController {
               typeof s.date === "string"
           )
         : [];
-  
+
       // Map: sessionKey → existing sessionId (only entries that already have one)
       const prevSessionIdMap = {};
       prevSessions.forEach((sess) => {
@@ -1705,7 +1718,7 @@ class BookingAdminController {
           prevSessionIdMap[sessionKey(sess)] = sess.sessionId;
         }
       });
-  
+
       // ── 7b. Build prev-session status map ─────────────────────────────────────
       // Map: sessionKey → { isCheckedIn, status } from the previously saved booking.
       // Used in step 11 to ensure existing sessions never lose their check-in state.
@@ -1716,7 +1729,7 @@ class BookingAdminController {
           status: sess.status,
         };
       });
-  
+
       // ── 8. Sort incoming sessions by date (mirrors createBooking ordering) ────
       const sortedIncomingSessions = sessions
         .map((s, origIdx) => ({ ...s, __origIdx: origIdx }))
@@ -1725,7 +1738,7 @@ class BookingAdminController {
           if (a.date > b.date) return 1;
           return a.__origIdx - b.__origIdx;
         });
-  
+
       // ── 9. Identify sessions that need a brand-new globally-unique ID ─────────
       //
       // A session needs a new ID when:
@@ -1751,7 +1764,7 @@ class BookingAdminController {
           indicesNeedingNewId.push(sortedIdx);
         }
       });
-  
+
       // ── 10. Claim a contiguous Counter block for all new sessions (atomic) ────
       let counterStart = null;
       if (indicesNeedingNewId.length > 0) {
@@ -1759,19 +1772,19 @@ class BookingAdminController {
           { name: "session" },
           { $inc: { seq: indicesNeedingNewId.length } },
           { new: true, upsert: true }
-          // Note: no `session` option here intentionally — the counter increment
-          // should be permanent even if the booking transaction rolls back, to
-          // avoid ever reusing an ID that was briefly visible to another process.
         );
         counterStart = sessionCounterDoc.seq - indicesNeedingNewId.length + 1;
+        console.log(
+          `[updateBooking] Allocated session counter block: start=${counterStart}, count=${indicesNeedingNewId.length}`
+        );
       }
-  
+
       // Map: sortedIndex → allocated counter value
       const newIdBySortedIndex = {};
       indicesNeedingNewId.forEach((sortedIdx, i) => {
         newIdBySortedIndex[sortedIdx] = counterStart + i;
       });
-  
+
       // ── 11. Build updatedSessions with correct sessionIds + preserved status ──
       const updatedSessions = sortedIncomingSessions.map((s, sortedIdx) => {
         let therapistValue =
@@ -1783,16 +1796,16 @@ class BookingAdminController {
         ) {
           therapistValue = therapistValue._id;
         }
-  
+
         const therapistIdField = therapistIdMap[String(therapistValue)] || "";
         const therapyTypeIdValue = s.therapyTypeId || s.therapyType || therapyId;
-  
+
         const key = sessionKey({
           date: s.date,
           slotId: s.slotId || s.id,
           therapist: therapistValue,
         });
-  
+
         // ── sessionId resolution ──────────────────────────────────────────────
         let sessionIdValue;
         if (prevSessionIdMap[key]) {
@@ -1805,7 +1818,7 @@ class BookingAdminController {
           // 🆕 New session — use the globally unique Counter value
           sessionIdValue = `S${String(newIdBySortedIndex[sortedIdx]).padStart(6, "0")}`;
         }
-  
+
         // ── isCheckedIn / status resolution ──────────────────────────────────
         // For sessions that already existed (key found in prevSessionStatusMap),
         // ALWAYS carry forward the stored isCheckedIn and status regardless of
@@ -1815,15 +1828,15 @@ class BookingAdminController {
         // For brand-new sessions (no previous record), fall back to whatever
         // the incoming payload carries, or the schema defaults.
         const prevStatus = prevSessionStatusMap[key];
-  
+
         const isCheckedInValue = prevStatus
-          ? prevStatus.isCheckedIn                               // existing → preserve
-          : (s.isCheckedIn !== undefined ? s.isCheckedIn : false); // new → incoming or default
-  
+          ? prevStatus.isCheckedIn
+          : (s.isCheckedIn !== undefined ? s.isCheckedIn : false);
+
         const statusValue = prevStatus
-          ? prevStatus.status                                    // existing → preserve
-          : (s.status !== undefined ? s.status : "NotCheckedIn"); // new → incoming or default
-  
+          ? prevStatus.status
+          : (s.status !== undefined ? s.status : "NotCheckedIn");
+
         return {
           date: s.date,
           slotId: s.slotId || s.id,
@@ -1836,7 +1849,7 @@ class BookingAdminController {
           ...(s.time !== undefined && { time: s.time }),
         };
       });
-  
+
       // ── 12. Compute availability delta (for optional booked-count adjustment) ──
       const nextSessions = updatedSessions.filter(
         (s) =>
@@ -1845,16 +1858,20 @@ class BookingAdminController {
           s.slotId.trim().length > 0 &&
           typeof s.date === "string"
       );
-  
+
       const prevKeys = new Set(prevSessions.map(sessionKey));
       const nextKeys = new Set(nextSessions.map(sessionKey));
       const sessionsToDecrement = prevSessions.filter((s) => !nextKeys.has(sessionKey(s)));
       const sessionsToIncrement = nextSessions.filter((s) => !prevKeys.has(sessionKey(s)));
-  
+      console.log("[updateBooking] Session delta:", {
+        sessionsToDecrement,
+        sessionsToIncrement
+      });
+
       // Uncomment if you want to maintain booked counts in DailyAvailability:
       // if (sessionsToDecrement.length > 0) await this.adjustAvailabilityCounts(sessionsToDecrement, -1);
       // if (sessionsToIncrement.length > 0) await this.adjustAvailabilityCounts(sessionsToIncrement,  1);
-  
+
       // ── 13. Build update payload ──────────────────────────────────────────────
       let discountInfo = undefined;
       if (coupon) {
@@ -1863,7 +1880,7 @@ class BookingAdminController {
           time: new Date(),
         };
       }
-  
+
       const updatePayload = {
         discountInfo,
         package: packageId,
@@ -1888,12 +1905,12 @@ class BookingAdminController {
       Object.keys(updatePayload).forEach(
         (k) => updatePayload[k] === undefined && delete updatePayload[k]
       );
-  
+
       // ── 14. Persist the booking update ───────────────────────────────────────
       let booking = null;
       let bookingUpdated = false;
       let bookingUpdateError = null;
-  
+
       try {
         booking = await Booking.findByIdAndUpdate(id, updatePayload, { new: true })
           .populate("package")
@@ -1905,7 +1922,7 @@ class BookingAdminController {
           .populate({ path: "therapy", model: "TherapyType" })
           .populate({ path: "therapist", model: "TherapistProfile" })
           .populate({ path: "payment", model: "Payment" });
-  
+
         if (!booking) {
           bookingUpdateError = {
             status: 404,
@@ -1923,11 +1940,15 @@ class BookingAdminController {
             error: err.message,
           },
         };
+        console.log("[updateBooking] Booking update DB error:", err);
       }
-  
+
       if (!bookingUpdated || !booking) {
         await session.abortTransaction();
         session.endSession();
+        console.log("[updateBooking] Booking not updated", {
+          bookingUpdateError
+        });
         return res
           .status(bookingUpdateError?.status || 500)
           .json(
@@ -1937,7 +1958,7 @@ class BookingAdminController {
             }
           );
       }
-  
+
       // ── 15. Audit log (mandatory — roll back if it fails) ────────────────────
       try {
         const auditTherapistIds = [
@@ -1963,7 +1984,7 @@ class BookingAdminController {
                     ? booking.therapist
                     : ""))) ||
               "--";
-  
+
         await AuditLogService.addLog({
           action: "BOOKING_UPDATED",
           user: req.user?.id,
@@ -1987,7 +2008,7 @@ class BookingAdminController {
           userAgent: req.headers["user-agent"],
         });
       } catch (err) {
-        console.error("[AUDIT LOG] Failed to record booking_updated log:", err);
+        console.log("[AUDIT LOG] Failed to record booking_updated log:", err);
         await session.abortTransaction();
         session.endSession();
         return res.status(500).json({
@@ -1997,7 +2018,7 @@ class BookingAdminController {
           error: err?.message || "Audit logging failed.",
         });
       }
-  
+
       // ── 16. WhatsApp notification (non-blocking — never fails the request) ────
       if (booking && booking.patient && booking.patient.userId) {
         try {
@@ -2005,7 +2026,7 @@ class BookingAdminController {
           const userName =
             booking.patient.fullName || booking.patient.name || "";
           const patientName = userName;
-  
+
           const therapistIdsInSessions = [
             ...new Set(
               booking.sessions
@@ -2023,7 +2044,7 @@ class BookingAdminController {
                 .filter(Boolean)
             ),
           ];
-  
+
           let therapistNames = therapistIdsInSessions
             .map((tid) => {
               const objectId = Object.keys(therapistIdMap).find(
@@ -2033,7 +2054,7 @@ class BookingAdminController {
             })
             .filter(Boolean);
           therapistNames = [...new Set(therapistNames)];
-  
+
           const therapistNameText =
             therapistNames.length > 0
               ? therapistNames.join(", ")
@@ -2044,7 +2065,7 @@ class BookingAdminController {
                       ? booking.therapist
                       : ""))) ||
                 "--";
-  
+
           await WhatsappController.sendBookingEditSuccess({
             destination,
             userName,
@@ -2063,19 +2084,20 @@ class BookingAdminController {
             status: "Updated",
           });
         } catch (waErr) {
-          console.error("WhatsApp sending failed on booking update:", waErr);
+          console.log("WhatsApp sending failed on booking update:", waErr);
         }
       }
-  
+
       // ── 17. Commit ────────────────────────────────────────────────────────────
       await session.commitTransaction();
       session.endSession();
-  
+
+      console.log(`[updateBooking] Successful for booking _id: ${id}`);
       return res.json({ success: true, booking });
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
-      console.error("[updateBooking] Error:", error);
+      console.log("[updateBooking] Error:", error);
       return res.status(500).json({
         success: false,
         message: "Failed to update booking.",

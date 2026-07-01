@@ -268,23 +268,30 @@ class AavailabilitySlotsAdminController {
     try {
       // 1. Get all active therapists
       let therapistProfiles = await TherapistProfile.find({}).lean();
+      console.log('Therapist profiles:', therapistProfiles);
+
       const userIds = therapistProfiles.map(t => t.userId).filter(Boolean);
+      console.log('User IDs:', userIds);
 
       const users = await User.find({
         _id: { $in: userIds },
         role: "therapist",
         status: "active"
       }, { _id: 1 }).lean();
+      console.log('Active therapist users:', users);
 
       let activeTherapists = therapistProfiles.filter(tp =>
         users.some(u => String(u._id) === String(tp.userId))
       );
+      console.log('Active therapists:', activeTherapists);
 
       let filterTherapistId = null;
       if (req.query && req.query.therapistId) {
         filterTherapistId = String(req.query.therapistId);
+        console.log('Filtering by therapistId:', filterTherapistId);
         activeTherapists = activeTherapists.filter(tp => String(tp._id) === filterTherapistId);
         if (activeTherapists.length === 0) {
+          console.log('No active therapists after filtering, returning empty.');
           return res.json({ success: true, data: {} });
         }
       }
@@ -298,12 +305,14 @@ class AavailabilitySlotsAdminController {
       const excludeBookingId = (req.query && req.query.excludeBookingId)
         ? String(req.query.excludeBookingId)
         : null;
+      console.log('Exclude booking ID:', excludeBookingId);
       // ──────────────────────────────────────────────────────────────────────
 
       const therapistIdMap = {};
       activeTherapists.forEach(tp => {
         therapistIdMap[String(tp._id)] = tp.therapistId;
       });
+      console.log('TherapistId map:', therapistIdMap);
 
       function formatDateIso(date) {
         if (!date) return "";
@@ -317,6 +326,7 @@ class AavailabilitySlotsAdminController {
           ? tp.holidays.map(h => formatDateIso(h.date)).filter(Boolean)
           : [];
       }
+      console.log('Holidays by therapist:', holidaysByTherapist);
 
       // 2. Build dateKeys for required window
       let fromDate, toDate;
@@ -334,7 +344,10 @@ class AavailabilitySlotsAdminController {
         toDate = new Date();
         toDate.setDate(fromDate.getDate() + 13);
       }
+      console.log('From date:', fromDate, 'To date:', toDate);
+
       if (isNaN(fromDate) || isNaN(toDate)) {
+        console.log('Invalid from or to date.');
         return res.status(400).json({ success: false, error: "Invalid from/to date range" });
       }
 
@@ -350,6 +363,7 @@ class AavailabilitySlotsAdminController {
         });
         d.setDate(d.getDate() + 1);
       }
+      console.log('Date keys:', dateKeys);
 
       // 3. Session time options
       const SESSION_TIME_OPTIONS = [
@@ -370,11 +384,15 @@ class AavailabilitySlotsAdminController {
         { id: '1930-2015', label: '19:30 to 20:15', limited: true }
       ];
       const limitedSlotsSet = new Set(SESSION_TIME_OPTIONS.filter(s => s.limited).map(s => s.id));
+      console.log('Session time options:', SESSION_TIME_OPTIONS);
+      console.log('Limited slots set:', limitedSlotsSet);
 
       // 4. Gather all bookings that overlap the window
       const Booking = (await import("../../Schema/booking.schema.js")).default;
       const therapistsObjIds = activeTherapists.map(tp => tp._id);
       const allIsoDates = dateKeys.map(dk => dk.iso);
+      console.log('Therapists object ids:', therapistsObjIds);
+      console.log('All ISO dates:', allIsoDates);
 
       // ── KEY FIX ────────────────────────────────────────────────────────────
       // Build the DB query filter.  When excludeBookingId is set, we add
@@ -401,53 +419,42 @@ class AavailabilitySlotsAdminController {
         }
         bookingFilter["_id"] = { $ne: excludeObjId };
       }
+      console.log('Booking filter:', bookingFilter);
       // ──────────────────────────────────────────────────────────────────────
 
       const bookings = await Booking.find(
         bookingFilter,
         { sessions: 1, therapist: 1 }
       ).lean();
+      console.log('Bookings found:', bookings);
 
       // 5. Aggregate per date/therapist/slot
       const bookedSlotsByDate = {};
-      // for (const bk of bookings) {
-      //   const therapistObjId = String(bk.therapist);
-      //   const therapistId = therapistIdMap[therapistObjId];
-      //   if (!therapistId) continue;
-      //   if (!bk.sessions || !Array.isArray(bk.sessions)) continue;
-      //   for (const sess of bk.sessions) {
-      //     const sessDate = sess.date;
-      //     const slotId = sess.slotId || sess.id;
-      //     if (!sessDate || !slotId) continue;
-      //     if (!bookedSlotsByDate[sessDate]) bookedSlotsByDate[sessDate] = {};
-      //     if (!bookedSlotsByDate[sessDate][therapistId]) bookedSlotsByDate[sessDate][therapistId] = new Set();
-      //     bookedSlotsByDate[sessDate][therapistId].add(slotId);
-      //   }
-      // }
       for (const bk of bookings) {
         if (!bk.sessions || !Array.isArray(bk.sessions)) continue;
-      
+        
         for (const sess of bk.sessions) {
           const sessDate = sess.date;
           const slotId = sess.slotId || sess.id;
           if (!sessDate || !slotId) continue;
-      
+        
           // ✅ Use session-level therapist, not booking-level
           const sessTherapistObjId = sess.therapist
             ? String(typeof sess.therapist === "object" && sess.therapist._id
                 ? sess.therapist._id
                 : sess.therapist)
             : String(bk.therapist); // fallback to booking-level
-      
+        
           const therapistId = therapistIdMap[sessTherapistObjId];
           if (!therapistId) continue;
-      
+        
           if (!bookedSlotsByDate[sessDate]) bookedSlotsByDate[sessDate] = {};
           if (!bookedSlotsByDate[sessDate][therapistId])
             bookedSlotsByDate[sessDate][therapistId] = new Set();
           bookedSlotsByDate[sessDate][therapistId].add(slotId);
         }
       }
+      console.log('Booked slots by date:', bookedSlotsByDate);
 
       // 6. For each day, calculate totals
       const availability = {};
@@ -462,6 +469,9 @@ class AavailabilitySlotsAdminController {
             tp => String(tp._id) === filterTherapistId
           );
         }
+        // Log for each day
+        console.log(`Date: ${display} (ISO: ${iso})`);
+        console.log('Available therapists:', availableTherapists);
 
         const totalNormalSlots = availableTherapists.length *
           SESSION_TIME_OPTIONS.filter(s => !s.limited).length;
@@ -476,6 +486,7 @@ class AavailabilitySlotsAdminController {
             }
           }
         }
+        console.log('Booked slots object for date:', bookedSlotsObj);
 
         let bookedSlots = 0, limitedBookedSlots = 0;
         for (const tId in bookedSlotsObj) {
@@ -486,6 +497,7 @@ class AavailabilitySlotsAdminController {
             }
           }
         }
+        console.log('Totals for date:', { totalNormalSlots, totalLimitedSlots, bookedSlots, limitedBookedSlots });
 
         availability[display] = {
           bookedSlots,
@@ -496,9 +508,12 @@ class AavailabilitySlotsAdminController {
         };
       }
 
+      console.log('Final availability:', availability);
+
       res.json({ success: true, data: availability });
 
     } catch (err) {
+      console.error('Error in getAvailabilitySummary:', err);
       res.status(500).json({ success: false, error: err.message || String(err) });
     }
   }
