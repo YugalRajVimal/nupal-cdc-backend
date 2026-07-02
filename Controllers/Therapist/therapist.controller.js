@@ -1520,12 +1520,14 @@ class TherapistController {
       if (!email || typeof email !== "string") {
         await session.abortTransaction();
         session.endSession();
+        console.log("Error: Valid email is required.");
         return res.status(400).json({ success: false, message: "Valid email is required." });
       }
 
       if (!name || typeof name !== "string") {
         await session.abortTransaction();
         session.endSession();
+        console.log("Error: Name is required.");
         return res.status(400).json({ success: false, message: "Name is required." });
       }
 
@@ -1534,6 +1536,7 @@ class TherapistController {
       if (userExists) {
         await session.abortTransaction();
         session.endSession();
+        console.log(`Error: Therapist with email ${email} already exists.`);
         return res.status(409).json({ success: false, message: "A therapist with this email already exists." });
       }
 
@@ -1582,6 +1585,7 @@ class TherapistController {
       if (sendEmailError) {
         await session.abortTransaction();
         session.endSession();
+        console.log("Error: Failed to send OTP to email address.", sendEmailError);
         return res.status(500).json({
           success: false,
           message: "Failed to send OTP to email address.",
@@ -1614,14 +1618,14 @@ class TherapistController {
         });
       } catch (logErr) {
         // Still consider success, but log the error
-        console.error('Failed to write audit log (THERAPIST_SIGNUP_OTP_SENT) in therapistSignUpSendOTP:', logErr);
+        console.log('Failed to write audit log (THERAPIST_SIGNUP_OTP_SENT) in therapistSignUpSendOTP:', logErr);
       }
 
       return res.json({ success: true, message: "OTP sent to email address." });
     } catch (e) {
       await session.abortTransaction();
       session.endSession();
-      console.error("Error in therapistSignUpSendOTP:", e);
+      console.log("Error in therapistSignUpSendOTP:", e);
       return res.status(500).json({ success: false, message: "Server error." });
     }
   }
