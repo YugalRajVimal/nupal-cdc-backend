@@ -1496,6 +1496,28 @@ const SESSION_TIME_OPTIONS = [
   { id: '1930-2015', label: '19:30 to 20:15', limited: true }
 ];
 
+/**
+ * Util: get next sequence number for a given counter name
+ * Returns the incremented value for the given counter
+ * (Always upserts, so 1 is returned if not present already)
+ */
+const getNextSequence = async (name) => {
+  const counter = await counterSchema.findOneAndUpdate(
+    { name },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true }
+  );
+  return counter.seq;
+};
+
+/**
+ * Therapist ID format: NPL + <three digits, starting from 001>
+ * e.g., NPL001, NPL002, ...
+ */
+function generateTherapistId(seq) {
+  // pad with leading zeros to at least 3 digits (change as needed)
+  return "NPL" + seq.toString().padStart(3, "0");
+}
 
 class TherapistController {
 
@@ -1747,19 +1769,10 @@ class TherapistController {
   async completeProfile(req, res) {
     const uploadedFiles = req.files;
     const session = await User.startSession();
-    // Helper: Therapist ID generation logic
-    const getNextSequence = async (name, sessionOverride) => {
-      const counter = await counterSchema.findOneAndUpdate(
-        { name },
-        { $inc: { seq: 1 } },
-        { new: true, upsert: true, session: sessionOverride }
-      );
-      return counter.seq;
-    };
 
-    function generateTherapistId(seq) {
-      return "NPL" + seq.toString().padStart(3, "0");
-    }
+    // These should now refer to global definitions at bottom of this file (see lines 1499+)
+    // If not already, import Counter schema just for this util here too
+  
 
     try {
       session.startTransaction();
@@ -1811,7 +1824,7 @@ class TherapistController {
         portfolio,
         blog,
         specializations,
-        experienceYears
+        experienceYears,
       } = req.body;
 
       // Required fields (except fullName/email which are already filled)
@@ -1879,10 +1892,10 @@ class TherapistController {
       let therapistProfile = await TherapistProfile.findOne({ userId: therapistUserId }).session(session);
 
       let therapistId;
-      // If not present, create and assign therapistId now
+      // Always create/assign therapistId if not present (on completing profile), and always save to db
       if (!therapistProfile) {
-        // Therapist ID auto-generate (like addTherapist, from sequence)
-        const nextSeq = await getNextSequence("therapist", session);
+        // generate and save new therapistId on creation
+        const nextSeq = await getNextSequence("therapist");
         therapistId = generateTherapistId(nextSeq);
         therapistProfile = new TherapistProfile({
           userId: therapistUserId,
@@ -1891,16 +1904,16 @@ class TherapistController {
         });
       } else {
         therapistId = therapistProfile.therapistId;
-        // Only assign therapistId if it doesn't exist; otherwise leave it alone
+        // If therapistId doesn't exist yet in db, create and PATCH it in now and save
         if (!therapistId) {
-          const nextSeq = await getNextSequence("therapist", session);
+          const nextSeq = await getNextSequence("therapist");
           therapistId = generateTherapistId(nextSeq);
           therapistProfile.therapistId = therapistId;
         }
-        therapistProfile.isPanelAccessible = false; // always mark as NOT panel accessible here too
+        therapistProfile.isPanelAccessible = false; // always mark as NOT panel accessible
       }
 
-      // Patch-in fields to TherapistProfile (do NOT save email or fullName here)
+      // PATCH-in all fields, and persist therapistId in db with save() below
       therapistProfile.therapistId = therapistId;
       therapistProfile.fathersName = fathersName;
       therapistProfile.mobile1 = mobile1;
@@ -1922,7 +1935,7 @@ class TherapistController {
       therapistProfile.blog = blog;
       therapistProfile.specializations = specializations;
       therapistProfile.experienceYears = experienceYears;
-      therapistProfile.isPanelAccessible = false; // ensure always set (redundant but explicit)
+      therapistProfile.isPanelAccessible = false; // always set
       therapistProfile.isDisabled = true;
 
       // Patch file fields if file was uploaded; preserve any prior value if not replaced
@@ -1968,7 +1981,6 @@ class TherapistController {
       }
 
       // --- Send WhatsApp notification via sendTherapistProfileCompleted ---
-      // Import here to avoid circular/dependency issues
       try {
         await WhatsappController.sendTherapistProfileCompleted({
           destination: therapistProfile.mobile1,

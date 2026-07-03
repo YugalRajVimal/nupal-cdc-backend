@@ -361,17 +361,21 @@ class AuthController {
   // Login with email/phone and password (for patient, therapist, admin)
   loginWithPassword = async (req, res) => {
     try {
-      const { email, phone, password } = req.body;
-      if ((!email && !phone) || !password) {
-        return res.status(400).json({ message: "Email or phone and password are required." });
+      const { email, phone, password, role } = req.body;
+      if ((!email && !phone) || !password || !role) {
+        return res.status(400).json({ message: "Email or phone, password, and role are required." });
+      }
+
+      // Only allow patient, therapist, admin for role
+      const allowedRoles = ["patient", "therapist", "admin"];
+      if (!allowedRoles.includes(role)) {
+        return res.status(403).json({ message: "Invalid role for password login." });
       }
 
       // Normalize input
-      let query = {};
+      let query = { role };
       if (email) query.email = (email || "").trim().toLowerCase();
       if (phone) query.phone = (phone || "").trim();
-      // Only allow patient, therapist, admin
-      query.role = { $in: ["patient", "therapist", "admin"] };
 
       const user = await User.findOne(query);
 
@@ -385,7 +389,6 @@ class AuthController {
           message: "Password login is not available for this user. Please login with OTP and use the 'Forget Password' option from the profile to create your first password."
         });
       }
- 
 
       // Compare password
       const isMatch = await bcrypt.compare(password, user.passwordHash);
