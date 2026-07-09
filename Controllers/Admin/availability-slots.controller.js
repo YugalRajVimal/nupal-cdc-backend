@@ -383,22 +383,33 @@ class AavailabilitySlotsAdminController {
       // This is the single, reliable place to enforce the exclusion — doing
       // it at query time means there is no ObjectId-vs-string comparison
       // issue and no risk of the exclusion being skipped by a logic branch.
+      // const bookingFilter = {
+      //   "sessions.date": { $in: allIsoDates },
+      // };
+      // if (therapistsObjIds.length > 0) {
+      //   bookingFilter["therapist"] = { $in: therapistsObjIds };
+      // }
+      // if (excludeBookingId) {
+      //   // Import mongoose ObjectId so the comparison works whether the
+      //   // stored _id is an ObjectId or a string.
+      //   const mongoose = (await import("mongoose")).default;
+      //   let excludeObjId;
+      //   try {
+      //     excludeObjId = new mongoose.Types.ObjectId(excludeBookingId);
+      //   } catch (_) {
+      //     excludeObjId = excludeBookingId; // fallback: compare as string
+      //   }
+      //   bookingFilter["_id"] = { $ne: excludeObjId };
+      // }
       const bookingFilter = {
         "sessions.date": { $in: allIsoDates },
+        // No therapist filter — sessions carry their own therapist field
       };
-      if (therapistsObjIds.length > 0) {
-        bookingFilter["therapist"] = { $in: therapistsObjIds };
-      }
       if (excludeBookingId) {
-        // Import mongoose ObjectId so the comparison works whether the
-        // stored _id is an ObjectId or a string.
         const mongoose = (await import("mongoose")).default;
         let excludeObjId;
-        try {
-          excludeObjId = new mongoose.Types.ObjectId(excludeBookingId);
-        } catch (_) {
-          excludeObjId = excludeBookingId; // fallback: compare as string
-        }
+        try { excludeObjId = new mongoose.Types.ObjectId(excludeBookingId); }
+        catch (_) { excludeObjId = excludeBookingId; }
         bookingFilter["_id"] = { $ne: excludeObjId };
       }
       // Conflict check: log filter for conflicts-related debugging

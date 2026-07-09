@@ -1528,11 +1528,17 @@ class BookingAdminController {
 
       // ── 3. Prepare requested slots ────────────────────────────────────────────
       const requestedSlots = (sessions || []).map((sess) => {
-        let therapistValue =
-          sess.therapist ||
-          sess.therapistId ||
-          bodyTherapist ||
-          prevBooking.therapist;
+        // let therapistValue =
+        //   sess.therapist ||
+        //   sess.therapistId ||
+        //   bodyTherapist ||
+        //   prevBooking.therapist;
+
+          let therapistValue =
+  sess.therapistId ||   // ← frontend sends therapistId (string)
+  sess.therapist ||     // ← fallback
+  bodyTherapist ||
+  prevBooking.therapist;
         if (
           therapistValue &&
           typeof therapistValue === "object" &&
