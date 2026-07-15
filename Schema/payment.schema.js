@@ -59,7 +59,7 @@ const PaymentSchema = new Schema({
   paymentTime: { type: Date },
   paymentMethod: {
     type: String,
-    enum: ['cashfree', 'online', 'cash'],
+    enum: ['cashfree', 'online', 'cash','wallet'],
     required: true,
   },
   utr: { type: [String], default: [] },

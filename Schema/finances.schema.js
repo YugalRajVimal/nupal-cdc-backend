@@ -28,7 +28,7 @@ const FinancesSchema = new Schema({
     },
     paymentMethod: {
         type: String,
-        enum: ['cashfree', 'online', 'cash'],
+        enum: ['cashfree', 'online', 'cash','wallet'],
         required: true,
     },
     utr: { 

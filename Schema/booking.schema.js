@@ -64,7 +64,8 @@ const BookingSchema = new Schema({
   },
   remark: { 
     type: String 
-  }
+  },
+  invoiceAmount: { type: Number, default: 0 },
 }, { timestamps: true });
 
 const Booking = mongoose.model("Booking", BookingSchema);

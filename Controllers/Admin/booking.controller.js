@@ -18,6 +18,17 @@ import WhatsappController from "../Whatsapp/whatsapp.js";
 import AuditLogService from "../AuditLogs/audit-logs.controller.js";
 import mongoose from "mongoose";
 
+import Wallet from "../../Schema/wallet.schema.js";
+import {
+  getOrCreateWallet,
+  creditWallet,
+  debitWallet,
+  findCheckinDebitTransaction,
+  reverseCheckinDebit,
+  getPerSessionRate,
+} from "../../Services/wallet.services.js";
+
+
   // Create a new booking with updated booking schema (1-47)
   // Slot/config for session time resolution
   const SESSION_TIME_OPTIONS = [
@@ -505,9 +516,62 @@ class BookingAdminController {
           model: "TherapyType"
         });
 
+      // Fetch patient wallet details for all patients in the result set
+      // Import Wallet model if not already imported
+      // import Wallet from '../../Schema/wallet.schema.js'; // assumed at top of file
+
+      // Get all patient IDs from current bookings
+      const patientIds = Array.from(
+        new Set(
+          bookings
+            .filter(b => b.patient && b.patient._id)
+            .map(b => b.patient._id.toString())
+        )
+      );
+
+      // Fetch wallets for these patients
+      const wallets = await Wallet.find({ patient: { $in: patientIds } }).lean();
+
+      // Construct wallet map for fast access by patientId string
+      const walletMap = {};
+      for (const wallet of wallets) {
+        walletMap[wallet.patient.toString()] = wallet;
+      }
+
+      // Attach walletSummary to each booking (or null if not found)
+      const bookingsWithWallet = bookings.map(booking => {
+        let walletSummary = null;
+        if (booking.patient && booking.patient._id) {
+          const w = walletMap[booking.patient._id.toString()];
+          if (w) {
+            walletSummary = {
+              balance: w.balance,
+              patient: w.patient, // optionally add patient ref
+              latestTransaction:
+                Array.isArray(w.transactions) && w.transactions.length
+                  ? {
+                      type: w.transactions[w.transactions.length - 1].type,
+                      amount: w.transactions[w.transactions.length - 1].amount,
+                      reason: w.transactions[w.transactions.length - 1].reason,
+                      balanceAfter: w.transactions[w.transactions.length - 1].balanceAfter,
+                      createdAt: w.transactions[w.transactions.length - 1].createdAt,
+                      remark: w.transactions[w.transactions.length - 1].remark,
+                    }
+                  : null,
+              // To send more transaction history, add here if wanted (up to N latest, etc)
+              // transactions: w.transactions.slice(-3)
+            };
+          }
+        }
+        return {
+          ...booking.toObject(),
+          wallet: walletSummary,
+        };
+      });
+
       res.json({
         success: true,
-        bookings,
+        bookings: bookingsWithWallet,
         total,
         page: _page,
         pageSize: _pageSize,
@@ -2651,6 +2715,132 @@ async rejectSessionEditRequest(req, res) {
   }
 }
 
+/**
+   * After a wallet credit (overpayment routed to wallet), immediately sweep
+   * that balance across the SAME patient's other bookings that still have a
+   * balance due (invoiceAmount > amountPaid), oldest booking first.
+   *
+   * For each booking it touches:
+   *   - debits the wallet by the amount applied (reason: due_settlement_debit)
+   *   - increments that booking's payment.amountPaid
+   *   - recomputes that booking's payment.status / booking.paymentStatus
+   *   - creates a Finance income record for the amount applied
+   *   - writes an audit log entry
+   *
+   * Stops as soon as the wallet balance hits 0, or there are no more dues.
+   * Must be called with the same mongoose transaction `session` that the
+   * calling request is already using.
+   *
+   * @param {ObjectId|string} patientId
+   * @param {ObjectId|string} excludeBookingId - the booking that generated
+   *        the credit; we don't want to immediately re-apply it to itself.
+   * @param {mongoose.ClientSession} session
+   * @param {object} req - the original request, for audit log ip/userAgent/user
+   * @returns {Promise<Array>} list of { bookingId, appointmentId, amountApplied }
+   */
+async sweepWalletToOtherDues(patientId,id,name, excludeBookingId, session, req) {
+  const applied = [];
+  if (!patientId) return applied;
+
+  // Find this patient's other bookings that still have something due.
+  // invoiceAmount is only meaningful once the running-invoice model is in
+  // place (defaults to 0 on brand-new bookings with nothing checked in yet,
+  // which naturally excludes them here since due = invoiceAmount - paid <= 0).
+  const otherBookings = await Booking.find({
+    patient: patientId,
+    _id: { $ne: excludeBookingId },
+  })
+    .populate({ path: "payment", model: "Payment" })
+    .sort({ createdAt: 1 }) // oldest booking's due gets settled first
+    .session(session);
+
+  for (const otherBooking of otherBookings) {
+    // Re-check wallet balance fresh each iteration since debitWallet mutates it.
+    const wallet = await getOrCreateWallet(patientId, session);
+    if (!wallet || wallet.balance <= 0) break;
+
+    const otherPayment = otherBooking.payment;
+    if (!otherPayment) continue;
+
+    const invoiceAmount = otherBooking.invoiceAmount || 0;
+    const alreadyPaid = otherPayment.amountPaid || 0;
+    const due = Math.max(0, invoiceAmount - alreadyPaid);
+    if (due <= 0) continue;
+
+    const { amountDebited } = await debitWallet(
+      {
+        patientId,
+        amount: due,
+        reason: "due_settlement_debit",
+        booking: otherBooking._id,
+        remark: `Auto-applied from wallet advance to settle due on Booking #${otherBooking.appointmentId}`,
+      },
+      session
+    );
+    if (amountDebited <= 0) continue;
+
+    // Update the OTHER booking's payment record
+    otherPayment.amountPaid = alreadyPaid + amountDebited;
+    otherPayment.status = otherPayment.amountPaid >= invoiceAmount ? "paid" : "partiallypaid";
+    await otherPayment.save({ session });
+
+    otherBooking.paymentStatus = otherPayment.status;
+    await otherBooking.save({ session });
+
+    // Finance record for this settlement
+    await Finances.create(
+      [
+        {
+          date: new Date(),
+          description: `Wallet advance applied to Booking #${otherBooking.appointmentId} (due settlement)`,
+          type: "income",
+          amount: amountDebited,
+          creditDebitStatus: "credited",
+          paymentMethod: "wallet",
+          utr: [],
+          childrenName: name, // patient name not loaded here; safe to omit
+          childrenId: id,
+          booking: otherBooking._id,
+        },
+      ],
+      { session }
+    );
+
+    // Audit log (best-effort — do not fail the whole sweep if logging fails)
+    try {
+      await AuditLogService.addLog(
+        {
+          action: "BOOKING_PAYMENT_UPDATE",
+          user: req?.user?.id,
+          role: "admin",
+          resource: "Booking",
+          resourceId: otherBooking._id,
+          details: {
+            patientId,
+            appointmentId: otherBooking.appointmentId,
+            message: `Wallet advance auto-applied to settle due of Rs.${amountDebited} on Booking #${otherBooking.appointmentId}.`,
+            amountApplied: amountDebited,
+            source: "wallet_sweep",
+          },
+          ipAddress: req?.ip,
+          userAgent: req?.headers?.["user-agent"],
+        },
+        session
+      );
+    } catch (logErr) {
+      console.error("[sweepWalletToOtherDues] Audit log failed (non-fatal):", logErr);
+    }
+
+    applied.push({
+      bookingId: otherBooking._id,
+      appointmentId: otherBooking.appointmentId,
+      amountApplied: amountDebited,
+    });
+  }
+
+  return applied;
+}
+
 
 /**
  * Mark payment collection details for a booking.
@@ -2736,16 +2926,40 @@ async collectPayment(req, res) {
     }
 
     // Ensure 'utr' field is always an array
+    // if (!Array.isArray(payment.utr)) {
+    //   payment.utr = payment.utr ? [payment.utr] : [];
+    // }
+
+    // // --- Discount Logic ---
+    // let originalAmount = payment.amount;
+    // let amountToCollect = originalAmount;
+    // let discountAmount = 0;
+    // let appliedDiscountPercent = 0;
+
+    // if (
+    //   discountApplied &&
+    //   booking.discountInfo &&
+    //   booking.discountInfo.coupon &&
+    //   typeof booking.discountInfo.coupon.discount === "number"
+    // ) {
+    //   appliedDiscountPercent = booking.discountInfo.coupon.discount;
+    //   if (appliedDiscountPercent > 0) {
+    //     discountAmount = Math.round((originalAmount * appliedDiscountPercent) / 100);
+    //     amountToCollect = originalAmount - discountAmount;
+    //   }
+    // }
+
+    // ---------------------------
+
+    // Ensure 'utr' field is always an array
     if (!Array.isArray(payment.utr)) {
       payment.utr = payment.utr ? [payment.utr] : [];
     }
 
-    // --- Discount Logic ---
+    // --- Discount Logic (kept for reference / legacy display only) ---
     let originalAmount = payment.amount;
-    let amountToCollect = originalAmount;
     let discountAmount = 0;
     let appliedDiscountPercent = 0;
-
     if (
       discountApplied &&
       booking.discountInfo &&
@@ -2755,109 +2969,199 @@ async collectPayment(req, res) {
       appliedDiscountPercent = booking.discountInfo.coupon.discount;
       if (appliedDiscountPercent > 0) {
         discountAmount = Math.round((originalAmount * appliedDiscountPercent) / 100);
-        amountToCollect = originalAmount - discountAmount;
       }
     }
 
+    // --- Option A: "amountToCollect" is now the CURRENT INVOICE DUE, ---
+    // --- not the whole package total. ---
+    const currentInvoice = booking.invoiceAmount || 0;
+    const amountToCollect = Math.max(0, currentInvoice - (payment.amountPaid || 0));
+
+    // ---------------------------
+
+
+    // let financeRecord = null;
+    // let auditLogMessage = "";
+    // let paymentStatusChanged = false;
+    // let paymentStatusForWhatsapp = "";
+    // let remainingToPay;
     let financeRecord = null;
     let auditLogMessage = "";
     let paymentStatusChanged = false;
     let paymentStatusForWhatsapp = "";
     let remainingToPay;
+    let sweepResults = [];
 
     // -------- PARTIAL PAYMENT --------
-    if (paymentType === "partial") {
-      const { amountPaid = 0 } = payment;
-      let actualAmountToCompare = amountToCollect;
-      let remaining = actualAmountToCompare - amountPaid;
+    // if (paymentType === "partial") {
+    //   const { amountPaid = 0 } = payment;
+    //   let actualAmountToCompare = amountToCollect;
+    //   let remaining = actualAmountToCompare - amountPaid;
 
-      if (
-        typeof partialAmount !== "number" ||
-        partialAmount <= 0 ||
-        partialAmount > remaining
-      ) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          success: false,
-          message: `Partial amount to pay must be a number > 0 and <= remaining amount (${remaining}).`
-        });
-      }
+    //   if (
+    //     typeof partialAmount !== "number" ||
+    //     partialAmount <= 0 ||
+    //     partialAmount > remaining
+    //   ) {
+    //     await session.abortTransaction();
+    //     session.endSession();
+    //     return res.status(400).json({
+    //       success: false,
+    //       message: `Partial amount to pay must be a number > 0 and <= remaining amount (${remaining}).`
+    //     });
+    //   }
 
-      payment.amountPaid = (payment.amountPaid || 0) + partialAmount;
+    //   payment.amountPaid = (payment.amountPaid || 0) + partialAmount;
+
+
+    // ------------------------------------
+// -------- PARTIAL PAYMENT --------
+if (paymentType === "partial") {
+  if (typeof partialAmount !== "number" || partialAmount <= 0) {
+    await session.abortTransaction();
+    session.endSession();
+    return res.status(400).json({
+      success: false,
+      message: `Partial amount to pay must be a number > 0.`
+    });
+  }
+
+  // Anything beyond what's currently due goes to wallet, not to payment.amountPaid
+  const dueNow = amountToCollect; // invoice - already paid
+  const appliedToInvoice = Math.min(partialAmount, dueNow);
+  const overflowToWallet = partialAmount - appliedToInvoice;
+
+  payment.amountPaid = (payment.amountPaid || 0) + appliedToInvoice;
+    // ------------------------------------
+
+
+
+
       if (paymentMethod) payment.paymentMethod = paymentMethod;
       if (utr) payment.utr.push(utr);
 
-      if (payment.amountPaid < amountToCollect) {
+     
+
+      if (payment.amountPaid < currentInvoice) {
         payment.status = "partiallypaid";
         payment.paymentTime = paymentTime ? new Date(paymentTime) : new Date();
         booking.paymentStatus = "partiallypaid";
-        auditLogMessage = `[collectPayment] Marking as partiallypaid. Partial payment of Rs.${partialAmount} received for Booking #${booking.appointmentId}. Remaining: Rs.${amountToCollect - payment.amountPaid}. DiscountApplied: ${discountApplied}${discountApplied ? ` (${appliedDiscountPercent}%)` : ""}`;
+        auditLogMessage = `[collectPayment] Partial payment of Rs.${partialAmount} received for Booking #${booking.appointmentId}. Applied to invoice: Rs.${appliedToInvoice}. Remaining on current invoice: Rs.${currentInvoice - payment.amountPaid}.${overflowToWallet > 0 ? ` Rs.${overflowToWallet} routed to wallet as advance.` : ""}`;
         paymentStatusForWhatsapp = "Partial";
         paymentStatusChanged = true;
       } else {
-        payment.status = "paid";
+        payment.status = "paid"; // paid up to the current invoice
         payment.paymentTime = paymentTime ? new Date(paymentTime) : new Date();
-        payment.amountPaid = amountToCollect; // clamp to discounted total
         booking.paymentStatus = "paid";
-        auditLogMessage = `[collectPayment] Marking as fully paid after partial payment. Final partial payment of Rs.${partialAmount} received. Booking #${booking.appointmentId} fully paid. DiscountApplied: ${discountApplied}${discountApplied ? ` (${appliedDiscountPercent}%)` : ""}`;
+        auditLogMessage = `[collectPayment] Booking #${booking.appointmentId} paid up to current invoice (Rs.${currentInvoice}) after Rs.${partialAmount} collected.${overflowToWallet > 0 ? ` Rs.${overflowToWallet} routed to wallet as advance.` : ""}`;
         paymentStatusForWhatsapp = "Full";
         paymentStatusChanged = true;
       }
 
-      await payment.save({ session });
-      await booking.save({ session });
+   // Route any overflow to the wallet as an advance credit
+   let sweepResults = [];
+   if (overflowToWallet > 0) {
+     await creditWallet(
+       {
+         patientId: booking.patient?._id || booking.patient,
+         amount: overflowToWallet,
+         reason: "advance_payment",
+         booking: booking._id,
+         remark: `Overpayment during partial collection for Booking #${booking.appointmentId}`,
+       },
+       session
+     );
 
-      financeRecord = await Finances.create([
-        {
-          date: payment.paymentTime || new Date(),
-          description: `Partial Payment for Booking #${booking.appointmentId}${discountApplied ? " (DISCOUNT APPLIED)" : ""}`,
-          type: "income",
-          amount: partialAmount,
-          creditDebitStatus: "credited",
-          paymentMethod: paymentMethod || payment.paymentMethod || null,
-          utr: payment.utr,
-          childrenName: booking?.patient?.name || booking?.patientName || "",
-          childrenId: booking?.patient?.patientId || booking?.patientId || "",
-          booking: booking._id // Save booking ObjectId in finances
-        }
-      ], { session });
+     // Immediately sweep that new wallet balance across the patient's
+     // OTHER bookings that still have something due.
+     sweepResults = await this.sweepWalletToOtherDues(
+       booking.patient?._id || booking.patient,
+       booking.patient?.patientId,
+       booking.patient.name,
+       booking._id,
+       session,
+       req
+     );
+     if (sweepResults.length > 0) {
+       auditLogMessage += ` Wallet advance also auto-applied to ${sweepResults.length} other booking(s): ${sweepResults
+         .map((s) => `#${s.appointmentId} (Rs.${s.amountApplied})`)
+         .join(", ")}.`;
+     }
+   }
+
+   await payment.save({ session });
+   await booking.save({ session });
+
+
+   
+
+
+      if (appliedToInvoice > 0) {
+        financeRecord = await Finances.create([
+          {
+            date: new Date(),
+            description: `Partial Payment for Booking #${booking.appointmentId}${discountApplied ? " (DISCOUNT APPLIED)" : ""}`,
+            type: "income",
+            amount: appliedToInvoice,
+            creditDebitStatus: "credited",
+            paymentMethod: paymentMethod || payment.paymentMethod || null,
+            utr: payment.utr,
+            childrenName: booking?.patient?.name || booking?.patientName || "",
+            childrenId: booking?.patient?.patientId || booking?.patientId || "",
+            booking: booking._id
+          }
+        ], { session });
+      }
+ 
 
     } else {
-      // -------- FULL PAYMENT --------
-      // Calculate remainingToPay as the difference BEFORE updating payment.amountPaid
-      remainingToPay = amountToCollect - (payment.amountPaid || 0);
+ 
+      remainingToPay = amountToCollect; // amountToCollect == dueNow == invoice - amountPaid
 
-      payment.status = "paid";
+      payment.status = "paid"; // paid up to current invoice
       payment.paymentTime = paymentTime ? new Date(paymentTime) : new Date();
-      payment.amountPaid = amountToCollect;
+      payment.amountPaid = (payment.amountPaid || 0) + remainingToPay;
       if (paymentMethod) payment.paymentMethod = paymentMethod;
       if (utr) payment.utr.push(utr);
 
       await payment.save({ session });
 
       booking.paymentStatus = "paid";
-      await booking.save({ session });
-
-      auditLogMessage = `[collectPayment] Full payment of Rs.${amountToCollect} received for Booking #${booking.appointmentId}.${discountApplied ? ` Discount of Rs.${discountAmount} (${appliedDiscountPercent}%) applied.` : ""} Previously paid: Rs.${payment.amountPaid - remainingToPay}. Now collected: Rs.${remainingToPay}.`;
+      auditLogMessage = `[collectPayment] Booking #${booking.appointmentId} paid up to current invoice (Rs.${currentInvoice}) after Rs.${remainingToPay} collected.`;
       paymentStatusForWhatsapp = "Full";
       paymentStatusChanged = true;
+      await booking.save({ session });
 
-      financeRecord = await Finances.create([
-        {
-          date: payment.paymentTime || new Date(),
-          description: `Payment for Booking #${booking.appointmentId}${discountApplied ? " (DISCOUNT APPLIED)" : ""}`,
-          type: "income",
-          amount: remainingToPay,
-          creditDebitStatus: "credited",
-          paymentMethod: paymentMethod || payment.paymentMethod || null,
-          utr: payment.utr,
-          childrenName: booking?.patient?.name || booking?.patientName || "",
-          childrenId: booking?.patient?.patientId || booking?.patientId || "",
-          booking: booking._id // Save booking ObjectId in finances
+  // Optional: if req.body includes `advanceAmount` (money collected beyond
+      // what's due, e.g. receptionist takes Rs.7000 when Rs.5000 is due), credit
+      // the excess to the wallet, then immediately sweep it across the
+      // patient's other bookings that still have something due.
+      if (typeof req.body.advanceAmount === "number" && req.body.advanceAmount > 0) {
+        await creditWallet(
+          {
+            patientId: booking.patient?._id || booking.patient,
+            amount: req.body.advanceAmount,
+            reason: "advance_payment",
+            booking: booking._id,
+            remark: `Advance collected alongside full invoice payment for Booking #${booking.appointmentId}`,
+          },
+          session
+        );
+
+        const sweepResults = await this.sweepWalletToOtherDues(
+          booking.patient?._id || booking.patient,
+          booking.patient?.patientId,
+          booking.patient.name,
+          booking._id,
+          session,
+          req
+        );
+        if (sweepResults.length > 0) {
+          auditLogMessage += ` Advance also auto-applied to ${sweepResults.length} other booking(s): ${sweepResults
+            .map((s) => `#${s.appointmentId} (Rs.${s.amountApplied})`)
+            .join(", ")}.`;
         }
-      ], { session });
-
+      }
 
     }
 
@@ -2977,6 +3281,11 @@ async collectPayment(req, res) {
           : "Payment recorded successfully.",
       booking,
       payment,
+      wallet: await (async () => {
+        const w = await Wallet.findOne({ patient: booking.patient?._id || booking.patient }).lean();
+        return w ? { balance: w.balance } : { balance: 0 };
+      })(),
+      appliedToOtherBookings: typeof sweepResults !== "undefined" ? sweepResults : [],
       finance: Array.isArray(financeRecord) ? financeRecord[0] : financeRecord,
       discount: discountApplied
         ? {
@@ -3059,6 +3368,8 @@ async checkIn(req, res) {
       });
     }
 
+
+
     // If already checked in for this session, return idempotent response
     if (booking.sessions[sessionIndex].isCheckedIn) {
       console.log("[checkIn] Session already checked in.");
@@ -3077,8 +3388,62 @@ async checkIn(req, res) {
     booking.sessions[sessionIndex].status = "CheckedIn";
     booking.sessions[sessionIndex].checkInTime = date;
     console.log("[checkIn] Updating session status for sessionIndex:", sessionIndex);
+
+    // ---- INVOICE UPDATE ----
+    // Bill only for CheckedIn sessions. Rate = package.costPerSession * (1 - discount%).
+    const pkgForInvoice = await Package.findById(booking.package).session(session);
+    let discountPercent = 0;
+    if (booking.discountInfo && booking.discountInfo.coupon) {
+      const DiscountModel = (await import("../../Schema/discount.schema.js")).default;
+      const couponDoc = await DiscountModel.findById(booking.discountInfo.coupon).session(session);
+      if (couponDoc && typeof couponDoc.discount === "number") {
+        discountPercent = couponDoc.discount;
+      }
+    }
+    const perSessionRate = getPerSessionRate(pkgForInvoice, discountPercent);
+    booking.invoiceAmount = (booking.invoiceAmount || 0) + perSessionRate;
+
     await booking.save({ session });
 
+    // ---- WALLET AUTO-DEBIT ----
+    // If the patient has wallet balance, silently apply it to cover this session's charge.
+    let walletDebitApplied = 0;
+    if (perSessionRate > 0 && booking.patient) {
+      const patientIdForWallet = booking.patient._id || booking.patient;
+      const { amountDebited } = await debitWallet(
+        {
+          patientId: patientIdForWallet,
+          amount: perSessionRate,
+          reason: "session_checkin_debit",
+          booking: booking._id,
+          sessionId: String(booking.sessions[sessionIndex]._id),
+          remark: `Auto-applied for session check-in (${booking.appointmentId || booking._id})`,
+        },
+        session
+      );
+      walletDebitApplied = amountDebited;
+
+      if (walletDebitApplied > 0 && booking.payment) {
+        const Payment = (await import("../../Schema/payment.schema.js")).default;
+        const paymentDoc = await Payment.findById(booking.payment).session(session);
+        if (paymentDoc) {
+          paymentDoc.amountPaid = (paymentDoc.amountPaid || 0) + walletDebitApplied;
+          // Recompute status against the running invoice, not the whole package
+          if (paymentDoc.amountPaid >= booking.invoiceAmount) {
+            paymentDoc.status = paymentDoc.amountPaid >= paymentDoc.amount ? "paid" : "partiallypaid";
+          } else {
+            paymentDoc.status = "partiallypaid";
+          }
+          await paymentDoc.save({ session });
+        }
+      }
+    }
+    console.log("[checkIn] Invoice updated:", {
+      invoiceAmount: booking.invoiceAmount,
+      perSessionRate,
+      walletDebitApplied,
+    });
+// ----------  ------
     // --- AUDIT LOG ---
     try {
       console.log("[checkIn] Writing audit log for check-in...");
@@ -3363,9 +3728,58 @@ async markSessionNotCheckedIn(req, res) {
     }
 
     // Mark as "Not Checked In" even if previous status was "Missed" or anything else
+    // booking.sessions[sessionIndex].isCheckedIn = false;
+    // booking.sessions[sessionIndex].status = "NotCheckedIn";
+    // await booking.save({ session });
+
+// --------------------
+
+const wasCheckedIn = booking.sessions[sessionIndex].status === "CheckedIn";
+
+    // Mark as "Not Checked In" even if previous status was "Missed" or anything else
     booking.sessions[sessionIndex].isCheckedIn = false;
     booking.sessions[sessionIndex].status = "NotCheckedIn";
+
+    // ---- INVOICE + WALLET REVERSAL ----
+    // Only reverse if it was actually CheckedIn before (Missed/NotCheckedIn never billed).
+    if (wasCheckedIn) {
+      const pkgForInvoice = await Package.findById(booking.package).session(session);
+      let discountPercent = 0;
+      if (booking.discountInfo && booking.discountInfo.coupon) {
+        const DiscountModel = (await import("../../Schema/discount.schema.js")).default;
+        const couponDoc = await DiscountModel.findById(booking.discountInfo.coupon).session(session);
+        if (couponDoc && typeof couponDoc.discount === "number") {
+          discountPercent = couponDoc.discount;
+        }
+      }
+      const perSessionRate = getPerSessionRate(pkgForInvoice, discountPercent);
+      booking.invoiceAmount = Math.max(0, (booking.invoiceAmount || 0) - perSessionRate);
+
+      // Reverse any wallet debit that was auto-applied specifically for this session
+      const patientIdForWallet = booking.patient?._id || booking.patient;
+      const { wallet, txn } = await findCheckinDebitTransaction(
+        patientIdForWallet,
+        booking._id,
+        String(booking.sessions[sessionIndex]._id),
+        session
+      );
+      if (txn) {
+        const { amountReversed } = await reverseCheckinDebit(wallet, txn, session);
+        if (amountReversed > 0 && booking.payment) {
+          const Payment = (await import("../../Schema/payment.schema.js")).default;
+          const paymentDoc = await Payment.findById(booking.payment).session(session);
+          if (paymentDoc) {
+            paymentDoc.amountPaid = Math.max(0, (paymentDoc.amountPaid || 0) - amountReversed);
+            paymentDoc.status = paymentDoc.amountPaid <= 0 ? "pending" : "partiallypaid";
+            await paymentDoc.save({ session });
+          }
+        }
+      }
+    }
+
     await booking.save({ session });
+
+// --------------------
 
     // Optionally log this action
     try {
