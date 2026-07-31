@@ -25,11 +25,6 @@ const BookingRequestsSchema = new Schema({
     required: true 
   },
   sessions: [SessionSchema],
-  therapy: { 
-    type: Schema.Types.ObjectId, 
-    ref: 'Therapy', 
-    required: true 
-  },
   status: {
     type: String,
     enum: ['pending', 'approved', 'rejected'],

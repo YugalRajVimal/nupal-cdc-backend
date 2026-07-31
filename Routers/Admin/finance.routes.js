@@ -8,6 +8,9 @@ const financeAdminController = new FinancesAdminController();
 
 financeAdminRouter.get("/details", (req, res) => financeAdminController.getFinancesDetails(req, res));
 
+financeAdminRouter.patch("/update-payment-method/:id", (req, res) =>
+  financeAdminController.updateFinancePaymentMethod(req, res)
+);
 
 
 

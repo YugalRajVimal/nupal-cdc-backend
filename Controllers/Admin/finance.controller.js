@@ -145,6 +145,65 @@ class FinancesAdminController {
       }
     }
 
+/**
+ * Controller to update the payment method of a finance entry by its ID.
+ * Body params:
+ *   - paymentMethod: string (required, e.g. 'Cash', 'Online', 'Cheque', etc)
+ *   - utr: string (optional, for online/utr-type payments)
+ */
+async updateFinancePaymentMethod(req, res) {
+  try {
+    const { id } = req.params;
+    const { paymentMethod, utr } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Finance log ID required"
+      });
+    }
+    if (!paymentMethod || typeof paymentMethod !== "string") {
+      return res.status(400).json({
+        success: false,
+        message: "A valid paymentMethod is required"
+      });
+    }
+    // You may want to restrict allowed payment methods here
+
+    const update = { paymentMethod: paymentMethod.trim() };
+    if (utr !== undefined) {
+      update.utr = (typeof utr === "string" && utr.trim() !== "") ? utr.trim() : null;
+    }
+
+    // Assuming your model is called FinanceLog or similar
+    const updatedFinance = await Finances.findByIdAndUpdate(
+      id,
+      { $set: update },
+      { new: true }
+    );
+
+    if (!updatedFinance) {
+      return res.status(404).json({
+        success: false,
+        message: "Finance log not found"
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Payment method updated successfully",
+      finance: updatedFinance
+    });
+  } catch (error) {
+    console.error("[ADMIN UPDATE FINANCE PAYMENT METHOD] Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update finance payment method",
+      error: error.message
+    });
+  }
+}
+
 }
 
 export default FinancesAdminController;

@@ -48,6 +48,10 @@ bookingsAdminRouter.put("/:id",jwtAuth, (req, res) =>
   bookingAdminController.updateBooking(req, res)
 );
 
+bookingsAdminRouter.post("/move-session", jwtAuth, (req, res) =>
+  bookingAdminController.moveSession(req, res)
+);
+
 
 /**
  * @route GET /api/admin/booking-requests

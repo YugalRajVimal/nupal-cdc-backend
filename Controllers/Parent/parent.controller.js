@@ -2326,7 +2326,7 @@ class ParentController {
     const session = await User.startSession();
     session.startTransaction();
     try {
-      const { email, name } = req.body;
+      const { email, name, password, phone } = req.body;
 
       if (!email || typeof email !== "string") {
         await session.abortTransaction();
@@ -2340,6 +2340,29 @@ class ParentController {
         return res.status(400).json({ success: false, message: "Name is required." });
       }
 
+      // Optionally validate and save phone number
+      let phoneToSave = undefined;
+      if (phone) {
+        if (typeof phone !== "string" || phone.trim().length < 8) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({ success: false, message: "A valid phone number is required." });
+        }
+        phoneToSave = phone.trim();
+      }
+
+      // Optionally hash and save password
+      let passwordHash = undefined;
+      if (password) {
+        if (typeof password !== "string" || password.length < 6) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+        }
+        const bcrypt = (await import('bcrypt')).default;
+        passwordHash = await bcrypt.hash(password, 10);
+      }
+
       const userExists = await User.findOne({ email, role: "patient" }).session(session);
       if (userExists) {
         await session.abortTransaction();
@@ -2350,7 +2373,7 @@ class ParentController {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresInMs = 1000 * 300;
 
-      const newUser = new User({
+      const newUserData = {
         email,
         name,
         role: "patient",
@@ -2363,7 +2386,11 @@ class ParentController {
         status: "active",
         isDisabled: false,
         manualSignUp: true
-      });
+      };
+      if (passwordHash) newUserData.passwordHash = passwordHash;
+      if (phoneToSave) newUserData.phone = phoneToSave;
+
+      const newUser = new User(newUserData);
       await newUser.save({ session });
 
       let sendEmailError = null;
@@ -2407,9 +2434,12 @@ class ParentController {
           details: {
             email,
             name,
+            phone: phoneToSave || null,
             message: `Parent signup OTP sent to ${email}`,
             completeProfileOrigin: 'self-service',
-            whatsappStatus
+            whatsappStatus,
+            withPassword: !!password,
+            withPhone: !!phoneToSave
           },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
@@ -2706,6 +2736,148 @@ class ParentController {
     }
   }
 
+  // async getDashboardDetails(req, res) {
+  //   try {
+  //     const parentId = req.user.id;
+  //     if (!parentId) {
+  //       return res.status(401).json({ success: false, message: "Unauthorized: Parent not found from token." });
+  //     }
+
+  //     const user = await User.findById(parentId).lean();
+  //     if (!user) {
+  //       return res.status(404).json({ success: false, message: "Parent user not found." });
+  //     }
+
+  //     const children = await PatientProfile.find({ userId: user._id }).lean();
+  //     const childIds = children.map(child => child._id);
+
+  //     const appointments = await Booking.find({ patient: { $in: childIds } })
+  //       .populate({
+  //         path: "patient",
+  //         model: "PatientProfile",
+  //         select: "patientId name",
+  //         populate: {
+  //           path: "userId",
+  //           model: "User",
+  //           select: "name",
+  //         }
+  //       })
+  //       .populate({
+  //         path: "sessions.therapist",
+  //         model: "TherapistProfile",
+  //         select: "therapistId",
+  //         populate: {
+  //           path: "userId",
+  //           model: "User",
+  //           select: "name"
+  //         }
+  //       })
+  //       .lean();
+
+  //     const consultationBookings = await ConsultationBooking.find({ client: { $in: childIds } })
+  //       .populate({
+  //         path: "client",
+  //         model: "PatientProfile",
+  //         select: "patientId name",
+  //         populate: {
+  //           path: "userId",
+  //           model: "User",
+  //           select: "name",
+  //         }
+  //       })
+  //       .populate({
+  //         path: "therapy",
+  //         model: "TherapyType",
+  //         select: "name"
+  //       })
+  //       .lean();
+
+  //     const totalAppointments = appointments.length;
+
+  //     // Build unchecked sessions — response keys use "children" terminology
+  //     const uncheckedSessions = [];
+  //     appointments.forEach(booking => {
+  //       if (Array.isArray(booking.sessions)) {
+  //         for (const session of booking.sessions) {
+  //           if (!session.isCheckedIn) {
+  //             uncheckedSessions.push({
+  //               childrenId: booking.patient.patientId,
+  //               name: booking.patient.name,
+  //               notCheckedInSession: session
+  //             });
+  //           }
+  //         }
+  //       }
+  //     });
+
+  //     const populatedBookings = await Booking.find({ patient: { $in: childIds } })
+  //       .populate({
+  //         path: "patient",
+  //         model: "PatientProfile",
+  //         populate: {
+  //           path: "userId",
+  //           model: "User",
+  //         },
+  //       })
+  //       .populate({
+  //         path: "payment",
+  //         model: "Payment"
+  //       })
+  //       .lean({ virtuals: true });
+
+  //     // Pending payments — response keys use "children" terminology
+  //     const pendingPayments = [];
+  //     for (const booking of populatedBookings) {
+  //       let payments = [];
+  //       if (Array.isArray(booking.payment)) {
+  //         payments = booking.payment;
+  //       } else if (booking.payment) {
+  //         payments = [booking.payment];
+  //       }
+  //       for (const pay of payments) {
+  //         if (!pay) continue;
+  //         const status = pay.status || "Unknown";
+  //         if (status.toLowerCase() === "pending") {
+  //           let childrenName = "";
+  //           if (
+  //             booking.Children &&
+  //             booking.patient.userId &&
+  //             booking.patient.userId.name
+  //           ) {
+  //             childrenName = booking.patient.name;
+  //           } else if (booking.Children && booking.patient.name) {
+  //             childrenName = booking.patient.name;
+  //           }
+  //           const childrenId = booking.patient?.patientId;
+  //           if (!childrenName && user && user.name) childrenName = user.name;
+  //           pendingPayments.push({
+  //             InvoiceId: pay.paymentId ? pay.paymentId.toString() : "",
+  //             date: pay.createdAt || pay.date || booking.createdAt,
+  //             childrenName: childrenName,
+  //             childrenId,
+  //             amount: pay.amount || booking.totalAmount || 0,
+  //             status: status
+  //           });
+  //         }
+  //       }
+  //     }
+
+  //     const dashboardData = {
+  //       childrenCount: children.length,
+  //       totalAppointments,
+  //       pendingPayments,
+  //       uncheckedSessions,
+  //       consultationBookings
+  //     };
+
+  //     res.json({ success: true, data: dashboardData });
+  //   } catch (err) {
+  //     res.status(500).json({
+  //       success: false,
+  //       error: err.message || String(err)
+  //     });
+  //   }
+  // }
   async getDashboardDetails(req, res) {
     try {
       const parentId = req.user.id;
@@ -2793,6 +2965,13 @@ class ParentController {
           path: "payment",
           model: "Payment"
         })
+        // NEW: needed to compute discount, same as getInvoiceAndPayment
+        .populate({
+          path: "discountInfo.coupon",
+          model: "Discount",
+          select: "discountEnabled discount couponCode validityDays createdAt"
+        })
+        .populate({ path: "package" })
         .lean({ virtuals: true });
 
       // Pending payments — response keys use "children" terminology
@@ -2804,6 +2983,39 @@ class ParentController {
         } else if (booking.payment) {
           payments = [booking.payment];
         }
+
+        // NEW: compute discount + invoice amounts once per booking, same logic as getInvoiceAndPayment
+        let invoiceOriginal = null;
+        const firstPay = payments[0] || null;
+        if (firstPay && typeof firstPay.totalAmount === "number") {
+          invoiceOriginal = firstPay.totalAmount;
+        } else if (typeof booking.package?.price === "number") {
+          invoiceOriginal = booking.package.price;
+        } else if (booking.totalAmount != null) {
+          invoiceOriginal = booking.totalAmount;
+        }
+
+        let discountObj = null;
+        if (booking.discountInfo?.coupon) {
+          const coupon = booking.discountInfo.coupon;
+          discountObj = {
+            _id: coupon._id,
+            discountEnabled: coupon.discountEnabled,
+            discount: coupon.discount,
+            couponCode: coupon.couponCode,
+            validityDays: coupon.validityDays,
+            createdAt: coupon.createdAt
+          };
+        }
+
+        const discountAmount = typeof booking.discountInfo?.discountAmount === "number"
+          ? booking.discountInfo.discountAmount
+          : (firstPay?.discountInfo?.amount || 0);
+
+        const invoiceAfterDiscount = invoiceOriginal != null
+          ? Math.max(0, Math.round(invoiceOriginal - discountAmount))
+          : null;
+
         for (const pay of payments) {
           if (!pay) continue;
           const status = pay.status || "Unknown";
@@ -2826,7 +3038,12 @@ class ParentController {
               childrenName: childrenName,
               childrenId,
               amount: pay.amount || booking.totalAmount || 0,
-              status: status
+              status: status,
+              // NEW: same fields the invoice page relies on for discount/due calculation
+              originalInvoiceAmount: invoiceOriginal,
+              invoiceAmount: invoiceAfterDiscount,
+              discount: discountObj,
+              paymentDetail: pay,
             });
           }
         }
@@ -3411,7 +3628,6 @@ class ParentController {
       const {
         package: packageId,
         patient: patientId,
-        therapy: therapyId,
         sessions
       } = req.body;
 
@@ -3420,12 +3636,11 @@ class ParentController {
       if (
         !packageId ||
         !patientId ||
-        !therapyId ||
         !Array.isArray(sessions) ||
         !sessions.length
       ) {
         console.log("[CREATE BOOKING REQUEST] Missing required fields", {
-          packageId, patientId, therapyId, sessions
+          packageId, patientId, sessions
         });
         return res.status(400).json({
           success: false,
@@ -3453,8 +3668,7 @@ class ParentController {
         requestId,
         package: packageId,
         patient: patientId,
-        sessions,
-        therapy: therapyId
+        sessions
       };
       Object.keys(bookingRequestPayload).forEach(
         k => bookingRequestPayload[k] === undefined && delete bookingRequestPayload[k]
@@ -3477,10 +3691,9 @@ class ParentController {
                 requestId,
                 packageId,
                 patientId,
-                therapyId,
                 sessionCount: Array.isArray(sessions) ? sessions.length : 0
               },
-              message: `Booking request created by userId=${req.user?.id || "?"}, patientId=${patientId}, packageId=${packageId}, therapyId=${therapyId}`
+              message: `Booking request created by userId=${req.user?.id || "?"}, patientId=${patientId}, packageId=${packageId}`
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]
@@ -3507,8 +3720,7 @@ class ParentController {
           path: "patient",
           model: "PatientProfile",
           populate: { path: "userId", model: "User" }
-        })
-        .populate({ path: "therapy", model: "TherapyType" });
+        });
 
       res.status(201).json({
         success: true,
@@ -3523,163 +3735,6 @@ class ParentController {
       res.status(500).json({
         success: false,
         message: "Failed to create booking request.",
-        error: error.message,
-      });
-    }
-  }
-
-  // INSERT_YOUR_CODE
-
-  async getAllBookingRequests(req, res) {
-    try {
-      const parentUserId = req.user?.id;
-
-      let page = Number(req.query.page) || 1;
-      let limit = Math.max(1, Math.min(Number(req.query.limit) || 10, 100));
-      const skip = (page - 1) * limit;
-
-      const search = (req.query.search || "").trim();
-      let filter = {};
-
-      if (parentUserId) {
-        const user = await User.findById(parentUserId).lean();
-        if (!user) {
-          return res.status(404).json({ success: false, message: "User not found" });
-        }
-        const myPatients = await PatientProfile.find({ userId: user._id }, '_id').lean();
-        const myPatientIds = myPatients.map(p => p._id);
-
-        if (myPatientIds.length > 0) {
-          filter.Children = { $in: myPatientIds };
-        } else {
-          return res.json({ success: true, bookingRequests: [], total: 0, page, totalPages: 1 });
-        }
-      }
-
-      const aggregatePipeline = [
-        { $match: filter },
-        {
-          $lookup: {
-            from: "patientprofiles",
-            localField: "patient",
-            foreignField: "_id",
-            as: "patient",
-          }
-        },
-        { $unwind: "$patient" },
-        {
-          $lookup: {
-            from: "users",
-            localField: "patient.userId",
-            foreignField: "_id",
-            as: "patient.userObj",
-          }
-        },
-        {
-          $addFields: {
-            "patient.user": { $arrayElemAt: ["$patient.userObj", 0] }
-          }
-        },
-        {
-          $lookup: {
-            from: "therapytypes",
-            localField: "therapy",
-            foreignField: "_id",
-            as: "therapy",
-          }
-        },
-        { $unwind: { path: "$therapy", preserveNullAndEmptyArrays: true } },
-        {
-          $lookup: {
-            from: "packages",
-            localField: "package",
-            foreignField: "_id",
-            as: "package",
-          }
-        },
-        { $unwind: { path: "$package", preserveNullAndEmptyArrays: true } },
-      ];
-
-      if (search) {
-        const regex = new RegExp(search, "i");
-        aggregatePipeline.push({
-          $match: {
-            $or: [
-              { "patient.name": regex },
-              { "patient.patientId": regex },
-              { "patient.user.name": regex },
-              { "therapy.name": regex },
-              { "package.name": regex },
-              { "requestId": regex },
-              { "appointmentId": regex }
-            ]
-          }
-        });
-      }
-
-      const countPipeline = [...aggregatePipeline, { $count: "total" }];
-      const countResult = await BookingRequests.aggregate(countPipeline).allowDiskUse(true);
-      const total = countResult[0]?.total || 0;
-      const totalPages = Math.max(1, Math.ceil(total / limit));
-      if (page > totalPages) page = totalPages;
-      const newSkip = (page - 1) * limit;
-
-      aggregatePipeline.push({ $sort: { createdAt: -1 } });
-      aggregatePipeline.push({ $skip: newSkip });
-      aggregatePipeline.push({ $limit: limit });
-
-      aggregatePipeline.push({
-        $project: { "patient.userObj": 0 }
-      });
-
-      const requests = await BookingRequests.aggregate(aggregatePipeline).allowDiskUse(true);
-
-      res.json({
-        success: true,
-        bookingRequests: requests,
-        total,
-        page,
-        totalPages,
-        limit,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1
-      });
-
-    } catch (error) {
-      console.error("[GET ALL BOOKING REQUESTS] (search/pagination)", error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to fetch booking requests.",
-        error: error.message
-      });
-    }
-  }
-
-  async getBookingRequestById(req, res) {
-    try {
-      const { id } = req.params;
-      if (!id) {
-        return res.status(400).json({ success: false, message: "Booking request ID required" });
-      }
-      const bookingRequest = await BookingRequests.findById(id)
-        .populate("package")
-        .populate({
-          path: "patient",
-          model: "PatientProfile",
-          populate: { path: "userId", model: "User" }
-        })
-        .populate({ path: "therapy", model: "Therapy" });
-
-      if (!bookingRequest) {
-        return res.status(404).json({ success: false, message: "Booking request not found" });
-      }
-
-      res.json({ success: true, bookingRequest });
-    } catch (error) {
-      console.error("[GET BOOKING REQUEST BY ID]", error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to fetch booking request.",
         error: error.message,
       });
     }
@@ -3703,7 +3758,8 @@ class ParentController {
       if (req.body.package) updateFields.package = req.body.package;
       if (req.body.patient) updateFields.Children = req.body.patient;
       if (req.body.sessions) updateFields.sessions = req.body.sessions;
-      if (req.body.therapy) updateFields.therapy = req.body.therapy;
+      // Remove therapyType: do not accept or update therapy at API level
+      // if (req.body.therapy) updateFields.therapy = req.body.therapy;
 
       if (Object.keys(updateFields).length === 0) {
         await session.abortTransaction();
@@ -3733,8 +3789,7 @@ class ParentController {
           path: "patient",
           model: "PatientProfile",
           populate: { path: "userId", model: "User" }
-        })
-        .populate({ path: "therapy", model: "TherapyType" });
+        });
 
       if (!bookingRequest) {
         await session.abortTransaction();
@@ -3790,6 +3845,162 @@ class ParentController {
     }
   }
 
+
+  // INSERT_YOUR_CODE
+
+  async getAllBookingRequests(req, res) {
+    try {
+      const parentUserId = req.user?.id;
+
+      let page = Number(req.query.page) || 1;
+      let limit = Math.max(1, Math.min(Number(req.query.limit) || 10, 100));
+      const skip = (page - 1) * limit;
+
+      const search = (req.query.search || "").trim();
+      let filter = {};
+
+      if (parentUserId) {
+        const user = await User.findById(parentUserId).lean();
+        if (!user) {
+          console.log("[getAllBookingRequests] User not found for id:", parentUserId);
+          return res.status(404).json({ success: false, message: "User not found" });
+        }
+        const myPatients = await PatientProfile.find({ userId: user._id }, '_id').lean();
+        const myPatientIds = myPatients.map(p => p._id);
+        console.log("[getAllBookingRequests] My patientIds:", myPatientIds);
+
+        if (myPatientIds.length > 0) {
+          filter.Children = { $in: myPatientIds };
+        } else {
+          console.log("[getAllBookingRequests] User has no associated patients.");
+          return res.json({ success: true, bookingRequests: [], total: 0, page, totalPages: 1 });
+        }
+      }
+
+      const aggregatePipeline = [
+        { $match: filter },
+        {
+          $lookup: {
+            from: "patientprofiles",
+            localField: "patient",
+            foreignField: "_id",
+            as: "patient",
+          }
+        },
+        { $unwind: "$patient" },
+        {
+          $lookup: {
+            from: "users",
+            localField: "patient.userId",
+            foreignField: "_id",
+            as: "patient.userObj",
+          }
+        },
+        {
+          $addFields: {
+            "patient.user": { $arrayElemAt: ["$patient.userObj", 0] }
+          }
+        },
+        // Removed therapyType lookup/unwind (commented)
+        {
+          $lookup: {
+            from: "packages",
+            localField: "package",
+            foreignField: "_id",
+            as: "package",
+          }
+        },
+        { $unwind: { path: "$package", preserveNullAndEmptyArrays: true } },
+      ];
+
+      if (search) {
+        const regex = new RegExp(search, "i");
+        console.log("[getAllBookingRequests] Applying search filter:", search);
+        aggregatePipeline.push({
+          $match: {
+            $or: [
+              { "patient.name": regex },
+              { "patient.patientId": regex },
+              { "patient.user.name": regex },
+              { "package.name": regex },
+              { "requestId": regex },
+              { "appointmentId": regex }
+            ]
+          }
+        });
+      }
+
+      const countPipeline = [...aggregatePipeline, { $count: "total" }];
+      const countResult = await BookingRequests.aggregate(countPipeline).allowDiskUse(true);
+      const total = countResult[0]?.total || 0;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      if (page > totalPages) page = totalPages;
+      const newSkip = (page - 1) * limit;
+
+      aggregatePipeline.push({ $sort: { createdAt: -1 } });
+      aggregatePipeline.push({ $skip: newSkip });
+      aggregatePipeline.push({ $limit: limit });
+
+      aggregatePipeline.push({
+        $project: { "patient.userObj": 0 }
+      });
+
+      console.log("[getAllBookingRequests] Running aggregate pipeline with skip:", newSkip, "limit:", limit);
+      const requests = await BookingRequests.aggregate(aggregatePipeline).allowDiskUse(true);
+      console.log("[getAllBookingRequests] Fetched bookingRequests count:", requests.length);
+
+      res.json({
+        success: true,
+        bookingRequests: requests,
+        total,
+        page,
+        totalPages,
+        limit,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      });
+
+    } catch (error) {
+      console.error("[GET ALL BOOKING REQUESTS] (search/pagination)", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch booking requests.",
+        error: error.message
+      });
+    }
+  }
+
+  async getBookingRequestById(req, res) {
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ success: false, message: "Booking request ID required" });
+      }
+      const bookingRequest = await BookingRequests.findById(id)
+        .populate("package")
+        .populate({
+          path: "patient",
+          model: "PatientProfile",
+          populate: { path: "userId", model: "User" }
+        });
+        // .populate({ path: "therapy", model: "Therapy" }); // Removed therapyType
+
+      if (!bookingRequest) {
+        return res.status(404).json({ success: false, message: "Booking request not found" });
+      }
+
+      res.json({ success: true, bookingRequest });
+    } catch (error) {
+      console.error("[GET BOOKING REQUEST BY ID]", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch booking request.",
+        error: error.message,
+      });
+    }
+  }
+
+ 
   async deleteBookingRequest(req, res) {
     const mongoose = (await import('mongoose')).default;
     const session = await mongoose.startSession();
@@ -3829,7 +4040,7 @@ class ParentController {
             resourceId: bookingRequest._id,
             details: {
               deletedBookingRequest: bookingRequest.toObject ? bookingRequest.toObject() : bookingRequest,
-              message: `Booking request deleted by userId=${req.user?.id || "?"}, patientId=${bookingRequest.patient}, packageId=${bookingRequest.package}, therapyId=${bookingRequest.therapy}`,
+              message: `Booking request deleted by userId=${req.user?.id || "?"}, patientId=${bookingRequest.patient}, packageId=${bookingRequest.package}`,
             },
             ipAddress: req.ip,
             userAgent: req.headers["user-agent"]

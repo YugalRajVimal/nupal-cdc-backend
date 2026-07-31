@@ -71,7 +71,7 @@ class TherapistController {
     let sendEmailPromise = null;
 
     try {
-      let { email, name } = req.body;
+      let { email, name, phone, password } = req.body;
 
       if (!email || typeof email !== "string") {
         await session.abortTransaction();
@@ -90,6 +90,31 @@ class TherapistController {
         return res.status(400).json({ success: false, message: "Name is required." });
       }
 
+      // Validate phone (optional but if provided, check type and length)
+      let phoneToSave = undefined;
+      if (phone) {
+        if (typeof phone !== "string" || phone.trim().length < 8) {
+          await session.abortTransaction();
+          session.endSession();
+          console.log("Error: Valid phone is required if provided.");
+          return res.status(400).json({ success: false, message: "A valid phone number is required." });
+        }
+        phoneToSave = phone.trim();
+      }
+
+      // Validate and hash password (optional but if provided, check min length)
+      let passwordHash = undefined;
+      if (password) {
+        if (typeof password !== "string" || password.length < 6) {
+          await session.abortTransaction();
+          session.endSession();
+          console.log("Error: Password must be at least 6 characters long.");
+          return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+        }
+        const bcrypt = (await import('bcrypt')).default;
+        passwordHash = await bcrypt.hash(password, 10);
+      }
+
       // Check if a therapist user with this email already exists (case-insensitive)
       const userExists = await User.findOne({ email: { $regex: `^${email}$`, $options: 'i' }, role: "therapist" }).session(session);
       if (userExists) {
@@ -103,8 +128,8 @@ class TherapistController {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresInMs = 1000 * 300; // 5 min
 
-      // Always create a new temp User record for sign up (never update existing)
-      const newUser = new User({
+      // Compose new user data
+      const newUserData = {
         email, // Stored as lowercase
         name,
         role: "therapist",
@@ -117,15 +142,20 @@ class TherapistController {
         status: "active",
         incompleteTherapistProfile: true,
         manualSignUp: true
-      });
+      };
+      if (phoneToSave) newUserData.phone = phoneToSave;
+      if (passwordHash) newUserData.passwordHash = passwordHash;
+
+      // Always create a new temp User record for sign up (never update existing)
+      const newUser = new User(newUserData);
       await newUser.save({ session });
 
       // Create TherapistProfile WITHOUT therapistId (it'll be set on completeProfile)
-      const therapistProfile = new TherapistProfile({
-        userId: newUser._id,
-        therapistId: newUser._id
-      });
-      await therapistProfile.save({ session });
+      // const therapistProfile = new TherapistProfile({
+      //   userId: newUser._id,
+      //   therapistId: newUser._id
+      // });
+      // await therapistProfile.save({ session });
 
       // Send OTP to email (nodemailer/sendgrid)
       try {
@@ -169,6 +199,8 @@ class TherapistController {
           details: {
             email,
             name,
+            phone: phoneToSave || null,
+            withPassword: !!password,
             message: `Therapist signup OTP sent to ${email}`,
             context: 'Therapist self-signup OTP requested and sent'
           },
@@ -434,6 +466,7 @@ class TherapistController {
         // generate and save new therapistId on creation
         const nextSeq = await getNextSequence("therapist");
         therapistId = generateTherapistId(nextSeq);
+        console.log("Creating new TherapistProfile:", { userId: therapistUserId, therapistId });
         therapistProfile = new TherapistProfile({
           userId: therapistUserId,
           therapistId,
@@ -445,8 +478,10 @@ class TherapistController {
         if (!therapistId) {
           const nextSeq = await getNextSequence("therapist");
           therapistId = generateTherapistId(nextSeq);
+          console.log("Assigning new therapistId to existing profile:", { therapistProfileId: therapistProfile._id, newTherapistId: therapistId });
           therapistProfile.therapistId = therapistId;
         }
+        console.log("Existing TherapistProfile found. Setting isPanelAccessible to false for profile:", therapistProfile._id);
         therapistProfile.isPanelAccessible = false; // always mark as NOT panel accessible
       }
 
