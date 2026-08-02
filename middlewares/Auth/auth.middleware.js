@@ -68,6 +68,15 @@ const jwtAuth = async (req, res, next) => {
         .json({ error: "Unauthorized: User not found in database." });
     }
 
+    // If accountVerified is false or not present, return unauthorized
+    if (!dbUser.accountVerified) {
+      return res
+        .status(401)
+        .json({
+          error: "Unauthorized: Account is not verified. Please verify your account before continuing.",
+        });
+    }
+
     if (["suspended", "deleted"].includes(dbUser.status)) {
       return res
         .status(403)

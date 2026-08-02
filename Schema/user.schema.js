@@ -45,6 +45,7 @@ const UserSchema = new mongoose.Schema(
 
     phoneVerified: { type: Boolean, default: false },
     emailVerified: { type: Boolean, default: false },
+    accountVerified: { type: Boolean, default: false },
     status: {
       type: String,
       enum: ["active", "suspended", "deleted"],

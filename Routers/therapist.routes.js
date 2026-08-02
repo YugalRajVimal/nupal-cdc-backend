@@ -13,6 +13,13 @@ therapistRouter.post(
   (req, res) => therapistController.therapistSignUpSendOTP(req, res)
 );
 
+// Therapist sign-up (resend OTP)
+therapistRouter.post(
+  '/signup/resend-otp',
+  (req, res) => therapistController.therapistSignUpResendOTP(req, res)
+);
+
+
 // Therapist sign-up (verify OTP)
 therapistRouter.post(
   '/signup/verify-otp',

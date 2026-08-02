@@ -13,6 +13,10 @@ const parentController = new ParentController();
 // Parent sign up - Send OTP
 parentRouter.post('/signup', (req, res) => parentController.parentSignUpSendOTP(req, res));
 
+// Endpoint for Parent sign up - Resend OTP
+parentRouter.post('/signup/resend-otp', (req, res) => parentController.parentSignUpResendOTP(req, res));
+
+
 // Parent sign up - Verify OTP
 parentRouter.post('/verify-otp', (req, res) => parentController.parentSignUpVerifyOTP(req, res));
 

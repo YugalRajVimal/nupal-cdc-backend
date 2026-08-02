@@ -135,9 +135,10 @@ class AuthController {
         return res.status(401).json({ message: "Invalid credentials or OTP" });
       }
 
-      // Clear OTP and set lastLogin
+      // Clear OTP, set lastLogin, AND mark accountVerified true
       user.otp = undefined;
       user.lastLogin = new Date();
+      user.accountVerified = true; // Make sure accountVerified is set here!
       await user.save({ session });
 
       // Generate JWT with profile info optionally
@@ -168,7 +169,8 @@ class AuthController {
             details: {
               changedFields: {
                 otp: { from: otp, to: undefined },
-                lastLogin: { from: null, to: (new Date()).toISOString() }
+                lastLogin: { from: null, to: (new Date()).toISOString() },
+                accountVerified: { from: false, to: true }
               },
               message: `Account verified with OTP for userId=${user._id} (${user.email || user.phone})`
             },
@@ -381,6 +383,13 @@ class AuthController {
 
       if (!user) {
         return res.status(401).json({ message: "Invalid credentials." });
+      }
+
+      // If account is not verified, require user to use forgot password first
+      if (!user.accountVerified) {
+        return res.status(403).json({
+          message: "Your account is not verified. Please use 'Forgot Password' to set a new password and verify your account before logging in."
+        });
       }
 
       // Check if passwordHash is set (for this user/role)

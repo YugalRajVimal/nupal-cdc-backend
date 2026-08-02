@@ -67,8 +67,9 @@ class TherapistController {
   async therapistSignUpSendOTP(req, res) {
     const session = await User.startSession();
     session.startTransaction();
-    let sendEmailError = null;
-    let sendEmailPromise = null;
+
+    let sendEmailError = null, whatsappError = null;
+    let sendEmailPromise = null, sendWhatsappPromise = null;
 
     try {
       let { email, name, phone, password } = req.body;
@@ -150,14 +151,7 @@ class TherapistController {
       const newUser = new User(newUserData);
       await newUser.save({ session });
 
-      // Create TherapistProfile WITHOUT therapistId (it'll be set on completeProfile)
-      // const therapistProfile = new TherapistProfile({
-      //   userId: newUser._id,
-      //   therapistId: newUser._id
-      // });
-      // await therapistProfile.save({ session });
-
-      // Send OTP to email (nodemailer/sendgrid)
+      // Send OTP to email (nodemailer/sendgrid) and WhatsApp (if number provided)
       try {
         // Lazy import, replace/remove if you have a top-level import
         const sendMail = (await import('../../config/nodeMailer.config.js')).default;
@@ -166,11 +160,23 @@ class TherapistController {
       } catch (err) {
         sendEmailError = err;
       }
+      if (phoneToSave) {
+        try {
+          sendWhatsappPromise = WhatsappController.sendOtpVerification({
+            destination: phoneToSave,
+            userName: name || "",
+            otp
+          }).catch((err) => { whatsappError = err; });
+        } catch (err) {
+          whatsappError = err;
+        }
+      }
 
-      // Await the sendMail promise if created
+      // Await the sending (both in parallel)
       if (sendEmailPromise) await sendEmailPromise;
+      if (sendWhatsappPromise) await sendWhatsappPromise;
 
-      // If email failed, treat as error
+      // If email failed, treat as error (hard fail)
       if (sendEmailError) {
         await session.abortTransaction();
         session.endSession();
@@ -180,6 +186,11 @@ class TherapistController {
           message: "Failed to send OTP to email address.",
           emailError: sendEmailError?.message || sendEmailError
         });
+      }
+      // If WhatsApp failed, log soft fail but do not block overall (like AuthController approach)
+      if (whatsappError) {
+        // Soft fail: log but don't block signup
+        console.error("TherapistSignUp OTP WhatsApp error:", whatsappError);
       }
 
       await session.commitTransaction();
@@ -202,7 +213,8 @@ class TherapistController {
             phone: phoneToSave || null,
             withPassword: !!password,
             message: `Therapist signup OTP sent to ${email}`,
-            context: 'Therapist self-signup OTP requested and sent'
+            context: 'Therapist self-signup OTP requested and sent',
+            whatsapp: phoneToSave ? (whatsappError ? (whatsappError?.message || "Failed to send OTP on WhatsApp") : "SENT") : '[Skipped WhatsApp OTP - only send if phone is available]'
           },
           ipAddress: req.ip,
           userAgent: req.headers['user-agent']
@@ -220,6 +232,137 @@ class TherapistController {
       return res.status(500).json({ success: false, message: "Server error." });
     }
   }
+
+  /**
+   * POST /therapist/resend-otp
+   * Body: { email: string }
+   * Resends OTP to the given email (and WhatsApp if phone is present), re-generating a new OTP.
+   * Only permits resending if there is a pending OTP or the user exists for signup.
+   */
+  async therapistSignUpResendOTP(req, res) {
+    const session = await User.startSession();
+    session.startTransaction();
+
+    let sendEmailError = null, whatsappError = null;
+    let sendEmailPromise = null, sendWhatsappPromise = null;
+
+    try {
+      let { email } = req.body;
+
+      if (!email || typeof email !== "string") {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ success: false, message: "Valid email is required." });
+      }
+
+      // Normalize email
+      email = email.trim().toLowerCase();
+
+      // Find existing user w/ pending signup as therapist
+      const user = await User.findOne({ email, role: "therapist" }).session(session);
+
+      if (!user) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ success: false, message: "No signup request found for this email." });
+      }
+
+      // Only allow resend if user has not completed signup (i.e. therapistId is not assigned)
+      if (user.therapistId) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ success: false, message: "Signup already completed for this email." });
+      }
+
+      // (Re-)Generate OTP and update expiry
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresInMs = 1000 * 300; // 5 minutes
+      const now = new Date();
+
+      user.signUpOTP = otp;
+      user.signUpOTPExpiresAt = new Date(now.getTime() + expiresInMs);
+      user.signUpOTPSentAt = now;
+      user.signUpOTPAttempts = 0;
+      user.signUpOTPLastUsedAt = null;
+      await user.save({ session });
+
+      // Send OTP via email and/or WhatsApp
+      let phone = user.phone;
+      let name = user.name;
+      let password = undefined; // Never expose password
+
+      // Email sending
+      if (email) {
+        sendEmailPromise = sendMail(email, "Your OTP Code", `Your OTP is: ${otp}`)
+          .catch((err) => { sendEmailError = err; });
+      }
+      // WhatsApp sending if phone present
+      if (phone) {
+        sendWhatsappPromise = WhatsappController.sendOtpVerification({
+          destination: phone,
+          userName: name || "",
+          otp
+        }).catch((err) => { whatsappError = err; });
+      }
+
+      // Await both as needed
+      if (sendEmailPromise) await sendEmailPromise;
+      if (sendWhatsappPromise) await sendWhatsappPromise;
+
+      if (sendEmailError) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(500).json({
+          success: false,
+          message: "Failed to send OTP to email address.",
+          emailError: sendEmailError?.message || sendEmailError
+        });
+      }
+      if (whatsappError) {
+        // Soft fail: log but don't block resend
+        console.error("TherapistSignUpResend OTP WhatsApp error:", whatsappError);
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // Optional: log for debugging/demo
+      console.log(`[TherapistSignup-Resend] OTP for ${email}:`, otp);
+
+      // ---- AUDIT LOG: OTP resent ----
+      try {
+        await AuditLogService.addLog({
+          action: 'THERAPIST_SIGNUP_OTP_RESENT',
+          user: user._id,
+          role: 'therapist',
+          resource: 'Therapist',
+          resourceId: user._id,
+          details: {
+            email,
+            name,
+            phone: phone || null,
+            message: `Therapist signup OTP resent to ${email}`,
+            context: 'Therapist self-signup OTP re-sent',
+            whatsapp: phone ? (whatsappError ? (whatsappError?.message || "Failed to send OTP on WhatsApp") : "SENT") : '[Skipped WhatsApp OTP - only send if phone is available]'
+          },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      } catch (logErr) {
+        // Still consider success, but log the error
+        console.log('Failed to write audit log (THERAPIST_SIGNUP_OTP_RESENT) in therapistSignUpResendOTP:', logErr);
+      }
+
+      return res.json({ success: true, message: "OTP resent to email address." });
+    } catch (e) {
+      await session.abortTransaction();
+      session.endSession();
+      console.log("Error in therapistSignUpResendOTP:", e);
+      return res.status(500).json({ success: false, message: "Server error." });
+    }
+  }
+
+
 
   /**
    * POST /therapist/verify-otp
@@ -243,7 +386,6 @@ class TherapistController {
 
       // Find the user-in-signup (either existing with pending signUpOTP, or never started)
       const signupUser = await User.findOne({ email, role: "therapist" }).session(session);
- 
 
       if (!signupUser || (!signupUser.signUpOTP || !signupUser.signUpOTPExpiresAt)) {
         await session.abortTransaction();
@@ -288,6 +430,8 @@ class TherapistController {
       if (!signupUser.authProvider) signupUser.authProvider = "otp";
       signupUser.status = "active";
       signupUser.incompleteTherapistProfile = true;
+      // Set accountVerified to true
+      signupUser.accountVerified = true;
 
       await signupUser.save({ session });
 
