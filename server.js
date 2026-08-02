@@ -14,6 +14,8 @@ const allowedOrigins = [
   "https://nupal-cdc-software.onrender.com",
   "https://booking.nupalcdc.com",
   "https://www.booking.nupalcdc.com",
+  "https://nupaltest.devyugal.in",
+  "https://www.nupaltest.devyugal.in",
   process.env.FRONTEND_URL
 ];
 
