@@ -149,6 +149,7 @@ async loginAsUser(req, res) {
         const { userId } = req.body;
 
         if (!userId) {
+            console.log("[loginAsUser] userId not provided in request body");
             await session.abortTransaction();
             session.endSession();
             return res.status(400).json({ error: "userId is required" });
@@ -157,6 +158,7 @@ async loginAsUser(req, res) {
         // Try to find user by ID in User collection (in transaction session)
         const user = await User.findById(userId).session(session);
         if (!user) {
+            console.log(`[loginAsUser] User with ID ${userId} not found`);
             await session.abortTransaction();
             session.endSession();
             return res.status(404).json({ error: "User not found" });
@@ -202,6 +204,7 @@ async loginAsUser(req, res) {
         session.endSession();
 
         // Return the token & role info
+        console.log(`[loginAsUser] Superadmin successfully logged in as userId=${user._id}, role=${user.role}`);
         return res.json({
             success: true,
             token,
@@ -215,7 +218,7 @@ async loginAsUser(req, res) {
     } catch (error) {
         await session.abortTransaction();
         session.endSession();
-        console.error("Error in loginAsUser:", error);
+        console.error("[loginAsUser] Error:", error);
         return res.status(500).json({ error: "Internal server error", details: error.message });
     }
 }

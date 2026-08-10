@@ -1698,37 +1698,46 @@ class ParentController {
 
   // INSERT_YOUR_CODE
 
+  /**
+   * Fetch all BookingRequests for the parent user
+   * Paginated and search-enabled. Returns bookingRequests with populated patient and package.
+   * Only returns booking requests where 'patient' field is linked to parent's children (patients)
+   */
   async getAllBookingRequests(req, res) {
     try {
+      // Get the authenticated user id
       const parentUserId = req.user?.id;
 
-      let page = Number(req.query.page) || 1;
+      // Pagination with defaults and limits
+      let page = Math.max(1, Number(req.query.page) || 1);
       let limit = Math.max(1, Math.min(Number(req.query.limit) || 10, 100));
       const skip = (page - 1) * limit;
 
-      const search = (req.query.search || "").trim();
-      let filter = {};
+      // Optional search
+      const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+
+      let matchFilter = {}; // for aggregate $match
 
       if (parentUserId) {
+        // Find all PatientProfiles where userId is parentUserId
         const user = await User.findById(parentUserId).lean();
         if (!user) {
-          console.log("[getAllBookingRequests] User not found for id:", parentUserId);
+          console.log("[getAllBookingRequests] User not found:", parentUserId);
           return res.status(404).json({ success: false, message: "User not found" });
         }
         const myPatients = await PatientProfile.find({ userId: user._id }, '_id').lean();
         const myPatientIds = myPatients.map(p => p._id);
-        console.log("[getAllBookingRequests] My patientIds:", myPatientIds);
-
-        if (myPatientIds.length > 0) {
-          filter.Children = { $in: myPatientIds };
-        } else {
-          console.log("[getAllBookingRequests] User has no associated patients.");
+        if (myPatientIds.length === 0) {
           return res.json({ success: true, bookingRequests: [], total: 0, page, totalPages: 1 });
         }
+        // BookingRequests.patient must be in myPatientIds
+        matchFilter.patient = { $in: myPatientIds };
       }
 
+      // Aggregate pipeline
       const aggregatePipeline = [
-        { $match: filter },
+        { $match: matchFilter },
+        // Populate patient
         {
           $lookup: {
             from: "patientprofiles",
@@ -1738,20 +1747,21 @@ class ParentController {
           }
         },
         { $unwind: "$patient" },
+        // Populate patient's user
         {
           $lookup: {
             from: "users",
             localField: "patient.userId",
             foreignField: "_id",
-            as: "patient.userObj",
+            as: "patientUser"
           }
         },
         {
           $addFields: {
-            "patient.user": { $arrayElemAt: ["$patient.userObj", 0] }
+            "patient.user": { $arrayElemAt: ["$patientUser", 0] }
           }
         },
-        // Removed therapyType lookup/unwind (commented)
+        // Populate package
         {
           $lookup: {
             from: "packages",
@@ -1763,9 +1773,9 @@ class ParentController {
         { $unwind: { path: "$package", preserveNullAndEmptyArrays: true } },
       ];
 
+      // Add search to pipeline if needed
       if (search) {
         const regex = new RegExp(search, "i");
-        console.log("[getAllBookingRequests] Applying search filter:", search);
         aggregatePipeline.push({
           $match: {
             $or: [
@@ -1774,34 +1784,41 @@ class ParentController {
               { "patient.user.name": regex },
               { "package.name": regex },
               { "requestId": regex },
-              { "appointmentId": regex }
+              // appointmentId is an ObjectId, convert to string for regex match
+              {
+                $expr: {
+                  $regexMatch: {
+                    input: { $toString: "$appointmentId" },
+                    regex: regex
+                  }
+                }
+              }
             ]
           }
         });
       }
 
-      const countPipeline = [...aggregatePipeline, { $count: "total" }];
-      const countResult = await BookingRequests.aggregate(countPipeline).allowDiskUse(true);
-      const total = countResult[0]?.total || 0;
+      // Get total count after filtering and search
+      const totalCountPipeline = [...aggregatePipeline, { $count: "total" }];
+      const totalResult = await BookingRequests.aggregate(totalCountPipeline).allowDiskUse(true);
+      const total = (totalResult[0]?.total) || 0;
       const totalPages = Math.max(1, Math.ceil(total / limit));
+
+      // Clamp page in case it overflows after search filters
       if (page > totalPages) page = totalPages;
-      const newSkip = (page - 1) * limit;
+      const finalSkip = (page - 1) * limit;
 
+      // Add sorting, pagination, and projection
       aggregatePipeline.push({ $sort: { createdAt: -1 } });
-      aggregatePipeline.push({ $skip: newSkip });
+      aggregatePipeline.push({ $skip: finalSkip });
       aggregatePipeline.push({ $limit: limit });
+      aggregatePipeline.push({ $project: { "patientUser": 0 } }); // Do not return patientUser array (now merged in patient.user)
 
-      aggregatePipeline.push({
-        $project: { "patient.userObj": 0 }
-      });
+      const bookingRequests = await BookingRequests.aggregate(aggregatePipeline).allowDiskUse(true);
 
-      console.log("[getAllBookingRequests] Running aggregate pipeline with skip:", newSkip, "limit:", limit);
-      const requests = await BookingRequests.aggregate(aggregatePipeline).allowDiskUse(true);
-      console.log("[getAllBookingRequests] Fetched bookingRequests count:", requests.length);
-
-      res.json({
+      return res.json({
         success: true,
-        bookingRequests: requests,
+        bookingRequests,
         total,
         page,
         totalPages,
@@ -1809,10 +1826,9 @@ class ParentController {
         hasNextPage: page < totalPages,
         hasPrevPage: page > 1
       });
-
     } catch (error) {
       console.error("[GET ALL BOOKING REQUESTS] (search/pagination)", error);
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
         message: "Failed to fetch booking requests.",
         error: error.message
