@@ -55,9 +55,98 @@ class FinancesAdminController {
   //   }
   // }
 
+    // async getFinancesDetails(req, res) {
+    //   try {
+    //     // Accept query params for search, pagination, sort
+    //     let {
+    //       page = 1,
+    //       pageSize = 10,
+    //       search = "",
+    //       sortField = "date",
+    //       sortOrder = "desc"
+    //     } = req.query;
+
+    //     page = parseInt(page, 10) || 1;
+    //     pageSize = parseInt(pageSize, 10) || 20;
+
+    //     // Only get income records
+    //     let query = { type: "income" };
+    //     // Build sorting object
+    //     let sortObj = {};
+    //     if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+
+    //     let finances = await Finances.find(query)
+    //       .sort(sortObj)
+    //       .lean();
+
+    //     // In-memory search filtering
+    //     if (search && typeof search === "string" && search.trim().length > 0) {
+    //       const regex = new RegExp(search.trim(), "i");
+    //       finances = finances.filter(f =>
+    //         (f.description && regex.test(f.description)) ||
+    //         (f.creditDebitStatus && regex.test(f.creditDebitStatus)) ||
+    //         (f.type && regex.test(f.type)) ||
+    //         (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
+    //         (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
+    //         (f.paymentMethod && regex.test(f.paymentMethod)) ||
+    //         (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u))) ||
+    //         (f.childrenName && regex.test(f.childrenName)) ||
+    //         (f.childrenId && regex.test(f.childrenId))
+    //       );
+    //     }
+
+    //     // Totals for income only
+    //     let totalIncome = 0;
+
+    //     finances.forEach(finance => {
+    //       totalIncome += finance.amount;
+    //     });
+
+    //     // Pagination
+    //     const total = finances.length;
+    //     const offset = (page - 1) * pageSize;
+    //     const pagedFinances = finances.slice(offset, offset + pageSize);
+
+    //     // Prepare logs for output, including childrenName and childrenId
+    //     const financeLogs = pagedFinances.map(finance => ({
+    //       _id: finance._id,
+    //       Date: finance.date,
+    //       Description: finance.description,
+    //       Type: finance.type.charAt(0).toUpperCase() + finance.type.slice(1),
+    //       Amount: finance.amount,
+    //       CreditDebitStatus: finance.creditDebitStatus,
+    //       PaymentMethod: finance.paymentMethod,
+    //       Utr: finance.utr,
+    //       ChildrenName: finance.childrenName,
+    //       ChildrenId: finance.childrenId,
+    //       CreatedAt: finance.createdAt,
+    //       UpdatedAt: finance.updatedAt,
+    //     }));
+
+    //     return res.json({
+    //       success: true,
+    //       totalIncome,
+    //       // Return 0 for expense and netBalance since only income is included
+    //       totalExpenses: 0,
+    //       netBalance: totalIncome,
+    //       page,
+    //       pageSize,
+    //       total,
+    //       totalPages: Math.ceil(total / pageSize),
+    //       logs: financeLogs
+    //     });
+    //   } catch (error) {
+    //     console.error("[ADMIN FINANCE DETAILS] Error:", error);
+    //     return res.status(500).json({
+    //       success: false,
+    //       message: "Failed to fetch finance details",
+    //       error: error.message
+    //     });
+    //   }
+    // }
+
     async getFinancesDetails(req, res) {
       try {
-        // Accept query params for search, pagination, sort
         let {
           page = 1,
           pageSize = 10,
@@ -65,78 +154,209 @@ class FinancesAdminController {
           sortField = "date",
           sortOrder = "desc"
         } = req.query;
-
+    
         page = parseInt(page, 10) || 1;
-        pageSize = parseInt(pageSize, 10) || 20;
-
-        // Only get income records
-        let query = { type: "income" };
-        // Build sorting object
-        let sortObj = {};
-        if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
-
+        pageSize = parseInt(pageSize, 10) || 10;
+    
+        // --------------------------------------------------
+        // DATE RANGE
+        // Current month + previous month only
+        //
+        // Example:
+        // If current month = August
+        // Included: July + August
+        // Excluded: June and earlier
+        // --------------------------------------------------
+        const now = new Date();
+    
+        // Start of previous month
+        const startOfPreviousMonth = new Date(
+          now.getFullYear(),
+          now.getMonth() - 1,
+          1,
+          0,
+          0,
+          0,
+          0
+        );
+    
+        // Start of next month
+        // Using $lt means the entire current month is included.
+        const startOfNextMonth = new Date(
+          now.getFullYear(),
+          now.getMonth() + 1,
+          1,
+          0,
+          0,
+          0,
+          0
+        );
+    
+        // --------------------------------------------------
+        // QUERY
+        // Only income from previous month + current month
+        // --------------------------------------------------
+        const query = {
+          type: "income",
+          date: {
+            $gte: startOfPreviousMonth,
+            $lt: startOfNextMonth
+          }
+        };
+    
+        // --------------------------------------------------
+        // SORT
+        // --------------------------------------------------
+        const sortObj = {};
+    
+        if (sortField) {
+          sortObj[sortField] =
+            sortOrder === "asc" ? 1 : -1;
+        }
+    
+        // --------------------------------------------------
+        // GET FINANCES
+        // --------------------------------------------------
         let finances = await Finances.find(query)
           .sort(sortObj)
           .lean();
-
-        // In-memory search filtering
-        if (search && typeof search === "string" && search.trim().length > 0) {
+    
+        // --------------------------------------------------
+        // SEARCH
+        // --------------------------------------------------
+        if (
+          search &&
+          typeof search === "string" &&
+          search.trim().length > 0
+        ) {
           const regex = new RegExp(search.trim(), "i");
-          finances = finances.filter(f =>
-            (f.description && regex.test(f.description)) ||
-            (f.creditDebitStatus && regex.test(f.creditDebitStatus)) ||
-            (f.type && regex.test(f.type)) ||
-            (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
-            (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
-            (f.paymentMethod && regex.test(f.paymentMethod)) ||
-            (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u))) ||
-            (f.childrenName && regex.test(f.childrenName)) ||
-            (f.childrenId && regex.test(f.childrenId))
+    
+          finances = finances.filter(finance =>
+            (finance.description &&
+              regex.test(finance.description)) ||
+    
+            (finance.creditDebitStatus &&
+              regex.test(finance.creditDebitStatus)) ||
+    
+            (finance.type &&
+              regex.test(finance.type)) ||
+    
+            (finance.amount !== undefined &&
+              finance.amount !== null &&
+              regex.test(finance.amount.toString())) ||
+    
+            (finance.date &&
+              regex.test(
+                new Date(finance.date)
+                  .toISOString()
+                  .slice(0, 10)
+              )) ||
+    
+            (finance.paymentMethod &&
+              regex.test(finance.paymentMethod)) ||
+    
+            (finance.utr &&
+              Array.isArray(finance.utr) &&
+              finance.utr.some(u => regex.test(u))) ||
+    
+            (finance.childrenName &&
+              regex.test(finance.childrenName)) ||
+    
+            (finance.childrenId &&
+              regex.test(finance.childrenId))
           );
         }
-
-        // Totals for income only
-        let totalIncome = 0;
-
-        finances.forEach(finance => {
-          totalIncome += finance.amount;
-        });
-
-        // Pagination
+    
+        // --------------------------------------------------
+        // TOTAL INCOME
+        // Only previous month + current month
+        // --------------------------------------------------
+        const totalIncome = finances.reduce(
+          (total, finance) =>
+            total + Number(finance.amount || 0),
+          0
+        );
+    
+        // --------------------------------------------------
+        // PAGINATION
+        // --------------------------------------------------
         const total = finances.length;
+    
         const offset = (page - 1) * pageSize;
-        const pagedFinances = finances.slice(offset, offset + pageSize);
-
-        // Prepare logs for output, including childrenName and childrenId
+    
+        const pagedFinances = finances.slice(
+          offset,
+          offset + pageSize
+        );
+    
+        // --------------------------------------------------
+        // FORMAT LOGS
+        // --------------------------------------------------
         const financeLogs = pagedFinances.map(finance => ({
           _id: finance._id,
+    
           Date: finance.date,
+    
           Description: finance.description,
-          Type: finance.type.charAt(0).toUpperCase() + finance.type.slice(1),
+    
+          Type:
+            finance.type.charAt(0).toUpperCase() +
+            finance.type.slice(1),
+    
           Amount: finance.amount,
-          CreditDebitStatus: finance.creditDebitStatus,
-          PaymentMethod: finance.paymentMethod,
+    
+          CreditDebitStatus:
+            finance.creditDebitStatus,
+    
+          PaymentMethod:
+            finance.paymentMethod,
+    
           Utr: finance.utr,
-          ChildrenName: finance.childrenName,
-          ChildrenId: finance.childrenId,
-          CreatedAt: finance.createdAt,
-          UpdatedAt: finance.updatedAt,
+    
+          ChildrenName:
+            finance.childrenName,
+    
+          ChildrenId:
+            finance.childrenId,
+    
+          CreatedAt:
+            finance.createdAt,
+    
+          UpdatedAt:
+            finance.updatedAt
         }));
-
+    
+        // --------------------------------------------------
+        // RESPONSE
+        // --------------------------------------------------
         return res.json({
           success: true,
+    
+          // Only previous month + current month
           totalIncome,
-          // Return 0 for expense and netBalance since only income is included
+    
+          // Since this controller only gets income
           totalExpenses: 0,
+    
           netBalance: totalIncome,
+    
           page,
+    
           pageSize,
+    
           total,
+    
           totalPages: Math.ceil(total / pageSize),
+    
           logs: financeLogs
         });
+    
       } catch (error) {
-        console.error("[ADMIN FINANCE DETAILS] Error:", error);
+        console.error(
+          "[ADMIN FINANCE DETAILS] Error:",
+          error
+        );
+    
         return res.status(500).json({
           success: false,
           message: "Failed to fetch finance details",

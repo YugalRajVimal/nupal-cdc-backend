@@ -228,6 +228,117 @@ class CashfreeController {
   };
 
   // Handler to confirm order status with Cashfree
+  // confirmStatus = async (req, res) => {
+  //   const { order_id } = req.params;
+
+  //   if (!order_id) {
+  //     return res.status(400).json({ error: "order_id is required in the URL params" });
+  //   }
+
+  //   const headers = {
+  //     "accept": "application/json",
+  //     "x-api-version": "2025-01-01",
+  //     "x-client-id": process.env.CASHFREE_CLIENT_ID,
+  //     "x-client-secret": process.env.CASHFREE_CLIENT_SECRET
+  //   };
+
+  //   try {
+  //     const url = `https://api.cashfree.com/pg/orders/${order_id}`;
+  //     const response = await fetch(url, { method: "GET", headers });
+  //     const data = await response.json();
+
+  //     if (!response.ok) {
+  //       return res.status(response.status).json({
+  //         error: data?.message || "Failed to fetch order status from Cashfree",
+  //         details: data
+  //       });
+  //     }
+
+  //     // Import models
+  //     const Payment = (await import('../../Schema/payment.schema.js')).default;
+  //     const Finances = (await import('../../Schema/finances.schema.js')).default;
+  //     const Booking = (await import('../../Schema/booking.schema.js')).default;
+
+  //     // Find payment by cashfree.order_id
+  //     const payment = await Payment.findOne({ 'cashfree.order_id': order_id });
+
+  //     let financeRecord = null;
+
+  //     if (payment && data?.order_status) {
+  //       // 'PAID' → create the finances record directly (never check existence)
+  //       switch (data.order_status) {
+  //         case 'PAID':
+  //           payment.status = 'paid';
+  //           payment.amountPaid = data.order_amount || payment.amountPaid || 0;
+  //           payment.paymentTime = data.payment_time ? new Date(data.payment_time) : new Date();
+
+  //           // Gather childrenName, childrenId, and description from Booking (if exists)
+  //           let childrenName = payment.childrenName || undefined;
+  //           let childrenId = payment.childrenId || undefined;
+  //           let description = payment.remark || `Cashfree Payment for order ${order_id}`;
+  //           try {
+  //             const booking = await Booking.findOne({ payment: payment._id }).populate('patient');
+  //             if (booking) {
+  //               if (booking.patient && booking.patient.name) {
+  //                 childrenName = booking.patient.name;
+  //                 childrenId = String(booking.patient.patientId || booking.patient._id);
+  //               }
+  //               description = `Payment for ${childrenName ? childrenName : "patient"} (Order ${order_id})`;
+  //             }
+  //           } catch (e) {
+  //             // ignore any issues getting names
+  //           }
+
+  //           financeRecord = await Finances.create({
+  //             date: payment.paymentTime || new Date(),
+  //             description,
+  //             type: 'income',
+  //             amount: payment.amountPaid || payment.amount,
+  //             creditDebitStatus: 'credited',
+  //             paymentMethod: 'cashfree',
+  //             utr: payment.utr && payment.utr.length ? payment.utr : [order_id],
+  //             childrenName,
+  //             childrenId
+  //           });
+  //           break;
+  //         case 'FAILED':
+  //           payment.status = 'failed';
+  //           break;
+  //         case 'EXPIRED':
+  //           payment.status = 'failed';
+  //           break;
+  //         case 'ACTIVE':
+  //           payment.status = 'pending';
+  //           break;
+  //         default:
+  //           break;
+  //       }
+  //       // always update latest cashfree details
+  //       payment.cashfree = {
+  //         ...(payment.cashfree || {}),
+  //         ...data,
+  //       };
+  //       await payment.save();
+  //     }
+
+  //     return res.status(200).json({
+  //       orderStatus: data,
+  //       paymentStatusMarked: payment ? payment.status : null,
+  //       financeRecord: financeRecord
+  //         ? {
+  //           _id: financeRecord._id,
+  //           amount: financeRecord.amount,
+  //           type: financeRecord.type,
+  //           date: financeRecord.date,
+  //           paymentMethod: financeRecord.paymentMethod
+  //         }
+  //         : null
+  //     });
+  //   } catch (error) {
+  //     console.error("Error confirming Cashfree order status:", error);
+  //     return res.status(500).json({ error: "Internal Server Error" });
+  //   }
+  // };
   confirmStatus = async (req, res) => {
     const { order_id } = req.params;
 
@@ -257,7 +368,6 @@ class CashfreeController {
       // Import models
       const Payment = (await import('../../Schema/payment.schema.js')).default;
       const Finances = (await import('../../Schema/finances.schema.js')).default;
-      const Booking = (await import('../../Schema/booking.schema.js')).default;
 
       // Find payment by cashfree.order_id
       const payment = await Payment.findOne({ 'cashfree.order_id': order_id });
@@ -267,27 +377,23 @@ class CashfreeController {
       if (payment && data?.order_status) {
         // 'PAID' → create the finances record directly (never check existence)
         switch (data.order_status) {
-          case 'PAID':
+          case 'PAID': {
             payment.status = 'paid';
             payment.amountPaid = data.order_amount || payment.amountPaid || 0;
             payment.paymentTime = data.payment_time ? new Date(data.payment_time) : new Date();
 
-            // Gather childrenName, childrenId, and description from Booking (if exists)
-            let childrenName = payment.childrenName || undefined;
-            let childrenId = payment.childrenId || undefined;
-            let description = payment.remark || `Cashfree Payment for order ${order_id}`;
-            try {
-              const booking = await Booking.findOne({ payment: payment._id }).populate('patient');
-              if (booking) {
-                if (booking.patient && booking.patient.name) {
-                  childrenName = booking.patient.name;
-                  childrenId = String(booking.patient.patientId || booking.patient._id);
-                }
-                description = `Payment for ${childrenName ? childrenName : "patient"} (Order ${order_id})`;
-              }
-            } catch (e) {
-              // ignore any issues getting names
+            // Gather childrenName / childrenId from cashfree.customer
+            const childrenName = payment.childrenName || payment.cashfree?.customer?.name || undefined;
+            const childrenId = payment.childrenId || payment.cashfree?.customer?.customer_id || undefined;
+
+            // Booking display id (e.g. B00095) parsed from order_note, fallback to cashfree order_id
+            let bookingDisplayId = order_id;
+            const noteMatch = data?.order_note?.match(/\b([A-Z]\d{5,})\b/);
+            if (noteMatch) {
+              bookingDisplayId = noteMatch[1];
             }
+
+            const description = payment.remark || `Cashfree Payment for Booking ${bookingDisplayId}`;
 
             financeRecord = await Finances.create({
               date: payment.paymentTime || new Date(),
@@ -301,6 +407,7 @@ class CashfreeController {
               childrenId
             });
             break;
+          }
           case 'FAILED':
             payment.status = 'failed';
             break;
