@@ -1,6 +1,24 @@
 import mongoose from 'mongoose';
 const { Schema } = mongoose;
 
+const TransactionSchema = new Schema({
+  amount: { type: Number, required: true },
+  paymentMethod: {
+    type: String,
+    enum: ['cashfree', 'online', 'cash', 'wallet'],
+    required: true,
+  },
+  utr: { type: [String], default: [] },
+  paymentTime: { type: Date, default: Date.now },
+  type: {
+    type: String,
+    enum: ['full', 'partial', 'advance', 'wallet_sweep', 'refund'],
+    default: 'partial',
+  },
+  remark: { type: String },
+  financeRecord: { type: Schema.Types.ObjectId, ref: 'Finances' }, // back-link, useful for backfill/audit
+}, { _id: false, timestamps: { createdAt: 'recordedAt', updatedAt: false } });
+
 // Embedded block for Cashfree session/order linkage
 const CashfreeSchema = new Schema({
   cf_order_id: { type: String }, // Cashfree's order_id (opaque, required for refunds/webhooks)
@@ -66,7 +84,9 @@ const PaymentSchema = new Schema({
   remark: { type: String },
 
   // --- Cashfree critical bridge block (do not remove) ---
-  cashfree: { type: CashfreeSchema, default: undefined }
+  cashfree: { type: CashfreeSchema, default: undefined },
+
+  transactions: { type: [TransactionSchema], default: [] },
 }, { timestamps: true });
 
 const Payment = mongoose.model('Payment', PaymentSchema);

@@ -228,6 +228,7 @@ class CashfreeController {
   };
 
   // Handler to confirm order status with Cashfree
+ 
   // confirmStatus = async (req, res) => {
   //   const { order_id } = req.params;
 
@@ -257,7 +258,6 @@ class CashfreeController {
   //     // Import models
   //     const Payment = (await import('../../Schema/payment.schema.js')).default;
   //     const Finances = (await import('../../Schema/finances.schema.js')).default;
-  //     const Booking = (await import('../../Schema/booking.schema.js')).default;
 
   //     // Find payment by cashfree.order_id
   //     const payment = await Payment.findOne({ 'cashfree.order_id': order_id });
@@ -267,27 +267,23 @@ class CashfreeController {
   //     if (payment && data?.order_status) {
   //       // 'PAID' → create the finances record directly (never check existence)
   //       switch (data.order_status) {
-  //         case 'PAID':
+  //         case 'PAID': {
   //           payment.status = 'paid';
   //           payment.amountPaid = data.order_amount || payment.amountPaid || 0;
   //           payment.paymentTime = data.payment_time ? new Date(data.payment_time) : new Date();
 
-  //           // Gather childrenName, childrenId, and description from Booking (if exists)
-  //           let childrenName = payment.childrenName || undefined;
-  //           let childrenId = payment.childrenId || undefined;
-  //           let description = payment.remark || `Cashfree Payment for order ${order_id}`;
-  //           try {
-  //             const booking = await Booking.findOne({ payment: payment._id }).populate('patient');
-  //             if (booking) {
-  //               if (booking.patient && booking.patient.name) {
-  //                 childrenName = booking.patient.name;
-  //                 childrenId = String(booking.patient.patientId || booking.patient._id);
-  //               }
-  //               description = `Payment for ${childrenName ? childrenName : "patient"} (Order ${order_id})`;
-  //             }
-  //           } catch (e) {
-  //             // ignore any issues getting names
+  //           // Gather childrenName / childrenId from cashfree.customer
+  //           const childrenName = payment.childrenName || payment.cashfree?.customer?.name || undefined;
+  //           const childrenId = payment.childrenId || payment.cashfree?.customer?.customer_id || undefined;
+
+  //           // Booking display id (e.g. B00095) parsed from order_note, fallback to cashfree order_id
+  //           let bookingDisplayId = order_id;
+  //           const noteMatch = data?.order_note?.match(/\b([A-Z]\d{5,})\b/);
+  //           if (noteMatch) {
+  //             bookingDisplayId = noteMatch[1];
   //           }
+
+  //           const description = payment.remark || `Cashfree Payment for Booking ${bookingDisplayId}`;
 
   //           financeRecord = await Finances.create({
   //             date: payment.paymentTime || new Date(),
@@ -301,6 +297,7 @@ class CashfreeController {
   //             childrenId
   //           });
   //           break;
+  //         }
   //         case 'FAILED':
   //           payment.status = 'failed';
   //           break;
@@ -339,72 +336,82 @@ class CashfreeController {
   //     return res.status(500).json({ error: "Internal Server Error" });
   //   }
   // };
+
   confirmStatus = async (req, res) => {
     const { order_id } = req.params;
-
+  
     if (!order_id) {
       return res.status(400).json({ error: "order_id is required in the URL params" });
     }
-
+  
     const headers = {
       "accept": "application/json",
       "x-api-version": "2025-01-01",
       "x-client-id": process.env.CASHFREE_CLIENT_ID,
       "x-client-secret": process.env.CASHFREE_CLIENT_SECRET
     };
-
+  
     try {
       const url = `https://api.cashfree.com/pg/orders/${order_id}`;
       const response = await fetch(url, { method: "GET", headers });
       const data = await response.json();
-
+  
       if (!response.ok) {
         return res.status(response.status).json({
           error: data?.message || "Failed to fetch order status from Cashfree",
           details: data
         });
       }
-
-      // Import models
+  
       const Payment = (await import('../../Schema/payment.schema.js')).default;
       const Finances = (await import('../../Schema/finances.schema.js')).default;
-
-      // Find payment by cashfree.order_id
+  
       const payment = await Payment.findOne({ 'cashfree.order_id': order_id });
-
+  
       let financeRecord = null;
-
+  
       if (payment && data?.order_status) {
-        // 'PAID' → create the finances record directly (never check existence)
+        if (!Array.isArray(payment.transactions)) payment.transactions = [];
+  
         switch (data.order_status) {
           case 'PAID': {
+            const paidAmount = data.order_amount || payment.amountPaid || 0;
             payment.status = 'paid';
-            payment.amountPaid = data.order_amount || payment.amountPaid || 0;
+            payment.amountPaid = paidAmount;
             payment.paymentTime = data.payment_time ? new Date(data.payment_time) : new Date();
-
-            // Gather childrenName / childrenId from cashfree.customer
+  
             const childrenName = payment.childrenName || payment.cashfree?.customer?.name || undefined;
             const childrenId = payment.childrenId || payment.cashfree?.customer?.customer_id || undefined;
-
-            // Booking display id (e.g. B00095) parsed from order_note, fallback to cashfree order_id
+  
             let bookingDisplayId = order_id;
             const noteMatch = data?.order_note?.match(/\b([A-Z]\d{5,})\b/);
             if (noteMatch) {
               bookingDisplayId = noteMatch[1];
             }
-
+  
             const description = payment.remark || `Cashfree Payment for Booking ${bookingDisplayId}`;
-
+            const utrForRecord = payment.utr && payment.utr.length ? payment.utr : [order_id];
+  
             financeRecord = await Finances.create({
               date: payment.paymentTime || new Date(),
               description,
               type: 'income',
-              amount: payment.amountPaid || payment.amount,
+              amount: paidAmount || payment.amount,
               creditDebitStatus: 'credited',
               paymentMethod: 'cashfree',
-              utr: payment.utr && payment.utr.length ? payment.utr : [order_id],
+              utr: utrForRecord,
               childrenName,
               childrenId
+            });
+  
+            payment.transactions.push({
+              amount: paidAmount || payment.amount,
+              paymentMethod: 'cashfree',
+              utr: utrForRecord,
+              paymentTime: payment.paymentTime,
+              type: 'full',
+              remark: description,
+              financeRecord: financeRecord._id,
             });
             break;
           }
@@ -420,14 +427,13 @@ class CashfreeController {
           default:
             break;
         }
-        // always update latest cashfree details
         payment.cashfree = {
           ...(payment.cashfree || {}),
           ...data,
         };
         await payment.save();
       }
-
+  
       return res.status(200).json({
         orderStatus: data,
         paymentStatusMarked: payment ? payment.status : null,
@@ -447,10 +453,65 @@ class CashfreeController {
     }
   };
   // Handler for Cashfree Webhook (called by Cashfree for status update)
+  // handleWebhook = async (req, res) => {
+  //   console.log("Cashfree Webhook: Started");
+  //   try {
+  //     // Cashfree webhook data is in req.body
+  //     const body = req.body;
+  //     const order_id = body?.data?.order?.order_id;
+  //     const payment_status = body?.data?.payment?.payment_status;
+  //     const transaction_amount = Number(body?.data?.payment?.payment_amount || 0);
+  //     const payment_time = body?.data?.payment?.payment_time
+  //       ? new Date(body.data.payment.payment_time)
+  //       : new Date();
+
+  //     // NOTE: Here, we can't link Cashfree's order_id to our Payment record directly anymore,
+  //     // unless orderId is stored in Payment for cross-reference at order creation.
+  //     // If NOT stored, you need to map order_id -> paymentId in some other way.
+  //     // Here, still trying with paymentId=order_id for backward-compatibility/fallback.
+
+  //     // Find the payment based on Cashfree order_id (not our paymentId)
+  //     const payment = await Payment.findOne({ "cashfree.order_id": order_id });
+  //     if (!payment) {
+  //       console.warn("Payment not found for cashfree order_id", order_id);
+  //       return res.status(404).send("Payment record not found");
+  //     }
+
+  //     if (payment_status === "SUCCESS") {
+  //       payment.status = "paid";
+  //       payment.amountPaid = transaction_amount;
+  //       payment.paymentTime = payment_time;
+  //       await payment.save();
+
+  //       // Link back to booking (if any): update status, etc.
+  //       const booking = await Booking.findOne({ payment: payment._id });
+  //       if (booking) {
+  //         // Optionally update booking state
+  //         // E.g. booking.status = "paid"; (if you have such field)
+  //         await booking.save();
+  //       }
+  //       console.log(`Payment ${order_id}: marked as paid`);
+  //     } else if (payment_status === "FAILED") {
+  //       payment.status = "failed";
+  //       await payment.save();
+  //       console.log(`Payment ${order_id}: marked as failed`);
+  //     } else {
+  //       // Possibly handle pending/partiallypaid/etc. cases
+  //       payment.status = payment_status.toLowerCase();
+  //       await payment.save();
+  //       console.log(`Payment ${order_id}: updated status ${payment_status}`);
+  //     }
+
+  //     res.status(200).send("Webhook processed successfully");
+  //   } catch (error) {
+  //     console.error("Error handling Cashfree webhook", error);
+  //     res.status(500).json({ error: "Internal Server Error" });
+  //   }
+  // };
+
   handleWebhook = async (req, res) => {
     console.log("Cashfree Webhook: Started");
     try {
-      // Cashfree webhook data is in req.body
       const body = req.body;
       const order_id = body?.data?.order?.order_id;
       const payment_status = body?.data?.payment?.payment_status;
@@ -458,30 +519,34 @@ class CashfreeController {
       const payment_time = body?.data?.payment?.payment_time
         ? new Date(body.data.payment.payment_time)
         : new Date();
-
-      // NOTE: Here, we can't link Cashfree's order_id to our Payment record directly anymore,
-      // unless orderId is stored in Payment for cross-reference at order creation.
-      // If NOT stored, you need to map order_id -> paymentId in some other way.
-      // Here, still trying with paymentId=order_id for backward-compatibility/fallback.
-
-      // Find the payment based on Cashfree order_id (not our paymentId)
+      const cf_payment_id = body?.data?.payment?.cf_payment_id;
+  
       const payment = await Payment.findOne({ "cashfree.order_id": order_id });
       if (!payment) {
         console.warn("Payment not found for cashfree order_id", order_id);
         return res.status(404).send("Payment record not found");
       }
-
+  
+      if (!Array.isArray(payment.transactions)) payment.transactions = [];
+  
       if (payment_status === "SUCCESS") {
         payment.status = "paid";
         payment.amountPaid = transaction_amount;
         payment.paymentTime = payment_time;
+  
+        payment.transactions.push({
+          amount: transaction_amount,
+          paymentMethod: "cashfree",
+          utr: cf_payment_id ? [String(cf_payment_id)] : (payment.utr && payment.utr.length ? payment.utr : [order_id]),
+          paymentTime: payment_time,
+          type: "full",
+          remark: `Cashfree webhook SUCCESS for order ${order_id}`,
+        });
+  
         await payment.save();
-
-        // Link back to booking (if any): update status, etc.
+  
         const booking = await Booking.findOne({ payment: payment._id });
         if (booking) {
-          // Optionally update booking state
-          // E.g. booking.status = "paid"; (if you have such field)
           await booking.save();
         }
         console.log(`Payment ${order_id}: marked as paid`);
@@ -490,12 +555,11 @@ class CashfreeController {
         await payment.save();
         console.log(`Payment ${order_id}: marked as failed`);
       } else {
-        // Possibly handle pending/partiallypaid/etc. cases
         payment.status = payment_status.toLowerCase();
         await payment.save();
         console.log(`Payment ${order_id}: updated status ${payment_status}`);
       }
-
+  
       res.status(200).send("Webhook processed successfully");
     } catch (error) {
       console.error("Error handling Cashfree webhook", error);
