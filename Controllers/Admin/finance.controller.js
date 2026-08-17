@@ -55,122 +55,122 @@ class FinancesAdminController {
   //   }
   // }
 
-    async getFinancesDetails(req, res) {
-      try {
-        // Accept query params for search, pagination, sort, and new filters
-        let {
-          page = 1,pageSize = 10,search = "",sortField = "date",sortOrder = "desc",paymentMethod,creditDebitStatus,childrenName,childrenId,minAmount,maxAmount,startDate,endDate
-        } = req.query;
+    // async getFinancesDetails(req, res) {
+    //   try {
+    //     // Accept query params for search, pagination, sort, and new filters
+    //     let {
+    //       page = 1,pageSize = 10,search = "",sortField = "date",sortOrder = "desc",paymentMethod,creditDebitStatus,childrenName,childrenId,minAmount,maxAmount,startDate,endDate
+    //     } = req.query;
 
-        page = parseInt(page, 10) || 1;
-        pageSize = parseInt(pageSize, 10) || 20;
+    //     page = parseInt(page, 10) || 1;
+    //     pageSize = parseInt(pageSize, 10) || 20;
 
-        // Build query object with filters
-        let query = { type: "income" };
-        if (paymentMethod) query.paymentMethod = paymentMethod;
-        if (creditDebitStatus) query.creditDebitStatus = creditDebitStatus;
-        if (childrenName) query.childrenName = { $regex: new RegExp(childrenName, "i") };
-        if (childrenId) query.childrenId = { $regex: new RegExp(childrenId, "i") };
+    //     // Build query object with filters
+    //     let query = { type: "income" };
+    //     if (paymentMethod) query.paymentMethod = paymentMethod;
+    //     if (creditDebitStatus) query.creditDebitStatus = creditDebitStatus;
+    //     if (childrenName) query.childrenName = { $regex: new RegExp(childrenName, "i") };
+    //     if (childrenId) query.childrenId = { $regex: new RegExp(childrenId, "i") };
 
-        if (minAmount !== undefined || maxAmount !== undefined) {
-          query.amount = {};
-          if (minAmount !== undefined && !isNaN(Number(minAmount))) {
-            query.amount.$gte = Number(minAmount);
-          }
-          if (maxAmount !== undefined && !isNaN(Number(maxAmount))) {
-            query.amount.$lte = Number(maxAmount);
-          }
-          if (Object.keys(query.amount).length === 0) delete query.amount;
-        }
+    //     if (minAmount !== undefined || maxAmount !== undefined) {
+    //       query.amount = {};
+    //       if (minAmount !== undefined && !isNaN(Number(minAmount))) {
+    //         query.amount.$gte = Number(minAmount);
+    //       }
+    //       if (maxAmount !== undefined && !isNaN(Number(maxAmount))) {
+    //         query.amount.$lte = Number(maxAmount);
+    //       }
+    //       if (Object.keys(query.amount).length === 0) delete query.amount;
+    //     }
 
-        // Date range filtering
-        if (startDate || endDate) {
-          query.date = {};
-          if (startDate) {
-            // If date is provided as YYYY-MM-DD, convert to Date object at 00:00:00
-            query.date.$gte = new Date(startDate);
-          }
-          if (endDate) {
-            // If date is provided as YYYY-MM-DD, set to end of day
-            let end = new Date(endDate);
-            end.setHours(23, 59, 59, 999);
-            query.date.$lte = end;
-          }
-          if (Object.keys(query.date).length === 0) delete query.date;
-        }
+    //     // Date range filtering
+    //     if (startDate || endDate) {
+    //       query.date = {};
+    //       if (startDate) {
+    //         // If date is provided as YYYY-MM-DD, convert to Date object at 00:00:00
+    //         query.date.$gte = new Date(startDate);
+    //       }
+    //       if (endDate) {
+    //         // If date is provided as YYYY-MM-DD, set to end of day
+    //         let end = new Date(endDate);
+    //         end.setHours(23, 59, 59, 999);
+    //         query.date.$lte = end;
+    //       }
+    //       if (Object.keys(query.date).length === 0) delete query.date;
+    //     }
 
-        // Build sorting object
-        let sortObj = {};
-        if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+    //     // Build sorting object
+    //     let sortObj = {};
+    //     if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
 
-        let finances = await Finances.find(query)
-          .sort(sortObj)
-          .lean();
+    //     let finances = await Finances.find(query)
+    //       .sort(sortObj)
+    //       .lean();
 
-        // In-memory search filtering
-        if (search && typeof search === "string" && search.trim().length > 0) {
-          const regex = new RegExp(search.trim(), "i");
-          finances = finances.filter(f =>
-            (f.description && regex.test(f.description)) ||
-            (f.creditDebitStatus && regex.test(f.creditDebitStatus)) ||
-            (f.type && regex.test(f.type)) ||
-            (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
-            (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
-            (f.paymentMethod && regex.test(f.paymentMethod)) ||
-            (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u))) ||
-            (f.childrenName && regex.test(f.childrenName)) ||
-            (f.childrenId && regex.test(f.childrenId))
-          );
-        }
+    //     // In-memory search filtering
+    //     if (search && typeof search === "string" && search.trim().length > 0) {
+    //       const regex = new RegExp(search.trim(), "i");
+    //       finances = finances.filter(f =>
+    //         (f.description && regex.test(f.description)) ||
+    //         (f.creditDebitStatus && regex.test(f.creditDebitStatus)) ||
+    //         (f.type && regex.test(f.type)) ||
+    //         (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
+    //         (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
+    //         (f.paymentMethod && regex.test(f.paymentMethod)) ||
+    //         (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u))) ||
+    //         (f.childrenName && regex.test(f.childrenName)) ||
+    //         (f.childrenId && regex.test(f.childrenId))
+    //       );
+    //     }
 
-        // Totals for income only
-        let totalIncome = 0;
-        finances.forEach(finance => {
-          totalIncome += finance.amount;
-        });
+    //     // Totals for income only
+    //     let totalIncome = 0;
+    //     finances.forEach(finance => {
+    //       totalIncome += finance.amount;
+    //     });
 
-        // Pagination
-        const total = finances.length;
-        const offset = (page - 1) * pageSize;
-        const pagedFinances = finances.slice(offset, offset + pageSize);
+    //     // Pagination
+    //     const total = finances.length;
+    //     const offset = (page - 1) * pageSize;
+    //     const pagedFinances = finances.slice(offset, offset + pageSize);
 
-        // Prepare logs for output, including childrenName and childrenId
-        const financeLogs = pagedFinances.map(finance => ({
-          _id: finance._id,
-          Date: finance.date,
-          Description: finance.description,
-          Type: finance.type.charAt(0).toUpperCase() + finance.type.slice(1),
-          Amount: finance.amount,
-          CreditDebitStatus: finance.creditDebitStatus,
-          PaymentMethod: finance.paymentMethod,
-          Utr: finance.utr,
-          ChildrenName: finance.childrenName,
-          ChildrenId: finance.childrenId,
-          CreatedAt: finance.createdAt,
-          UpdatedAt: finance.updatedAt,
-        }));
+    //     // Prepare logs for output, including childrenName and childrenId
+    //     const financeLogs = pagedFinances.map(finance => ({
+    //       _id: finance._id,
+    //       Date: finance.date,
+    //       Description: finance.description,
+    //       Type: finance.type.charAt(0).toUpperCase() + finance.type.slice(1),
+    //       Amount: finance.amount,
+    //       CreditDebitStatus: finance.creditDebitStatus,
+    //       PaymentMethod: finance.paymentMethod,
+    //       Utr: finance.utr,
+    //       ChildrenName: finance.childrenName,
+    //       ChildrenId: finance.childrenId,
+    //       CreatedAt: finance.createdAt,
+    //       UpdatedAt: finance.updatedAt,
+    //     }));
 
-        return res.json({
-          success: true,
-          totalIncome,
-          // Return 0 for expense and netBalance since only income is included
-          totalExpenses: 0,
-          netBalance: totalIncome,
-          page,
-          pageSize,
-          total,
-          totalPages: Math.ceil(total / pageSize),
-          logs: financeLogs
-        });
-      } catch (error) {
-        console.error("[ADMIN FINANCE DETAILS] Error:", error);
-        return res.status(500).json({
-          success: false,
-          message: "Failed to fetch finance details",
-          error: error.message
-        });
-      }
-    }
+    //     return res.json({
+    //       success: true,
+    //       totalIncome,
+    //       // Return 0 for expense and netBalance since only income is included
+    //       totalExpenses: 0,
+    //       netBalance: totalIncome,
+    //       page,
+    //       pageSize,
+    //       total,
+    //       totalPages: Math.ceil(total / pageSize),
+    //       logs: financeLogs
+    //     });
+    //   } catch (error) {
+    //     console.error("[ADMIN FINANCE DETAILS] Error:", error);
+    //     return res.status(500).json({
+    //       success: false,
+    //       message: "Failed to fetch finance details",
+    //       error: error.message
+    //     });
+    //   }
+    // }
 
     // async getFinancesDetails(req, res) {
     //   try {
@@ -391,6 +391,147 @@ class FinancesAdminController {
     //     });
     //   }
     // }
+
+    async getFinancesDetails(req, res) {
+      try {
+        // Accept query params for search, pagination, sort, and new filters
+        let {
+          page = 1,pageSize = 10,search = "",sortField = "date",sortOrder = "desc",paymentMethod,creditDebitStatus,childrenName,childrenId,minAmount,maxAmount,startDate,endDate
+        } = req.query;
+
+        page = parseInt(page, 10) || 1;
+        pageSize = parseInt(pageSize, 10) || 20;
+
+        // Build query object with filters
+        let query = { type: "income" };
+        if (paymentMethod) query.paymentMethod = paymentMethod;
+        if (creditDebitStatus) query.creditDebitStatus = creditDebitStatus;
+        if (childrenName) query.childrenName = { $regex: new RegExp(childrenName, "i") };
+        if (childrenId) query.childrenId = { $regex: new RegExp(childrenId, "i") };
+
+        if (minAmount !== undefined || maxAmount !== undefined) {
+          query.amount = {};
+          if (minAmount !== undefined && !isNaN(Number(minAmount))) {
+            query.amount.$gte = Number(minAmount);
+          }
+          if (maxAmount !== undefined && !isNaN(Number(maxAmount))) {
+            query.amount.$lte = Number(maxAmount);
+          }
+          if (Object.keys(query.amount).length === 0) delete query.amount;
+        }
+
+        // Date range filtering
+        if (startDate || endDate) {
+          query.date = {};
+          if (startDate) {
+            // If date is provided as YYYY-MM-DD, convert to Date object at 00:00:00
+            query.date.$gte = new Date(startDate);
+          }
+          if (endDate) {
+            // If date is provided as YYYY-MM-DD, set to end of day
+            let end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            query.date.$lte = end;
+          }
+          if (Object.keys(query.date).length === 0) delete query.date;
+        }
+
+        // Build sorting object
+        let sortObj = {};
+        if (sortField) sortObj[sortField] = sortOrder === "asc" ? 1 : -1;
+
+        let finances = await Finances.find(query)
+          .sort(sortObj)
+          .lean();
+
+        // In-memory search filtering
+        if (search && typeof search === "string" && search.trim().length > 0) {
+          const regex = new RegExp(search.trim(), "i");
+          finances = finances.filter(f =>
+            (f.description && regex.test(f.description)) ||
+            (f.creditDebitStatus && regex.test(f.creditDebitStatus)) ||
+            (f.type && regex.test(f.type)) ||
+            (f.amount !== undefined && f.amount !== null && regex.test(f.amount.toString())) ||
+            (f.date && regex.test(new Date(f.date).toISOString().slice(0, 10))) ||
+            (f.paymentMethod && regex.test(f.paymentMethod)) ||
+            (f.utr && Array.isArray(f.utr) && f.utr.some(u => regex.test(u))) ||
+            (f.childrenName && regex.test(f.childrenName)) ||
+            (f.childrenId && regex.test(f.childrenId))
+          );
+        }
+
+        // Totals for income only — restricted to current month + previous month
+        // (deliberately NOT the overall total, so admin only sees recent 2-month sum)
+        const now = new Date();
+        const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+        const endOfCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+        let totalIncome = 0;
+        finances.forEach(finance => {
+          const fDate = new Date(finance.date);
+          if (fDate >= startOfPrevMonth && fDate <= endOfCurrentMonth) {
+            totalIncome += finance.amount;
+          }
+        });
+
+        // Pagination
+        const total = finances.length;
+        const offset = (page - 1) * pageSize;
+        const pagedFinances = finances.slice(offset, offset + pageSize);
+
+        // Prepare logs for output, including childrenName and childrenId
+        // const financeLogs = pagedFinances.map(finance => ({
+        //   _id: finance._id,
+        //   Date: finance.date,
+        //   Description: finance.description,
+        //   Type: finance.type.charAt(0).toUpperCase() + finance.type.slice(1),
+        //   Amount: finance.amount,
+        //   CreditDebitStatus: finance.creditDebitStatus,
+        //   PaymentMethod: finance.paymentMethod,
+        //   Utr: finance.utr,
+        //   ChildrenName: finance.childrenName,
+        //   ChildrenId: finance.childrenId,
+        //   CreatedAt: finance.createdAt,
+        //   UpdatedAt: finance.updatedAt,
+        // }));
+
+        const financeLogs = pagedFinances.map(finance => ({
+          _id: finance._id,
+          Date: finance.date,
+          Description: finance.description,
+          Type: finance.type.charAt(0).toUpperCase() + finance.type.slice(1),
+          Amount: finance.amount,
+          CreditDebitStatus: finance.creditDebitStatus,
+          PaymentMethod: finance.paymentMethod,
+          Utr: finance.utr,
+          ChildrenName: finance.childrenName,
+          ChildrenId: finance.childrenId,
+          TransactionRef: finance.transactionRef || null,
+          CreatedAt: finance.createdAt,
+          UpdatedAt: finance.updatedAt,
+        }));
+
+        return res.json({
+          success: true,
+          totalIncome,
+          // Return 0 for expense and netBalance since only income is included
+          totalExpenses: 0,
+          netBalance: totalIncome,
+          page,
+          pageSize,
+          total,
+          totalPages: Math.ceil(total / pageSize),
+          logs: financeLogs
+        });
+      } catch (error) {
+        console.error("[ADMIN FINANCE DETAILS] Error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch finance details",
+          error: error.message
+        });
+      }
+    }
 
 /**
  * Controller to update the payment method of a finance entry by its ID.
