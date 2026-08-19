@@ -2,3 +2,4 @@
 node_modules
 mongo-export/
 export-all-json.js
+import-data.mjs

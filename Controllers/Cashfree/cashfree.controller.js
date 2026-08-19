@@ -586,6 +586,7 @@ import Booking from "../../Schema/booking.schema.js";
 import Finances from "../../Schema/finances.schema.js";
 import { PatientProfile } from "../../Schema/user.schema.js";
 import { creditWallet, sweepWalletToOtherDues } from "../../Services/wallet.services.js";
+import { allocatePaymentOldestFirst } from "../../Services/wallet.services.js";
 
 /**
  * Shared "a Cashfree payment succeeded" handler — used by BOTH confirmStatus
@@ -607,6 +608,157 @@ import { creditWallet, sweepWalletToOtherDues } from "../../Services/wallet.serv
  * @param {Object} [req]
  * @returns {Promise<{payment: Object, booking: Object, financeRecord: Object|null, sweepResults: Array}|null>}
  */
+// async function applyCashfreePaymentSuccess(
+//   { orderId, grossAmount, paymentTime, utr, remarkPrefix },
+//   req
+// ) {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
+//   try {
+//     const payment = await Payment.findOne({ "cashfree.order_id": orderId }).session(session);
+//     if (!payment) {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return null;
+//     }
+
+//     // Idempotency guard: webhook + confirmStatus (and Cashfree retries) can all
+//     // fire for the same order. Once we've fully applied a payment, don't apply
+//     // the same money twice — the original bug here silently double-processed
+//     // dues whenever both the poll and the webhook landed.
+//     if (payment.status === "paid") {
+//       await session.abortTransaction();
+//       session.endSession();
+//       return { payment, booking: null, financeRecord: null, sweepResults: [], alreadyProcessed: true };
+//     }
+
+//     const booking = await Booking.findOne({ payment: payment._id })
+//       .populate([
+//         {
+//           path: "patient",
+//           model: "PatientProfile",
+//           select: "name mobile1 patientId",
+//         },
+//       ])
+//       .session(session);
+
+//     if (!Array.isArray(payment.transactions)) payment.transactions = [];
+//     if (!Array.isArray(payment.utr)) payment.utr = payment.utr ? [payment.utr] : [];
+
+//     const effectiveUtr = Array.isArray(utr) ? utr.filter(Boolean) : utr ? [utr] : [];
+//     const effectivePaymentTime = paymentTime || new Date();
+//     const transactionRef = `CF-${orderId}`;
+
+//     // How much is actually still due on THIS booking's current invoice —
+//     // never blindly overwrite amountPaid, only ever add to it.
+//     const currentInvoice = booking?.invoiceAmount || payment.amount || 0;
+//     const alreadyPaid = payment.amountPaid || 0;
+//     const amountToCollect = Math.max(0, currentInvoice - alreadyPaid);
+//     const appliedToInvoice = Math.min(grossAmount, amountToCollect);
+//     const overflowToWallet = grossAmount - appliedToInvoice;
+
+//     payment.amountPaid = alreadyPaid + appliedToInvoice;
+//     payment.status = payment.amountPaid >= currentInvoice ? "paid" : "partiallypaid";
+//     payment.paymentTime = effectivePaymentTime;
+//     payment.paymentMethod = "cashfree";
+//     if (effectiveUtr.length) payment.utr.push(...effectiveUtr);
+
+//     const childrenName = booking?.patient?.name || payment.childrenName || payment.cashfree?.customer?.name || "";
+//     const childrenId = booking?.patient?.patientId || payment.childrenId || "";
+//     const description = `${remarkPrefix || "Cashfree Payment"}${booking ? ` for Booking #${booking.appointmentId}` : ""}`;
+
+//     let financeRecord = null;
+//     if (appliedToInvoice > 0) {
+//       const [created] = await Finances.create(
+//         [
+//           {
+//             date: effectivePaymentTime,
+//             description,
+//             type: "income",
+//             amount: appliedToInvoice,
+//             creditDebitStatus: "credited",
+//             paymentMethod: "cashfree",
+//             utr: effectiveUtr.length ? effectiveUtr : payment.utr,
+//             childrenName,
+//             childrenId,
+//             booking: booking?._id,
+//             transactionRef,
+//           },
+//         ],
+//         { session }
+//       );
+//       financeRecord = created;
+
+//       payment.transactions.push({
+//         amount: appliedToInvoice,
+//         paymentMethod: "cashfree",
+//         utr: effectiveUtr.length ? effectiveUtr : payment.utr,
+//         paymentTime: effectivePaymentTime,
+//         type: "full",
+//         remark: description,
+//         financeRecord: financeRecord._id,
+//       });
+//     }
+
+//     let sweepResults = [];
+//     if (overflowToWallet > 0 && booking?.patient) {
+//       // This is the fix for "Cashfree payment doesn't clear previous booking
+//       // dues": route the overflow to the wallet and sweep it, exactly like
+//       // collectPayment's manual/cash flow already does.
+//       payment.transactions.push({
+//         amount: overflowToWallet,
+//         paymentMethod: "cashfree",
+//         utr: effectiveUtr.length ? effectiveUtr : payment.utr,
+//         paymentTime: effectivePaymentTime,
+//         type: "advance",
+//         remark: `Overpayment during Cashfree collection${booking ? ` for Booking #${booking.appointmentId}` : ""} (routed to wallet)`,
+//       });
+
+//       await creditWallet(
+//         {
+//           patientId: booking.patient._id,
+//           amount: overflowToWallet,
+//           reason: "advance_payment",
+//           booking: booking._id,
+//           remark: `Overpayment during Cashfree collection for Booking #${booking.appointmentId}`,
+//         },
+//         session
+//       );
+
+//       sweepResults = await sweepWalletToOtherDues(
+//         {
+//           patientId: booking.patient._id,
+//           patientDisplayId: booking.patient.patientId,
+//           patientName: booking.patient.name,
+//           excludeBookingId: booking._id,
+//           paymentTime: effectivePaymentTime,
+//           utr: effectiveUtr.length ? effectiveUtr : payment.utr,
+//           paymentMethod: "cashfree",
+//           transactionRef,
+//         },
+//         session,
+//         req
+//       );
+//     }
+
+//     await payment.save({ session });
+
+//     if (booking) {
+//       booking.paymentStatus = payment.status;
+//       await booking.save({ session });
+//     }
+
+//     await session.commitTransaction();
+//     session.endSession();
+
+//     return { payment, booking, financeRecord, sweepResults };
+//   } catch (err) {
+//     await session.abortTransaction();
+//     session.endSession();
+//     throw err;
+//   }
+// }
+
 async function applyCashfreePaymentSuccess(
   { orderId, grossAmount, paymentTime, utr, remarkPrefix },
   req
@@ -621,136 +773,72 @@ async function applyCashfreePaymentSuccess(
       return null;
     }
 
-    // Idempotency guard: webhook + confirmStatus (and Cashfree retries) can all
-    // fire for the same order. Once we've fully applied a payment, don't apply
-    // the same money twice — the original bug here silently double-processed
-    // dues whenever both the poll and the webhook landed.
     if (payment.status === "paid") {
       await session.abortTransaction();
       session.endSession();
-      return { payment, booking: null, financeRecord: null, sweepResults: [], alreadyProcessed: true };
+      return { payment, booking: null, applications: [], alreadyProcessed: true };
     }
 
     const booking = await Booking.findOne({ payment: payment._id })
-      .populate([
-        {
-          path: "patient",
-          model: "PatientProfile",
-          select: "name mobile1 patientId",
-        },
-      ])
+      .populate([{ path: "patient", model: "PatientProfile", select: "name mobile1 patientId" }])
       .session(session);
 
-    if (!Array.isArray(payment.transactions)) payment.transactions = [];
-    if (!Array.isArray(payment.utr)) payment.utr = payment.utr ? [payment.utr] : [];
+    if (!booking?.patient) {
+      // No linked booking/patient — fall back to crediting this Payment record
+      // directly, same as before, since there's no patient to allocate across.
+      const effectiveUtr = Array.isArray(utr) ? utr.filter(Boolean) : utr ? [utr] : [];
+      payment.amountPaid = (payment.amountPaid || 0) + grossAmount;
+      payment.status = "paid";
+      payment.paymentTime = paymentTime || new Date();
+      payment.paymentMethod = "cashfree";
+      if (!Array.isArray(payment.utr)) payment.utr = [];
+      if (effectiveUtr.length) payment.utr.push(...effectiveUtr);
+      await payment.save({ session });
+      await session.commitTransaction();
+      session.endSession();
+      return { payment, booking, applications: [] };
+    }
 
     const effectiveUtr = Array.isArray(utr) ? utr.filter(Boolean) : utr ? [utr] : [];
     const effectivePaymentTime = paymentTime || new Date();
     const transactionRef = `CF-${orderId}`;
 
-    // How much is actually still due on THIS booking's current invoice —
-    // never blindly overwrite amountPaid, only ever add to it.
-    const currentInvoice = booking?.invoiceAmount || payment.amount || 0;
-    const alreadyPaid = payment.amountPaid || 0;
-    const amountToCollect = Math.max(0, currentInvoice - alreadyPaid);
-    const appliedToInvoice = Math.min(grossAmount, amountToCollect);
-    const overflowToWallet = grossAmount - appliedToInvoice;
+    const { applications, remainingToWallet, walletBalanceUsed } = await allocatePaymentOldestFirst(
+      {
+        patientId: booking.patient._id,
+        patientDisplayId: booking.patient.patientId,
+        patientName: booking.patient.name,
+        amount: grossAmount,
+        currentBookingId: booking._id,
+        paymentTime: effectivePaymentTime,
+        utr: effectiveUtr,
+        paymentMethod: "cashfree",
+        transactionRef,
+        txnTypeForCurrentBooking: "full",
+      },
+      session,
+      req
+    );
 
-    payment.amountPaid = alreadyPaid + appliedToInvoice;
-    payment.status = payment.amountPaid >= currentInvoice ? "paid" : "partiallypaid";
+    // Mirror the overall Cashfree order status onto the Payment record itself
+    // (this Payment doc is what generateSessionId/UI checks for "already paid").
+    const currentApp = applications.find(a => a.isCurrentBooking);
     payment.paymentTime = effectivePaymentTime;
     payment.paymentMethod = "cashfree";
+    if (!Array.isArray(payment.utr)) payment.utr = [];
     if (effectiveUtr.length) payment.utr.push(...effectiveUtr);
-
-    const childrenName = booking?.patient?.name || payment.childrenName || payment.cashfree?.customer?.name || "";
-    const childrenId = booking?.patient?.patientId || payment.childrenId || "";
-    const description = `${remarkPrefix || "Cashfree Payment"}${booking ? ` for Booking #${booking.appointmentId}` : ""}`;
-
-    let financeRecord = null;
-    if (appliedToInvoice > 0) {
-      const [created] = await Finances.create(
-        [
-          {
-            date: effectivePaymentTime,
-            description,
-            type: "income",
-            amount: appliedToInvoice,
-            creditDebitStatus: "credited",
-            paymentMethod: "cashfree",
-            utr: effectiveUtr.length ? effectiveUtr : payment.utr,
-            childrenName,
-            childrenId,
-            booking: booking?._id,
-            transactionRef,
-          },
-        ],
-        { session }
-      );
-      financeRecord = created;
-
-      payment.transactions.push({
-        amount: appliedToInvoice,
-        paymentMethod: "cashfree",
-        utr: effectiveUtr.length ? effectiveUtr : payment.utr,
-        paymentTime: effectivePaymentTime,
-        type: "full",
-        remark: description,
-        financeRecord: financeRecord._id,
-      });
-    }
-
-    let sweepResults = [];
-    if (overflowToWallet > 0 && booking?.patient) {
-      // This is the fix for "Cashfree payment doesn't clear previous booking
-      // dues": route the overflow to the wallet and sweep it, exactly like
-      // collectPayment's manual/cash flow already does.
-      payment.transactions.push({
-        amount: overflowToWallet,
-        paymentMethod: "cashfree",
-        utr: effectiveUtr.length ? effectiveUtr : payment.utr,
-        paymentTime: effectivePaymentTime,
-        type: "advance",
-        remark: `Overpayment during Cashfree collection${booking ? ` for Booking #${booking.appointmentId}` : ""} (routed to wallet)`,
-      });
-
-      await creditWallet(
-        {
-          patientId: booking.patient._id,
-          amount: overflowToWallet,
-          reason: "advance_payment",
-          booking: booking._id,
-          remark: `Overpayment during Cashfree collection for Booking #${booking.appointmentId}`,
-        },
-        session
-      );
-
-      sweepResults = await sweepWalletToOtherDues(
-        {
-          patientId: booking.patient._id,
-          patientDisplayId: booking.patient.patientId,
-          patientName: booking.patient.name,
-          excludeBookingId: booking._id,
-          paymentTime: effectivePaymentTime,
-          utr: effectiveUtr.length ? effectiveUtr : payment.utr,
-          paymentMethod: "cashfree",
-          transactionRef,
-        },
-        session,
-        req
-      );
-    }
-
+    payment.amountPaid = (payment.amountPaid || 0) + (currentApp?.amountApplied || 0);
+    const refreshedBookingForStatus = await Booking.findById(booking._id).session(session);
+    const refreshedPaymentForStatus = await Payment.findById(payment._id).session(session);
+    payment.status = refreshedPaymentForStatus.amountPaid >= (refreshedBookingForStatus.invoiceAmount || payment.amount)
+      ? "paid"
+      : (currentApp ? "partiallypaid" : payment.status);
     await payment.save({ session });
-
-    if (booking) {
-      booking.paymentStatus = payment.status;
-      await booking.save({ session });
-    }
 
     await session.commitTransaction();
     session.endSession();
 
-    return { payment, booking, financeRecord, sweepResults };
+    return { payment, booking, applications, remainingToWallet, walletBalanceUsed };
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
@@ -1145,20 +1233,28 @@ class CashfreeController {
 
       const finalPayment = result?.payment || payment;
 
-      return res.status(200).json({
-        orderStatus: data,
-        paymentStatusMarked: finalPayment ? finalPayment.status : null,
-        appliedToOtherBookings: result?.sweepResults || [],
-        financeRecord: result?.financeRecord
-          ? {
-            _id: result.financeRecord._id,
-            amount: result.financeRecord.amount,
-            type: result.financeRecord.type,
-            date: result.financeRecord.date,
-            paymentMethod: result.financeRecord.paymentMethod
-          }
-          : null
-      });
+      // in confirmStatus:
+return res.status(200).json({
+  orderStatus: data,
+  paymentStatusMarked: finalPayment ? finalPayment.status : null,
+  appliedAcrossBookings: result?.applications || [],
+  remainingToWallet: result?.remainingToWallet || 0,
+});
+
+      // return res.status(200).json({
+      //   orderStatus: data,
+      //   paymentStatusMarked: finalPayment ? finalPayment.status : null,
+      //   appliedToOtherBookings: result?.sweepResults || [],
+      //   financeRecord: result?.financeRecord
+      //     ? {
+      //       _id: result.financeRecord._id,
+      //       amount: result.financeRecord.amount,
+      //       type: result.financeRecord.type,
+      //       date: result.financeRecord.date,
+      //       paymentMethod: result.financeRecord.paymentMethod
+      //     }
+      //     : null
+      // });
     } catch (error) {
       console.error("Error confirming Cashfree order status:", error);
       return res.status(500).json({ error: "Internal Server Error" });
@@ -1254,11 +1350,12 @@ class CashfreeController {
           },
           req
         );
-        console.log(
-          result?.alreadyProcessed
-            ? `Payment ${order_id}: already processed, skipped`
-            : `Payment ${order_id}: marked as paid`
-        );
+      // in handleWebhook, the log line:
+console.log(
+  result?.alreadyProcessed
+    ? `Payment ${order_id}: already processed, skipped`
+    : `Payment ${order_id}: applied across ${result?.applications?.length || 0} booking(s)`
+);
       } else if (payment_status === "FAILED") {
         payment.status = "failed";
         await payment.save();

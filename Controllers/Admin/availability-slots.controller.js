@@ -152,8 +152,6 @@ class AavailabilitySlotsAdminController {
         catch (_) { excludeObjId = excludeBookingId; }
         bookingFilter["_id"] = { $ne: excludeObjId };
       }
-      // Conflict check: log filter for conflicts-related debugging
-      console.log('[AvailabilitySummary] Booking filter (for conflict checks):', bookingFilter);
       // ──────────────────────────────────────────────────────────────────────
 
       const bookings = await Booking.find(
@@ -225,9 +223,6 @@ class AavailabilitySlotsAdminController {
         }
       }
 
-      // Conflict check: output summary of conflicts structure
-      console.log('[AvailabilitySummary] Booked slots by date (for conflict checks):', Object.keys(bookedSlotsByDate));
-
       // 6. For each day, calculate totals
       const availability = {};
       for (const { display, iso } of dateKeys) {
@@ -275,14 +270,9 @@ class AavailabilitySlotsAdminController {
         };
       }
 
-      // Conflict check: log full availability days for slot conflict analysis
-      console.log('[AvailabilitySummary] Availability summary keys (for conflict checks):', Object.keys(availability));
-
       res.json({ success: true, data: availability });
 
     } catch (err) {
-      // Conflict check: log error if conflict found during checks
-      console.error('[AvailabilitySummary] Error (conflict checks):', err);
       res.status(500).json({ success: false, error: err.message || String(err) });
     }
   }

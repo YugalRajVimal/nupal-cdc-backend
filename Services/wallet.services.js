@@ -367,3 +367,195 @@ export function getPerSessionRate(pkg, discountPercent) {
   const pct = typeof discountPercent === 'number' ? discountPercent : 0;
   return Math.round(base * (1 - pct / 100));
 }
+
+/**
+ * Allocate a payment (fresh money collected right now, PLUS any pre-existing
+ * wallet balance) across a patient's bookings **oldest `createdAt` first**,
+ * regardless of which booking the money was collected against.
+ *
+ * This REPLACES the old "pay current booking, then sweep overflow" behavior.
+ * Every booking with `invoiceAmount > payment.amountPaid` gets settled in
+ * chronological order before a single rupee lands on the booking the
+ * collector actually clicked (`currentBookingId`) — unless it happens to be
+ * the oldest one due, in which case it's settled first naturally.
+ *
+ * Each booking keeps its OWN discount: we read `booking.discountInfo.coupon`
+ * per booking (not from the request), so Y's remark/audit shows Y's discount
+ * and X's shows X's, independent of which one triggered the collection.
+ *
+ * @param {Object} opts
+ * @param {ObjectId|string} opts.patientId
+ * @param {string} [opts.patientDisplayId]
+ * @param {string} [opts.patientName]
+ * @param {number} opts.amount - fresh money being collected right now
+ * @param {ObjectId|string} opts.currentBookingId - booking collectPayment/Cashfree was called against
+ * @param {Date} [opts.paymentTime]
+ * @param {string[]|string} [opts.utr]
+ * @param {string} [opts.paymentMethod]
+ * @param {string} opts.transactionRef - shared ref so all Finances rows from this one action group together
+ * @param {string} [opts.txnTypeForCurrentBooking] - 'full' | 'partial' (transaction.type recorded when money lands on currentBooking)
+ * @param {mongoose.ClientSession} session
+ * @param {Object} [req] - for audit log ip/user-agent/user (best-effort, non-fatal)
+ *
+ * @returns {Promise<{
+*   applications: Array<{ bookingId, appointmentId, amountApplied, isCurrentBooking, discountPercent, discountAmount, newStatus, financeRecordId }>,
+*   remainingToWallet: number,
+*   walletBalanceUsed: number
+* }>}
+*/
+export async function allocatePaymentOldestFirst(
+ {
+   patientId,
+   patientDisplayId,
+   patientName,
+   amount,
+   currentBookingId,
+   paymentTime,
+   utr,
+   paymentMethod,
+   transactionRef,
+   txnTypeForCurrentBooking,
+ },
+ session,
+ req
+) {
+ const applications = [];
+ if (!patientId) return { applications, remainingToWallet: amount || 0, walletBalanceUsed: 0 };
+
+ const effectiveDate = paymentTime || new Date();
+ const effectiveUtr = Array.isArray(utr) ? utr.filter(Boolean) : utr ? [utr] : [];
+ const effectivePaymentMethod = paymentMethod || "cash";
+
+ let pool = amount > 0 ? amount : 0; // freshly collected money
+ const wallet = await getOrCreateWallet(patientId, session);
+ let walletPool = wallet.balance > 0 ? wallet.balance : 0; // pre-existing advance, used first
+ const walletStartBalance = walletPool;
+
+ // Every booking with an outstanding due, oldest booking (by createdAt) first.
+ const duedBookings = await Booking.find({ patient: patientId })
+   .populate({ path: "payment", model: "Payment" })
+   .populate({ path: "discountInfo.coupon", model: "Discount" })
+   .sort({ createdAt: 1 })
+   .session(session);
+
+ for (const b of duedBookings) {
+   if (pool <= 0 && walletPool <= 0) break;
+
+   const bPayment = b.payment;
+   if (!bPayment) continue;
+
+   const invoice = b.invoiceAmount || 0;
+   const paidSoFar = bPayment.amountPaid || 0;
+   const due = Math.max(0, invoice - paidSoFar);
+   if (due <= 0) continue;
+
+   // Existing wallet balance settles this due before any of the fresh money does.
+   const fromWallet = Math.min(due, walletPool);
+   const remainingDue = due - fromWallet;
+   const fromPool = Math.min(remainingDue, pool);
+   const totalApplied = fromWallet + fromPool;
+   if (totalApplied <= 0) continue;
+
+   walletPool -= fromWallet;
+   pool -= fromPool;
+
+   if (fromWallet > 0) {
+     await debitWallet(
+       {
+         patientId,
+         amount: fromWallet,
+         reason: "due_settlement_debit",
+         booking: b._id,
+         remark: `Existing wallet balance applied to settle due on Booking #${b.appointmentId}`,
+       },
+       session
+     );
+   }
+
+   if (!Array.isArray(bPayment.utr)) bPayment.utr = [];
+   if (!Array.isArray(bPayment.transactions)) bPayment.transactions = [];
+
+   bPayment.amountPaid = paidSoFar + totalApplied;
+   bPayment.status = bPayment.amountPaid >= invoice ? "paid" : "partiallypaid";
+   if (effectiveUtr.length) bPayment.utr.push(...effectiveUtr);
+   if (paymentMethod) bPayment.paymentMethod = paymentMethod;
+   bPayment.paymentTime = effectiveDate;
+
+   const isCurrentBooking = String(b._id) === String(currentBookingId);
+
+   // Each booking's OWN discount, read from its own discountInfo — never
+   // inherited from whichever booking the collector actually clicked.
+   let discountPercent = 0;
+   let discountAmount = 0;
+   if (b.discountInfo?.coupon && typeof b.discountInfo.coupon.discount === "number" && b.discountInfo.coupon.discount > 0) {
+     discountPercent = b.discountInfo.coupon.discount;
+     discountAmount = Math.round(((bPayment.amount || 0) * discountPercent) / 100);
+   }
+
+   bPayment.transactions.push({
+     amount: totalApplied,
+     paymentMethod: effectivePaymentMethod,
+     utr: effectiveUtr,
+     paymentTime: effectiveDate,
+     type: isCurrentBooking ? (txnTypeForCurrentBooking || "partial") : "wallet_sweep",
+     remark: `${isCurrentBooking ? "Payment" : "Older due auto-settled (oldest-first allocation)"} for Booking #${b.appointmentId}${discountPercent > 0 ? ` (${discountPercent}% discount on file)` : ""}`,
+   });
+
+   await bPayment.save({ session });
+
+   b.paymentStatus = bPayment.status;
+   await b.save({ session });
+
+   const [financeRecord] = await Finances.create(
+     [
+       {
+         date: effectiveDate,
+         description: `${isCurrentBooking ? "Payment" : "Wallet/due settlement"} for Booking #${b.appointmentId}`,
+         type: "income",
+         amount: totalApplied,
+         creditDebitStatus: "credited",
+         paymentMethod: effectivePaymentMethod,
+         utr: effectiveUtr,
+         childrenName: patientName || "",
+         childrenId: patientDisplayId || "",
+         booking: b._id,
+         transactionRef,
+       },
+     ],
+     { session }
+   );
+
+   const lastTxn = bPayment.transactions[bPayment.transactions.length - 1];
+   if (lastTxn) {
+     lastTxn.financeRecord = financeRecord._id;
+     await bPayment.save({ session });
+   }
+
+   applications.push({
+     bookingId: b._id,
+     appointmentId: b.appointmentId,
+     amountApplied: totalApplied,
+     isCurrentBooking,
+     discountPercent,
+     discountAmount,
+     newStatus: bPayment.status,
+     financeRecordId: financeRecord._id,
+   });
+ }
+
+ // Anything left after EVERY due (across all bookings) is cleared -> wallet.
+ if (pool > 0) {
+   await creditWallet(
+     {
+       patientId,
+       amount: pool,
+       reason: "advance_payment",
+       booking: currentBookingId,
+       remark: `Advance / overpayment after clearing all outstanding dues`,
+     },
+     session
+   );
+ }
+
+ return { applications, remainingToWallet: pool, walletBalanceUsed: walletStartBalance - walletPool };
+}

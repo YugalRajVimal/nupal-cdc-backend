@@ -22,7 +22,6 @@ class AuthController {
         return res.status(401).json({ message: "Unauthorized: Invalid user role" });
       }
 
-      // Check if user with provided id and role exists in the database
       const dbUser = await User.findOne({ _id: id, role });
 
       if (!dbUser) {
@@ -36,30 +35,23 @@ class AuthController {
         return res.status(403).json({ message: "Your account has been deleted. Please contact support." });
       }
 
-      // If therapist and incompleteTherapistProfile is true, return error with unique status code
       if (dbUser.role === "therapist" && dbUser.incompleteTherapistProfile === true) {
-        // 428 Precondition Required: used as unique, fits context of incomplete profile
         return res.status(428).json({ 
           message: "Therapist profile is incomplete. Please complete your profile to continue.",
           name: dbUser.name,
           email: dbUser.email
         });
       }
-      // If parent and incompleteParentProfile is true, return error with unique status code
       if (dbUser.role === "patient" && dbUser.incompleteParentProfile === true) {
-        // 428 Precondition Required, as above
         return res.status(428).json({ 
           message: "Parent profile is incomplete. Please complete your profile to continue.",
           name: dbUser.name,
           email: dbUser.email
         });
       }
-      // If therapist and profile complete, but therapist panel is not accessible
       if (dbUser.role === "therapist" && dbUser.incompleteTherapistProfile === false) {
-        // Need to check TherapistProfile for isPanelAccessible
         const therapistProfile = await (await import("../../Schema/user.schema.js")).TherapistProfile.findOne({ userId: dbUser._id }).lean();
         if (therapistProfile && therapistProfile.isPanelAccessible === false) {
-          // 451 Unavailable For Legal Reasons (as unique error, since 403/423 are common)
           return res.status(451).json({
             message: "Your therapist panel access is currently not enabled. Please contact support.",
             name: dbUser.name,
@@ -438,7 +430,7 @@ class AuthController {
         });
       } catch (elog) {
         // Don't block login, but log error for monitoring
-        console.error("AuditLogService login error:", elog);
+        // console.error("AuditLogService login error:", elog); // removed as per request
       }
 
       return res.status(200).json({
@@ -464,12 +456,8 @@ class AuthController {
     try {
       const { id, role } = req.user;
 
-      // Console log the requesting user info
-      console.log(`[resetPassword] Requested by User: id=${id}, role=${role}`);
-
       // Only allow for patient, therapist, admin (not superadmin)
       if (!id || !["patient", "therapist", "admin"].includes(role)) {
-        console.log(`[resetPassword] Unauthorized attempt by id=${id}, role=${role}`);
         await session.abortTransaction();
         session.endSession();
         return res.status(403).json({ message: "Unauthorized. Only parent (patient), therapist, or admin can reset password." });
@@ -477,7 +465,6 @@ class AuthController {
 
       const { newPassword } = req.body;
       if (!newPassword || newPassword.length < 6) {
-        console.log(`[resetPassword] Invalid password length: length=${newPassword ? newPassword.length : 'undefined'}`);
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({ message: "Password must be at least 6 characters." });
@@ -492,7 +479,6 @@ class AuthController {
       );
 
       if (!user) {
-        console.log(`[resetPassword] User not found for id=${id}, role=${role}`);
         await session.abortTransaction();
         session.endSession();
         return res.status(404).json({ message: "User not found." });
@@ -518,9 +504,7 @@ class AuthController {
           },
           { session }
         );
-        console.log(`[resetPassword] Audit log added for userId=${user._id}, role=${role}`);
       } catch (elog) {
-        console.log(`[resetPassword] Audit log creation failed, aborting transaction. userId=${user._id}, role=${role}`, elog);
         await session.abortTransaction();
         session.endSession();
         return res.status(500).json({ message: "Audit log creation failed. Password reset aborted." });
@@ -528,7 +512,6 @@ class AuthController {
 
       await session.commitTransaction();
       session.endSession();
-      console.log(`[resetPassword] Password reset committed for userId=${user._id}, role=${role}`);
 
       // Optional: Send notification to user (email/whatsapp) on password reset
       try {
@@ -544,7 +527,6 @@ class AuthController {
             "Your Password Was Reset",
             `Hi ${user.name || ""},\n\nYour password was successfully reset on ${dateTime} IST, from device: ${device} and IP: ${location}.\nIf you did not perform this action, please contact support immediately.`
           );
-          console.log(`[resetPassword] Email sent for userId=${user._id}, email=${user.email}`);
         }
         // Send WhatsApp if user has phone
         if (user.phone && WhatsappController && typeof WhatsappController.sendUserPasswordResetSuccess === "function") {
@@ -557,16 +539,13 @@ class AuthController {
             location,
             role,
           });
-          console.log(`[resetPassword] WhatsApp notification sent for userId=${user._id}, phone=${user.phone}`);
         }
       } catch (notifyErr) {
         // Notification errors are not blocking
-        console.log(`[resetPassword] Failed to notify ${role} of password reset, userId=${user._id}`, notifyErr);
       }
 
       return res.status(200).json({ message: "Password reset successfully." });
     } catch (error) {
-      console.log(`[resetPassword] Internal server error, user.id=${req.user?.id}, role=${req.user?.role}`, error);
       await session.abortTransaction();
       session.endSession();
       return res.status(500).json({ message: "Internal Server Error" });
